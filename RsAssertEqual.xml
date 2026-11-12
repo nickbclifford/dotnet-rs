@@ -1,0 +1,230 @@
+<problems>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs</file>
+  <line>1627</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs" />
+  <problem_class id="RsAssertEqual" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Equality assertion can be simplified</problem_class>
+  <description>`assert!(a == b)` can be replaced with `assert_eq!(a, b)`</description>
+  <highlighted_element>assert!(zero == crate::StackValue::NativeInt(0))</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>48</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs</file>
+  <line>1633</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs" />
+  <problem_class id="RsAssertEqual" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Equality assertion can be simplified</problem_class>
+  <description>`assert!(a == b)` can be replaced with `assert_eq!(a, b)`</description>
+  <highlighted_element>assert!(wrapped_from_max == crate::StackValue::NativeInt(0))</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>60</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs</file>
+  <line>1638</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs" />
+  <problem_class id="RsAssertEqual" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Equality assertion can be simplified</problem_class>
+  <description>`assert!(a == b)` can be replaced with `assert_eq!(a, b)`</description>
+  <highlighted_element>assert!(wrapped_from_one == crate::StackValue::NativeInt(0))</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>60</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs</file>
+  <line>1696</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs" />
+  <problem_class id="RsAssertEqual" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Equality assertion can be simplified</problem_class>
+  <description>`assert!(a == b)` can be replaced with `assert_eq!(a, b)`</description>
+  <highlighted_element>assert!( base == base.clone(), &quot;an unmanaged pointer must equal itself&quot; )</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>93</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs</file>
+  <line>1719</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs" />
+  <problem_class id="RsAssertEqual" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Equality assertion can be simplified</problem_class>
+  <description>`assert!(a == b)` can be replaced with `assert_eq!(a, b)`</description>
+  <highlighted_element>assert!(base == base_integer.clone())</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>37</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs</file>
+  <line>1720</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs" />
+  <problem_class id="RsAssertEqual" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Equality assertion can be simplified</problem_class>
+  <description>`assert!(a == b)` can be replaced with `assert_eq!(a, b)`</description>
+  <highlighted_element>assert!(base_integer == base)</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>29</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs</file>
+  <line>1771</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs" />
+  <problem_class id="RsAssertEqual" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Equality assertion can be simplified</problem_class>
+  <description>`assert!(a == b)` can be replaced with `assert_eq!(a, b)`</description>
+  <highlighted_element>assert!(null_managed == zero)</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>29</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs</file>
+  <line>1772</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs" />
+  <problem_class id="RsAssertEqual" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Equality assertion can be simplified</problem_class>
+  <description>`assert!(a == b)` can be replaced with `assert_eq!(a, b)`</description>
+  <highlighted_element>assert!(zero == null_managed)</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>29</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs</file>
+  <line>1773</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs" />
+  <problem_class id="RsAssertEqual" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Equality assertion can be simplified</problem_class>
+  <description>`assert!(a != b)` can be replaced with `assert_ne!(a, b)`</description>
+  <highlighted_element>assert!(base != zero)</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>21</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs</file>
+  <line>1774</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs" />
+  <problem_class id="RsAssertEqual" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Equality assertion can be simplified</problem_class>
+  <description>`assert!(a != b)` can be replaced with `assert_ne!(a, b)`</description>
+  <highlighted_element>assert!(zero != base)</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>21</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs</file>
+  <line>1775</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs" />
+  <problem_class id="RsAssertEqual" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Equality assertion can be simplified</problem_class>
+  <description>`assert!(a != b)` can be replaced with `assert_ne!(a, b)`</description>
+  <highlighted_element>assert!(managed_value != zero)</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>30</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs</file>
+  <line>1776</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs" />
+  <problem_class id="RsAssertEqual" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Equality assertion can be simplified</problem_class>
+  <description>`assert!(a == b)` can be replaced with `assert_eq!(a, b)`</description>
+  <highlighted_element>assert!(managed_value == base)</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>30</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs</file>
+  <line>1777</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs" />
+  <problem_class id="RsAssertEqual" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Equality assertion can be simplified</problem_class>
+  <description>`assert!(a == b)` can be replaced with `assert_eq!(a, b)`</description>
+  <highlighted_element>assert!(base == managed_value)</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>30</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs</file>
+  <line>1778</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs" />
+  <problem_class id="RsAssertEqual" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Equality assertion can be simplified</problem_class>
+  <description>`assert!(a == b)` can be replaced with `assert_eq!(a, b)`</description>
+  <highlighted_element>assert!(managed_value == base_integer)</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>38</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs</file>
+  <line>1779</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs" />
+  <problem_class id="RsAssertEqual" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Equality assertion can be simplified</problem_class>
+  <description>`assert!(a == b)` can be replaced with `assert_eq!(a, b)`</description>
+  <highlighted_element>assert!(base_integer == managed_value)</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>38</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs</file>
+  <line>1887</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs" />
+  <problem_class id="RsAssertEqual" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Equality assertion can be simplified</problem_class>
+  <description>`assert!(a == b)` can be replaced with `assert_eq!(a, b)`</description>
+  <highlighted_element>assert!(far_value == crate::StackValue::NativeInt(observed_far.addr().get() as isize))</highlighted_element>
+  <language>Rust</language>
+  <offset>8</offset>
+  <length>86</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs</file>
+  <line>1901</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs" />
+  <problem_class id="RsAssertEqual" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Equality assertion can be simplified</problem_class>
+  <description>`assert!(a == b)` can be replaced with `assert_eq!(a, b)`</description>
+  <highlighted_element>assert!(far_max_value == crate::StackValue::NativeInt(observed_max.addr().get() as isize))</highlighted_element>
+  <language>Rust</language>
+  <offset>8</offset>
+  <length>90</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/condition_wait_tests.rs</file>
+  <line>4256</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/condition_wait_tests.rs" />
+  <problem_class id="RsAssertEqual" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Equality assertion can be simplified</problem_class>
+  <description>`assert!(a != b)` can be replaced with `assert_ne!(a, b)`</description>
+  <highlighted_element>assert!(corlib != other)</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>24</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/condition_wait_tests.rs</file>
+  <line>4272</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/condition_wait_tests.rs" />
+  <problem_class id="RsAssertEqual" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Equality assertion can be simplified</problem_class>
+  <description>`assert!(a != b)` can be replaced with `assert_ne!(a, b)`</description>
+  <highlighted_element>assert!( via_handle != via_field, &quot;raw lookups must ...</highlighted_element>
+  <language>Rust</language>
+  <offset>20</offset>
+  <length>143</length>
+</problem>
+</problems>

@@ -1,0 +1,146 @@
+<problems>
+<problem>
+  <file>file://$PROJECT_DIR$/Cargo.toml</file>
+  <line>59</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/Cargo.toml" />
+  <problem_class id="NewCrateVersionAvailable" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Newer crate version available</problem_class>
+  <description>A newer version is available for crate `gc-arena`: 0.7.0</description>
+  <highlighted_element>&quot;0.6.0&quot;</highlighted_element>
+  <language>TOML</language>
+  <offset>11</offset>
+  <length>7</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/Cargo.toml</file>
+  <line>61</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/Cargo.toml" />
+  <problem_class id="NewCrateVersionAvailable" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Newer crate version available</problem_class>
+  <description>A newer version is available for crate `parking_lot`: 0.13.0</description>
+  <highlighted_element>&quot;0.12&quot;</highlighted_element>
+  <language>TOML</language>
+  <offset>14</offset>
+  <length>6</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/Cargo.toml</file>
+  <line>69</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/Cargo.toml" />
+  <problem_class id="NewCrateVersionAvailable" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Newer crate version available</problem_class>
+  <description>A newer version is available for crate `lru`: 0.19.0</description>
+  <highlighted_element>&quot;0.18&quot;</highlighted_element>
+  <language>TOML</language>
+  <offset>6</offset>
+  <length>6</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-benchmarks/Cargo.toml</file>
+  <line>39</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-benchmarks/Cargo.toml" />
+  <problem_class id="NewCrateVersionAvailable" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Newer crate version available</problem_class>
+  <description>A newer version is available for crate `criterion`: 0.8.2</description>
+  <highlighted_element>&quot;0.5&quot;</highlighted_element>
+  <language>TOML</language>
+  <offset>24</offset>
+  <length>5</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-macros/Cargo.toml</file>
+  <line>13</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-macros/Cargo.toml" />
+  <problem_class id="NewCrateVersionAvailable" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Newer crate version available</problem_class>
+  <description>A newer version is available for crate `syn`: 3.0.10</description>
+  <highlighted_element>&quot;2.0&quot;</highlighted_element>
+  <language>TOML</language>
+  <offset>18</offset>
+  <length>5</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-macros-core/Cargo.toml</file>
+  <line>7</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-macros-core/Cargo.toml" />
+  <problem_class id="NewCrateVersionAvailable" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Newer crate version available</problem_class>
+  <description>A newer version is available for crate `syn`: 3.0.10</description>
+  <highlighted_element>&quot;2.0&quot;</highlighted_element>
+  <language>TOML</language>
+  <offset>18</offset>
+  <length>5</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-value/fuzz/Cargo.toml</file>
+  <line>15</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-value/fuzz/Cargo.toml" />
+  <problem_class id="NewCrateVersionAvailable" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Newer crate version available</problem_class>
+  <description>A newer version is available for crate `gc-arena`: 0.7.0</description>
+  <highlighted_element>&quot;0.6.0&quot;</highlighted_element>
+  <language>TOML</language>
+  <offset>11</offset>
+  <length>7</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/Cargo.toml</file>
+  <line>34</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/Cargo.toml" />
+  <problem_class id="NewCrateVersionAvailable" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Newer crate version available</problem_class>
+  <description>A newer version is available for crate `phf`: 0.14.0</description>
+  <highlighted_element>&quot;0.13&quot;</highlighted_element>
+  <language>TOML</language>
+  <offset>6</offset>
+  <length>6</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/Cargo.toml</file>
+  <line>97</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/Cargo.toml" />
+  <problem_class id="NewCrateVersionAvailable" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Newer crate version available</problem_class>
+  <description>A newer version is available for crate `phf_codegen`: 0.14.0</description>
+  <highlighted_element>&quot;0.13&quot;</highlighted_element>
+  <language>TOML</language>
+  <offset>14</offset>
+  <length>6</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/Cargo.toml</file>
+  <line>98</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/Cargo.toml" />
+  <problem_class id="NewCrateVersionAvailable" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Newer crate version available</problem_class>
+  <description>A newer version is available for crate `syn`: 3.0.10</description>
+  <highlighted_element>&quot;2&quot;</highlighted_element>
+  <language>TOML</language>
+  <offset>18</offset>
+  <length>3</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/fuzz/Cargo.toml</file>
+  <line>19</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/fuzz/Cargo.toml" />
+  <problem_class id="NewCrateVersionAvailable" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Newer crate version available</problem_class>
+  <description>A newer version is available for crate `gc-arena`: 0.7.0</description>
+  <highlighted_element>&quot;0.6.0&quot;</highlighted_element>
+  <language>TOML</language>
+  <offset>11</offset>
+  <length>7</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/xtask/Cargo.toml</file>
+  <line>8</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/xtask/Cargo.toml" />
+  <problem_class id="NewCrateVersionAvailable" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Newer crate version available</problem_class>
+  <description>A newer version is available for crate `syn`: 3.0.10</description>
+  <highlighted_element>&quot;2&quot;</highlighted_element>
+  <language>TOML</language>
+  <offset>18</offset>
+  <length>3</length>
+</problem>
+</problems>

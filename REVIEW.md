@@ -7,7 +7,7 @@
 - **Low:** qualification noise, assertion diagnostics and unnecessarily elaborate signatures/control flow obscure the important invariants. Fix selectively, preserving macro hygiene, named arena relationships and synchronization identity.
 - **Informational:** workflow input warnings, detached fuzz/generated files and the intentional rerun probe are IDE limitations. Major dependency notices are separate migration work, not authorization to change GC or synchronization semantics.
 
-No runtime/source/XML changes were made. “Fix” below means authorized planned resolution, not an already applied patch. Every exported problem has an individual ledger row; aggregate duplicate fragments are not counted twice.
+The ledger preserves the original inspection dispositions. “Fix” denotes an authorized resolution; rows marked **resolved** have been implemented and verified as recorded below. Four of the 29 duplicate-fix occurrences are resolved; the remaining 25 are planned. Every exported problem has an individual ledger row; aggregate duplicate fragments are not counted twice. XML inputs are unchanged.
 
 ## Methodology
 
@@ -43,7 +43,7 @@ The generated table below partitions each problem into **fix / refute / keep / d
 |---|---:|---|---|---|
 | Annotator | 5 | dotnet-assemblies (2), dotnet-vm (3) | 0 / 5 / 0 / 0 | F-INFRA-001 |
 | CargoUnusedDependency | 4 | dotnet-benchmarks (2), dotnet-cli (1), dotnet-value (1) | 4 / 0 / 0 / 0 | F-DEP-001 |
-| DuplicatedCode | 70 | dotnet-intrinsics-core (2), dotnet-intrinsics-reflection (3), dotnet-intrinsics-span (8), dotnet-intrinsics-string (4), dotnet-simd (2), dotnet-utils (2), dotnet-value (1), dotnet-vm (48) | 29 / 0 / 41 / 0 | F-DUP-001 / F-DUP-002 / F-DUP-003 / F-DUP-004 / F-DUP-005 |
+| DuplicatedCode | 70 | dotnet-intrinsics-core (2), dotnet-intrinsics-reflection (3), dotnet-intrinsics-span (8), dotnet-intrinsics-string (4), dotnet-simd (2), dotnet-utils (2), dotnet-value (1), dotnet-vm (48) | 29 (4 resolved) / 0 / 41 / 0 | F-DUP-001 / F-DUP-002 / F-DUP-003 / F-DUP-004 / F-DUP-005 |
 | NewCrateVersionAvailable | 12 | Cargo.toml (3), dotnet-benchmarks (1), dotnet-macros (1), dotnet-macros-core (1), dotnet-value (1), dotnet-vm (4), xtask (1) | 0 / 0 / 0 / 12 | F-DEP-002 |
 | RsAssertEqual | 19 | dotnet-value (17), dotnet-vm (2) | 19 / 0 / 0 / 0 | F-IDIOM-002 |
 | RsDeprecation | 4 | dotnet-utils (2), dotnet-vm (2) | 3 / 0 / 1 / 0 | F-DEPR-001 |
@@ -64,13 +64,11 @@ The generated table below partitions each problem into **fix / refute / keep / d
 <a id="F-DUP-001"></a>
 #### F-DUP-001 — Intrinsic decoding and validated reflection slots
 
-**Medium; high effort.** `dotnet-intrinsics-core/src/math.rs:581,632`, intrinsic_math_min_byte/intrinsic_math_max_byte, repeat byte-compatible StackValue conversion. Give the accepted-input contract one private pure Result-returning conversion, immediately used by both operations. Keep pop order, integer truncation, Int32/Int64/NativeInt acceptance and type-error text. This removes duplicated representation knowledge, unlike a macro that hides two imperative bodies.
-
-`dotnet-intrinsics-reflection/src/common.rs:95–153`, read_reflection_index/write_reflection_index, duplicate canonical wrapper-name to validated typed index-slot selection. Share that selection while retaining read's Result and write's construction-contract expectation. Cover RuntimeType, MethodInfo, ConstructorInfo and FieldInfo. Prefer the existing generated support-slot seam if suitable; do not build a second registry or cache branded slot borrows. Changes to generated definitions belong in the generator, never OUT_DIR.
+**Medium; high effort; resolved.** `byte_operand` defines the accepted `StackValue` representations once for `intrinsic_math_min_byte` and `intrinsic_math_max_byte`, retaining pop order, truncation and type-error text. `reflection_index_field` selects the validated typed slot for `read_reflection_index` and `write_reflection_index` by canonical wrapper name. The read retains its `Result` and construction retains its expectation; no field borrow is cached and the generated support-slot registry remains authoritative. RuntimeType, MethodInfo, ConstructorInfo and FieldInfo are exercised by an enabled CLI fixture.
 
 Group 3 is parallel specialization: reflection Prim includes floats, CTS scalar kind includes native integers. Keep distinct domains instead of exporting a misleading common scalar enum. Groups 4–8 already use meaningful span/string host seams; aliases for error-return plumbing would only relocate text.
 
-Risk: medium for slot lifetimes/canonicalization, low for byte conversion. Verify intrinsic crates plus enabled VM/CLI reflection paths in supported no-feature/MT rows, byte extremes and type errors, all wrapper kinds, verify-slots, fmt and doc drift where accessor contracts change. Existing numeric width/sign semantics are out of scope.
+[Plan 17's intrinsic selection slice](docs/plans/17-inspection-quality-refactor.md#11-unify-intrinsic-operand-and-reflection-slot-selection) records the scope. Unit tests exercise truncation, type errors and pop order; CLI fixtures exercise byte extremes and all four wrappers. See AGENT_MEMORY.md for executed checks. Existing numeric width/sign semantics remain out of scope.
 
 <a id="F-DUP-002"></a>
 #### F-DUP-002 — Checked memory windows and frame-home codec selection
@@ -205,22 +203,22 @@ The remaining report is `crates/dotnet-vm/src/intrinsics/__rerun_probe.rs:1`, ex
 
 All five Annotator reports are generated/non-Rust material: two support/obj/project.packagespec.json diagnostics and three libffi texinfo errors under fuzz target output. No source doc syntax defect was demonstrated. Never edit vendor/generated output. Optional durable IDE guidance belongs in contributor/fuzz docs, not committed machine-local settings.
 
-This multi-slice refactor should be registered under the next free docs/plans ID and queue entry **inside the first real implementation slice**, with the ordered slices from CHECKLIST and enabled-path exit conditions. The review is evidence, not a parallel architecture plan; plans 15/16 remain constraints. Closure reconciles the registered plan, marks its Status only on evidence and records dependency/std-atomic follow-ups. Planning is limited to four files, so no queue change is made in this session. Preserve ordered slice boundaries and use durable plan section links in execution records; only consequential boundary changes need a supervisor plan decision.
+The [registered plan](docs/plans/17-inspection-quality-refactor.md) defines the ordered slices and enabled-path exit conditions. This review is evidence, not a parallel architecture plan; plans 15/16 remain constraints. Closure reconciles the plan, marks its Status only on evidence and records dependency/std-atomic follow-ups.
 
 ## Duplicate group inventory
 
 Group numbers mean XML document order; hash/cost are not unique identities. They are review evidence labels, never production/test/comment names. Each group lists all current source fragments with snapshot lines and nearby symbols.
 
-### Aggregate group 1 — fix
+### Aggregate group 1 — fix (resolved)
 
-True shared byte-compatible decoding; unify while keeping Min/Max operations distinct.
+Shared byte-compatible decoding is used by both distinct Min/Max operations.
 
 - `crates/dotnet-intrinsics-core/src/math.rs:581` — `intrinsic_math_min_byte`.
 - `crates/dotnet-intrinsics-core/src/math.rs:632` — `intrinsic_math_max_byte`.
 
-### Aggregate group 2 — fix
+### Aggregate group 2 — fix (resolved)
 
-True canonical reflection wrapper/index-slot selection; unify while preserving read/write failure contracts.
+Canonical reflection wrapper/index-slot selection is shared while preserving read/write failure contracts.
 
 - `crates/dotnet-intrinsics-reflection/src/common.rs:100` — `read_reflection_index`.
 - `crates/dotnet-intrinsics-reflection/src/common.rs:135` — `write_reflection_index`.
@@ -476,10 +474,10 @@ Each row is one exported problem, identified by inspection and one-based XML ord
 
 | Entry | Snapshot site and nearby symbol | Decision | Reason / finding |
 |---|---|---|---|
-| 1 | `crates/dotnet-intrinsics-core/src/math.rs:581` — `intrinsic_math_min_byte` | fix | Aggregate group 1 below/above; `let pop_byte = \|ctx: &mut T\| match ctx.pop() {` |
-| 2 | `crates/dotnet-intrinsics-core/src/math.rs:632` — `intrinsic_math_max_byte` | fix | Aggregate group 1 below/above; `let pop_byte = \|ctx: &mut T\| match ctx.pop() {` |
-| 3 | `crates/dotnet-intrinsics-reflection/src/common.rs:100` — `read_reflection_index` | fix | Aggregate group 2 below/above; `{` |
-| 4 | `crates/dotnet-intrinsics-reflection/src/common.rs:135` — `write_reflection_index` | fix | Aggregate group 2 below/above; `{` |
+| 1 | `crates/dotnet-intrinsics-core/src/math.rs:581` — `intrinsic_math_min_byte` | fix (resolved) | Aggregate group 1 below/above; `let pop_byte = \|ctx: &mut T\| match ctx.pop() {` |
+| 2 | `crates/dotnet-intrinsics-core/src/math.rs:632` — `intrinsic_math_max_byte` | fix (resolved) | Aggregate group 1 below/above; `let pop_byte = \|ctx: &mut T\| match ctx.pop() {` |
+| 3 | `crates/dotnet-intrinsics-reflection/src/common.rs:100` — `read_reflection_index` | fix (resolved) | Aggregate group 2 below/above; `{` |
+| 4 | `crates/dotnet-intrinsics-reflection/src/common.rs:135` — `write_reflection_index` | fix (resolved) | Aggregate group 2 below/above; `{` |
 | 5 | `crates/dotnet-intrinsics-reflection/src/invoke_args.rs:45` — `from_base` | keep | Aggregate group 3 below/above; `Some(match base {` |
 | 6 | `crates/dotnet-intrinsics-span/src/conversions.rs:598` — `intrinsic_span_get_pinnable_reference` | keep | Aggregate group 4 below/above; `let managed_ref = match read_span_reference_from_ptr(&span, f, ctx.loader().as_ref(), ctx)` |
 | 7 | `crates/dotnet-intrinsics-span/src/conversions.rs:602` — `intrinsic_span_get_pinnable_reference` | keep | Aggregate group 5 below/above; `let length = match read_span_length_from_ptr(&span, f, ctx.loader().as_ref(), ctx) {` |

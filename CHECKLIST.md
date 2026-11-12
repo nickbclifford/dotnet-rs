@@ -1,10 +1,10 @@
 # Code-quality refactor checklist
 
-Ordered, enabled slices; detailed rationale and per-entry dispositions are in REVIEW.md. Existing plans 15 and 16 are architectural constraints, not unfinished work to replay. Register this plan in the first implementation slice.
+Ordered, enabled slices; detailed rationale and per-entry dispositions are in REVIEW.md. Existing plans 15 and 16 are architectural constraints, not unfinished work to replay. The durable scope and slice boundaries are in [plan 17](docs/plans/17-inspection-quality-refactor.md).
 
 ## Phase 1: Semantic duplication
 
-- [ ] 1.1 Unify intrinsic operand and reflection-slot selection [effort: high] — refs REVIEW.md#F-DUP-001
+- [x] 1.1 Unify intrinsic operand and reflection-slot selection [effort: high] — refs REVIEW.md#F-DUP-001
   Complete the byte Min/Max operand decoder in dotnet-intrinsics-core and the validated reflection index-slot selector in dotnet-intrinsics-reflection; migrate both callers of each shared concept and remove the duplicated definitions (aggregate groups 1–2). Preserve integer truncation, pop order, canonical names and read-error versus write-contract behavior. Fold touched qualifications/lifetimes into this change. Add enabled edge/type-error and reflection-wrapper tests. Register the refactor as the next free docs/plans plan and queue entry in this same usable slice, with the ordered slices below, not a separate preparatory change. Acceptance: both pairs use one semantic implementation, all four wrapper kinds are tested, crate-scoped clippy/nextest for supported no-feature and MT combinations, slot coverage, fmt and doc drift pass.
 
 - [ ] 1.2 Make raw-memory windows and byref layout selection explicit [effort: high] — refs REVIEW.md#F-DUP-002

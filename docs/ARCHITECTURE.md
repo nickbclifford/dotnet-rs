@@ -210,8 +210,9 @@ support-assembly behavior.
 `SupportSlotOps`, generated from that contract, is the only Rust accessor surface for these
 fields. The three runtime-handle `_value` IDs have their documented `ObjectRef`/`usize` views;
 the Span and ReadOnlySpan fields expose separate generated IDs and layout-only accessors, with
-bounded convenience helpers only where code accepts either span representation. This contract
-does not apply to metadata-driven BCL or user-assembly layout probes. `[UsedImplicitly]` methods
+bounded convenience helpers only where code accepts either span representation. Reflection wrapper
+index reads and writes select the same validated typed slot by canonical wrapper name, without
+caching the storage-bound field reference. This contract does not apply to metadata-driven BCL or user-assembly layout probes. `[UsedImplicitly]` methods
 remain runtime entry points rather than storage slots.
 
 ### Descriptor Ownership Model

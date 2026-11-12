@@ -16,3 +16,6 @@ default = []
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+dotnet-utils = { workspace = true, default-features = false }

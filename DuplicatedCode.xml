@@ -1,0 +1,842 @@
+<problems>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-intrinsics-core/src/math.rs</file>
+  <line>581</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-intrinsics-core/src/math.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 581-589</description>
+  <highlighted_element>let pop_byte = |ctx: &amp;mut T| match ctx.pop() {</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>46</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-intrinsics-core/src/math.rs</file>
+  <line>632</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-intrinsics-core/src/math.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 632-640</description>
+  <highlighted_element>let pop_byte = |ctx: &amp;mut T| match ctx.pop() {</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>46</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-intrinsics-reflection/src/common.rs</file>
+  <line>100</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-intrinsics-reflection/src/common.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 100-114</description>
+  <highlighted_element>{</highlighted_element>
+  <language>Rust</language>
+  <offset>87</offset>
+  <length>1</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-intrinsics-reflection/src/common.rs</file>
+  <line>135</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-intrinsics-reflection/src/common.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 135-149</description>
+  <highlighted_element>{</highlighted_element>
+  <language>Rust</language>
+  <offset>74</offset>
+  <length>1</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-intrinsics-reflection/src/invoke_args.rs</file>
+  <line>45</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-intrinsics-reflection/src/invoke_args.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 45-59</description>
+  <highlighted_element>Some(match base {</highlighted_element>
+  <language>Rust</language>
+  <offset>8</offset>
+  <length>17</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-intrinsics-span/src/conversions.rs</file>
+  <line>598</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-intrinsics-span/src/conversions.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 598-601</description>
+  <highlighted_element>let managed_ref = match read_span_reference_from_ptr(&amp;span, f, ctx.loader().as_ref(), ctx) {</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>92</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-intrinsics-span/src/conversions.rs</file>
+  <line>602</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-intrinsics-span/src/conversions.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 602-605</description>
+  <highlighted_element>let length = match read_span_length_from_ptr(&amp;span, f, ctx.loader().as_ref(), ctx) {</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>84</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-intrinsics-span/src/conversions.rs</file>
+  <line>656</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-intrinsics-span/src/conversions.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 656-660</description>
+  <highlighted_element>let managed =</highlighted_element>
+  <language>Rust</language>
+  <offset>12</offset>
+  <length>13</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-intrinsics-span/src/conversions.rs</file>
+  <line>730</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-intrinsics-span/src/conversions.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 730-734</description>
+  <highlighted_element>let length =</highlighted_element>
+  <language>Rust</language>
+  <offset>12</offset>
+  <length>12</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-intrinsics-span/src/equality.rs</file>
+  <line>176</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-intrinsics-span/src/equality.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 176-181</description>
+  <highlighted_element>let a_ptr_info = match read_span_reference(&amp;a, ctx, ctx.loader().as_ref()) {</highlighted_element>
+  <language>Rust</language>
+  <offset>8</offset>
+  <length>76</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-intrinsics-span/src/equality.rs</file>
+  <line>182</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-intrinsics-span/src/equality.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 182-187</description>
+  <highlighted_element>let b_ptr_info = match read_span_reference(&amp;b, ctx, ctx.loader().as_ref()) {</highlighted_element>
+  <language>Rust</language>
+  <offset>8</offset>
+  <length>76</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-intrinsics-span/src/equality.rs</file>
+  <line>318</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-intrinsics-span/src/equality.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 318-326</description>
+  <highlighted_element>let len = match read_span_length_from_ptr(</highlighted_element>
+  <language>Rust</language>
+  <offset>12</offset>
+  <length>42</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-intrinsics-span/src/equality.rs</file>
+  <line>327</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-intrinsics-span/src/equality.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 327-335</description>
+  <highlighted_element>let raw_ref_ptr = match read_span_reference_from_ptr(</highlighted_element>
+  <language>Rust</language>
+  <offset>12</offset>
+  <length>53</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-intrinsics-string/src/constructors.rs</file>
+  <line>62</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-intrinsics-string/src/constructors.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 62-66</description>
+  <highlighted_element>let len = ctx</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>13</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-intrinsics-string/src/operations.rs</file>
+  <line>449</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-intrinsics-string/src/operations.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 449-453</description>
+  <highlighted_element>let len = ctx</highlighted_element>
+  <language>Rust</language>
+  <offset>12</offset>
+  <length>13</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-intrinsics-string/src/operations.rs</file>
+  <line>526</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-intrinsics-string/src/operations.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 526-537</description>
+  <highlighted_element>if let StackValue::ObjectRef(ObjectRef(Some(handle))) = operands.peek_at(0) {</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>77</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-intrinsics-string/src/search.rs</file>
+  <line>708</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-intrinsics-string/src/search.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 708-719</description>
+  <highlighted_element>if let StackValue::ObjectRef(ObjectRef(Some(handle))) = operands.peek_at(0) {</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>77</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-simd/src/aarch64.rs</file>
+  <line>67</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-simd/src/aarch64.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 67-74</description>
+  <highlighted_element>if offset &lt; len {</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>17</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-simd/src/x86.rs</file>
+  <line>90</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-simd/src/x86.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 90-97</description>
+  <highlighted_element>if offset &lt; len {</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>17</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-utils/src/gc/cross_arena.rs</file>
+  <line>1128</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-utils/src/gc/cross_arena.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 1,128-1,129</description>
+  <highlighted_element>let writer_locks: Arc&lt;Vec&lt;crate::sync::Mutex&lt;()&gt;&gt;&gt; =</highlighted_element>
+  <language>Rust</language>
+  <offset>8</offset>
+  <length>52</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-utils/src/gc/cross_arena.rs</file>
+  <line>1233</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-utils/src/gc/cross_arena.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 1,233-1,234</description>
+  <highlighted_element>let writer_locks: Arc&lt;Vec&lt;crate::sync::Mutex&lt;()&gt;&gt;&gt; =</highlighted_element>
+  <language>Rust</language>
+  <offset>8</offset>
+  <length>52</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-value/src/cts_cli_conversion.rs</file>
+  <line>58</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-value/src/cts_cli_conversion.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 58-72</description>
+  <highlighted_element>Some(match base {</highlighted_element>
+  <language>Rust</language>
+  <offset>8</offset>
+  <length>17</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/executor.rs</file>
+  <line>1065</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/executor.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 1,065-1,070</description>
+  <highlighted_element>#[cfg(test)]</highlighted_element>
+  <language>Rust</language>
+  <offset>16</offset>
+  <length>12</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/executor.rs</file>
+  <line>1379</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/executor.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 1,379-1,385</description>
+  <highlighted_element>let _ = self.with_arena_ref(|arena| {</highlighted_element>
+  <language>Rust</language>
+  <offset>8</offset>
+  <length>37</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/executor.rs</file>
+  <line>1398</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/executor.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 1,398-1,404</description>
+  <highlighted_element>let _ = self.with_arena_ref(|arena| {</highlighted_element>
+  <language>Rust</language>
+  <offset>8</offset>
+  <length>37</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/executor_collection_tests.rs</file>
+  <line>118</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/executor_collection_tests.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 118-129</description>
+  <highlighted_element>let storage = b</highlighted_element>
+  <language>Rust</language>
+  <offset>8</offset>
+  <length>15</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/executor_collection_tests.rs</file>
+  <line>150</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/executor_collection_tests.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 150-164</description>
+  <highlighted_element>a.with_arena(|arena| {</highlighted_element>
+  <language>Rust</language>
+  <offset>8</offset>
+  <length>22</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/executor_collection_tests.rs</file>
+  <line>322</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/executor_collection_tests.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 322-333</description>
+  <highlighted_element>let storage = owner</highlighted_element>
+  <language>Rust</language>
+  <offset>12</offset>
+  <length>19</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/executor_collection_tests.rs</file>
+  <line>398</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/executor_collection_tests.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 398-412</description>
+  <highlighted_element>a.with_arena(|arena| {</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>22</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/executor_collection_tests.rs</file>
+  <line>555</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/executor_collection_tests.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 555-566</description>
+  <highlighted_element>let replacement_ptr = replacement_arena.mutate(|gc, _| {</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>56</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/executor_collection_tests.rs</file>
+  <line>577</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/executor_collection_tests.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 577-588</description>
+  <highlighted_element>let foreign_ptr = foreign_arena.mutate(|gc, _| {</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>48</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/executor_teardown_tests.rs</file>
+  <line>141</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/executor_teardown_tests.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 141-145</description>
+  <highlighted_element>let completion = state.workers.spawn_owner(move |running| {</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>59</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/executor_teardown_tests.rs</file>
+  <line>1208</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/executor_teardown_tests.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 1,208-1,212</description>
+  <highlighted_element>let owner = state.workers.spawn_owner(move |running| {</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>54</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/fault_tests.rs</file>
+  <line>120</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/fault_tests.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 120-139</description>
+  <highlighted_element>arena.mutate_root(|gc, engine| {</highlighted_element>
+  <language>Rust</language>
+  <offset>8</offset>
+  <length>32</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/fault_tests.rs</file>
+  <line>155</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/fault_tests.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 155-160</description>
+  <highlighted_element>if let StepResult::Return = res {</highlighted_element>
+  <language>Rust</language>
+  <offset>16</offset>
+  <length>33</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/fault_tests.rs</file>
+  <line>255</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/fault_tests.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 255-262</description>
+  <highlighted_element>let exc_ctor = res.push_method_reference(ExternalMethodReference {</highlighted_element>
+  <language>Rust</language>
+  <offset>8</offset>
+  <length>66</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/fault_tests.rs</file>
+  <line>352</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/fault_tests.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 352-359</description>
+  <highlighted_element>let exc_ctor = res.push_method_reference(ExternalMethodReference {</highlighted_element>
+  <language>Rust</language>
+  <offset>8</offset>
+  <length>66</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/fault_tests.rs</file>
+  <line>440</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/fault_tests.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 440-447</description>
+  <highlighted_element>let exc_ctor = res.push_method_reference(ExternalMethodReference {</highlighted_element>
+  <language>Rust</language>
+  <offset>8</offset>
+  <length>66</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/instructions/objects/mod.rs</file>
+  <line>368</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/instructions/objects/mod.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 368-376</description>
+  <highlighted_element>if let Err(error) = unsafe { ctx.write_bytes(origin.clone(), offset, bytes) } {</highlighted_element>
+  <language>Rust</language>
+  <offset>8</offset>
+  <length>79</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/instructions/objects/mod.rs</file>
+  <line>410</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/instructions/objects/mod.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 410-416</description>
+  <highlighted_element>if let Err(error) = unsafe { ctx.write_bytes(origin.clone(), offset, zero_bytes) } {</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>84</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/instructions/stack_ops.rs</file>
+  <line>81</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/instructions/stack_ops.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 81-90</description>
+  <highlighted_element>{</highlighted_element>
+  <language>Rust</language>
+  <offset>81</offset>
+  <length>1</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/instructions/stack_ops.rs</file>
+  <line>115</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/instructions/stack_ops.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 115-124</description>
+  <highlighted_element>{</highlighted_element>
+  <language>Rust</language>
+  <offset>75</offset>
+  <length>1</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/jmp_tests.rs</file>
+  <line>178</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/jmp_tests.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 178-183</description>
+  <highlighted_element>if let StepResult::Return = res {</highlighted_element>
+  <language>Rust</language>
+  <offset>16</offset>
+  <length>33</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/exception_ops_impl.rs</file>
+  <line>67</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/exception_ops_impl.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 67-77</description>
+  <highlighted_element>exception.as_object_mut(gc, |obj| {</highlighted_element>
+  <language>Rust</language>
+  <offset>12</offset>
+  <length>35</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/exception_ops_impl.rs</file>
+  <line>95</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/exception_ops_impl.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 95-102</description>
+  <highlighted_element>obj_ref.as_object_mut(gc, |obj| {</highlighted_element>
+  <language>Rust</language>
+  <offset>12</offset>
+  <length>33</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/native_effects.rs</file>
+  <line>563</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/native_effects.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 563-567</description>
+  <highlighted_element>object.as_object_mut(gc, |obj| {</highlighted_element>
+  <language>Rust</language>
+  <offset>12</offset>
+  <length>32</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/native_effects.rs</file>
+  <line>577</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/native_effects.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 577-587</description>
+  <highlighted_element>object.as_object_mut(gc, |obj| {</highlighted_element>
+  <language>Rust</language>
+  <offset>12</offset>
+  <length>32</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/native_effects.rs</file>
+  <line>1736</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/native_effects.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 1,736-1,742</description>
+  <highlighted_element>if let Some(pulsed) = pending.wait.poll(self.thread_id()) {</highlighted_element>
+  <language>Rust</language>
+  <offset>12</offset>
+  <length>59</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/native_effects.rs</file>
+  <line>1748</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/native_effects.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 1,748-1,754</description>
+  <highlighted_element>if let Some(pulsed) = pending.wait.poll(self.thread_id()) {</highlighted_element>
+  <language>Rust</language>
+  <offset>12</offset>
+  <length>59</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs</file>
+  <line>33</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 33-43</description>
+  <highlighted_element>if offset</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>9</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs</file>
+  <line>63</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 63-73</description>
+  <highlighted_element>if offset</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>9</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs</file>
+  <line>86</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 86-92</description>
+  <highlighted_element>if offset.as_usize() + src.len() &gt; dest.len() {</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>47</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs</file>
+  <line>102</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 102-108</description>
+  <highlighted_element>if offset.as_usize() + dest.len() &gt; src.len() {</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>47</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs</file>
+  <line>164</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 164-170</description>
+  <highlighted_element>let layout = if matches!(layout, LayoutManager::Scalar(Scalar::NativeInt))</highlighted_element>
+  <language>Rust</language>
+  <offset>16</offset>
+  <length>74</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs</file>
+  <line>261</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 261-267</description>
+  <highlighted_element>let layout = if matches!(layout, LayoutManager::Scalar(Scalar::NativeInt))</highlighted_element>
+  <language>Rust</language>
+  <offset>16</offset>
+  <length>74</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs</file>
+  <line>487</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 487-493</description>
+  <highlighted_element>if end.is_none_or(|end| end &gt; data.len()) {</highlighted_element>
+  <language>Rust</language>
+  <offset>20</offset>
+  <length>43</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs</file>
+  <line>518</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 518-524</description>
+  <highlighted_element>if end.is_none_or(|end| end &gt; data.len()) {</highlighted_element>
+  <language>Rust</language>
+  <offset>16</offset>
+  <length>43</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/stack_ops_impl.rs</file>
+  <line>106</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/stack_ops_impl.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 106-114</description>
+  <highlighted_element>#[cfg(feature = &quot;multithreading&quot;)]</highlighted_element>
+  <language>Rust</language>
+  <offset>8</offset>
+  <length>34</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/stack_ops_impl.rs</file>
+  <line>297</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/stack_ops_impl.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 297-305</description>
+  <highlighted_element>#[cfg(feature = &quot;multithreading&quot;)]</highlighted_element>
+  <language>Rust</language>
+  <offset>8</offset>
+  <length>34</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/stack_ops_impl.rs</file>
+  <line>335</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/stack_ops_impl.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 335-343</description>
+  <highlighted_element>#[cfg(feature = &quot;multithreading&quot;)]</highlighted_element>
+  <language>Rust</language>
+  <offset>8</offset>
+  <length>34</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/tail_calls_tests.rs</file>
+  <line>178</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/tail_calls_tests.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 178-198</description>
+  <highlighted_element>arena.mutate_root(|gc, engine| {</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>32</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/threading/basic.rs</file>
+  <line>323</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/threading/basic.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 323-328</description>
+  <highlighted_element>#[cfg(test)]</highlighted_element>
+  <language>Rust</language>
+  <offset>12</offset>
+  <length>12</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/threading/events.rs</file>
+  <line>65</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/threading/events.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 65-69</description>
+  <highlighted_element>for waiter in &amp;mut state.waiters {</highlighted_element>
+  <language>Rust</language>
+  <offset>8</offset>
+  <length>34</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/threading/events.rs</file>
+  <line>77</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/threading/events.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 77-81</description>
+  <highlighted_element>if let Some(waiter) = state.waiters.iter_mut().find(|w| w.result.is_none()) {</highlighted_element>
+  <language>Rust</language>
+  <offset>15</offset>
+  <length>77</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/threading/events.rs</file>
+  <line>197</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/threading/events.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 197-201</description>
+  <highlighted_element>for waiter in &amp;mut state.waiters {</highlighted_element>
+  <language>Rust</language>
+  <offset>16</offset>
+  <length>34</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/threading/events.rs</file>
+  <line>202</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/threading/events.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 202-206</description>
+  <highlighted_element>if let Some(next) = state.waiters.iter_mut().find(|w| w.result.is_none()) {</highlighted_element>
+  <language>Rust</language>
+  <offset>16</offset>
+  <length>75</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/threading/workers.rs</file>
+  <line>544</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/threading/workers.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 544-552</description>
+  <highlighted_element>let state = Arc::new(Mutex::new(RegistryState {</highlighted_element>
+  <language>Rust</language>
+  <offset>12</offset>
+  <length>47</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/threading/workers.rs</file>
+  <line>586</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/threading/workers.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 586-594</description>
+  <highlighted_element>let state = Arc::new(Mutex::new(RegistryState {</highlighted_element>
+  <language>Rust</language>
+  <offset>8</offset>
+  <length>47</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/threading/workers.rs</file>
+  <line>614</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/threading/workers.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 614-622</description>
+  <highlighted_element>let state = Arc::new(Mutex::new(RegistryState {</highlighted_element>
+  <language>Rust</language>
+  <offset>8</offset>
+  <length>47</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/threading/workers.rs</file>
+  <line>648</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/threading/workers.rs" />
+  <problem_class id="DuplicatedCode" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Duplicated code fragment</problem_class>
+  <description>Duplicate code: lines 648-656</description>
+  <highlighted_element>let state = Arc::new(Mutex::new(RegistryState {</highlighted_element>
+  <language>Rust</language>
+  <offset>8</offset>
+  <length>47</length>
+</problem>
+</problems>

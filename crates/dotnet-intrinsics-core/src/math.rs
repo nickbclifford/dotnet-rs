@@ -572,13 +572,9 @@ pub fn intrinsic_math_min_uint<'gc, T: TypedStackOps<'gc>>(
     StepResult::Continue
 }
 
-#[dotnet_intrinsic("static byte System.Math::Min(byte, byte)")]
-pub fn intrinsic_math_min_byte<'gc, T: TypedStackOps<'gc>>(
-    ctx: &mut T,
-    _method: MethodDescription,
-    _generics: &GenericLookup,
-) -> StepResult {
-    let pop_byte = |ctx: &mut T| match ctx.pop() {
+// CLI integer stack representations are truncated to the byte operand width.
+fn byte_operand(value: StackValue<'_>) -> Result<u8, StepResult> {
+    match value {
         StackValue::Int32(value) => Ok(value as u8),
         StackValue::Int64(value) => Ok(value as u8),
         StackValue::NativeInt(value) => Ok(value as u8),
@@ -586,12 +582,20 @@ pub fn intrinsic_math_min_byte<'gc, T: TypedStackOps<'gc>>(
             "byte-compatible integer",
             format!("{other:?}"),
         )),
-    };
-    let b = match pop_byte(ctx) {
+    }
+}
+
+#[dotnet_intrinsic("static byte System.Math::Min(byte, byte)")]
+pub fn intrinsic_math_min_byte<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let b = match byte_operand(ctx.pop()) {
         Ok(value) => value,
         Err(step) => return step,
     };
-    let a = match pop_byte(ctx) {
+    let a = match byte_operand(ctx.pop()) {
         Ok(value) => value,
         Err(step) => return step,
     };
@@ -629,20 +633,11 @@ pub fn intrinsic_math_max_byte<'gc, T: TypedStackOps<'gc>>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let pop_byte = |ctx: &mut T| match ctx.pop() {
-        StackValue::Int32(value) => Ok(value as u8),
-        StackValue::Int64(value) => Ok(value as u8),
-        StackValue::NativeInt(value) => Ok(value as u8),
-        other => Err(StepResult::type_error(
-            "byte-compatible integer",
-            format!("{other:?}"),
-        )),
-    };
-    let b = match pop_byte(ctx) {
+    let b = match byte_operand(ctx.pop()) {
         Ok(value) => value,
         Err(step) => return step,
     };
-    let a = match pop_byte(ctx) {
+    let a = match byte_operand(ctx.pop()) {
         Ok(value) => value,
         Err(step) => return step,
     };
@@ -858,4 +853,127 @@ pub fn intrinsic_eventsource_disabled<'gc, T: TypedStackOps<'gc>>(
     }
     ctx.push_i32(0);
     StepResult::Continue
+}
+
+#[cfg(test)]
+mod byte_operand_tests {
+    use super::*;
+
+    #[test]
+    fn integer_representations_truncate_to_byte() {
+        for (value, expected) in [
+            (StackValue::Int32(0), 0),
+            (StackValue::Int32(255), 255),
+            (StackValue::Int32(-1), 255),
+            (StackValue::Int64(256), 0),
+            (StackValue::Int64(i64::MIN + 257), 1),
+            (StackValue::NativeInt(-257), 255),
+            (StackValue::NativeInt(256), 0),
+        ] {
+            assert_eq!(byte_operand(value).unwrap(), expected);
+        }
+    }
+
+    struct TestStack(dotnet_vm_data::stack::EvaluationStack<'static>);
+
+    impl dotnet_vm_ops::ops::EvalStackOps<'static> for TestStack {
+        fn push(&mut self, value: StackValue<'static>) {
+            self.0.push(value);
+        }
+        fn pop(&mut self) -> StackValue<'static> {
+            self.0.pop()
+        }
+        fn pop_safe(&mut self) -> Result<StackValue<'static>, VmError> {
+            self.0.pop_safe()
+        }
+        fn pop_multiple(&mut self, count: usize) -> Vec<StackValue<'static>> {
+            let mut values: Vec<_> = (0..count).map(|_| self.0.pop()).collect();
+            values.reverse();
+            values
+        }
+        fn peek(&self) -> Option<StackValue<'static>> {
+            (self.0.top_of_stack().as_usize() != 0).then(|| self.0.peek_stack())
+        }
+        fn peek_stack(&self) -> StackValue<'static> {
+            self.0.peek_stack()
+        }
+        fn peek_stack_at(&self, offset: usize) -> StackValue<'static> {
+            self.0.peek_stack_at(offset)
+        }
+        fn top_of_stack(&self) -> dotnet_utils::StackSlotIndex {
+            self.0.top_of_stack()
+        }
+    }
+    impl TypedStackOps<'static> for TestStack {
+        fn push_string(&mut self, _: dotnet_value::CLRString) {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn min_max_decode_each_operand_in_stack_order() {
+        use dotnet_types::{TypeDescription, resolution::ResolutionS};
+        use dotnet_vm_ops::ops::EvalStackOps;
+        use dotnetdll::prelude::MethodMemberIndex;
+        let method = MethodDescription::new(
+            TypeDescription::NULL,
+            GenericLookup::default(),
+            ResolutionS::NULL,
+            MethodMemberIndex::Method(0),
+        );
+        let lookup = GenericLookup::default();
+        for (op, expected) in [
+            (
+                intrinsic_math_min_byte::<TestStack>
+                    as fn(&mut TestStack, MethodDescription, &GenericLookup) -> StepResult,
+                1,
+            ),
+            (intrinsic_math_max_byte::<TestStack>, 255),
+        ] {
+            let mut stack = TestStack(dotnet_vm_data::stack::EvaluationStack::new());
+            stack.push(StackValue::NativeInt(-1));
+            stack.push(StackValue::Int64(257));
+            assert!(matches!(
+                op(&mut stack, method.clone(), &lookup),
+                StepResult::Continue
+            ));
+            assert!(matches!(stack.pop(), StackValue::Int32(value) if value == expected));
+
+            stack.push(StackValue::Int32(42));
+            stack.push(StackValue::NativeFloat(1.5));
+            assert!(matches!(
+                op(&mut stack, method.clone(), &lookup),
+                StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
+                    expected: "byte-compatible integer",
+                    ..
+                }))
+            ));
+            assert!(matches!(stack.pop(), StackValue::Int32(42)));
+
+            stack.push(StackValue::NativeFloat(1.5));
+            stack.push(StackValue::Int32(42));
+            assert!(matches!(
+                op(&mut stack, method.clone(), &lookup),
+                StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
+                    expected: "byte-compatible integer",
+                    ..
+                }))
+            ));
+            assert!(stack.peek().is_none());
+        }
+    }
+
+    #[test]
+    fn non_integer_reports_type_mismatch() {
+        match byte_operand(StackValue::NativeFloat(1.5)) {
+            Err(StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
+                expected,
+                actual,
+            }))) => {
+                assert_eq!(expected, "byte-compatible integer");
+                assert_eq!(&*actual, "NativeFloat(1.5)");
+            }
+            other => panic!("unexpected result: {other:?}"),
+        }
+    }
 }

@@ -17,6 +17,10 @@ public class Program {
         if (Math.Sqrt(16.0) != 4.0) return 7;
         if (Math.Pow(2.0, 3.0) != 8.0) return 8;
 
+        byte low = 0, high = 255, middle = 128;
+        if (Math.Min(low, high) != 0 || Math.Min(high, middle) != 128) return 9;
+        if (Math.Max(low, high) != 255 || Math.Max(middle, low) != 128) return 10;
+
         return 42;
     }
 }

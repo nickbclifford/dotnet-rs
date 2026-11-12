@@ -1,0 +1,266 @@
+<problems>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-intrinsics-reflection/src/fields.rs</file>
+  <line>427</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-intrinsics-reflection/src/fields.rs" />
+  <problem_class id="RsNeedlessLifetimes" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Unnecessary lifetime annotations</problem_class>
+  <description>Parameter types contain explicit lifetimes that could be elided</description>
+  <highlighted_element>fn read_instance_field_bytes&lt;'gc&gt;( target_obj: ObjectRef&lt;'gc&gt;, field_parent: TypeDescription...</highlighted_element>
+  <language>Rust</language>
+  <offset>0</offset>
+  <length>181</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-intrinsics-reflection/src/invoke_args.rs</file>
+  <line>390</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-intrinsics-reflection/src/invoke_args.rs" />
+  <problem_class id="RsNeedlessLifetimes" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Unnecessary lifetime annotations</problem_class>
+  <description>Parameter types contain explicit lifetimes that could be elided</description>
+  <highlighted_element>fn widen_boxed&lt;'gc&gt;( arg: ObjectRef&lt;'gc&gt;, from: Prim, to: Prim, ) -&gt; Option&lt;StackValue&lt;'...</highlighted_element>
+  <language>Rust</language>
+  <offset>11</offset>
+  <length>104</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-intrinsics-reflection/src/types/mod.rs</file>
+  <line>257</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-intrinsics-reflection/src/types/mod.rs" />
+  <problem_class id="RsNeedlessLifetimes" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Unnecessary lifetime annotations</problem_class>
+  <description>Parameter types contain explicit lifetimes that could be elided</description>
+  <highlighted_element>fn string_from_heap_obj&lt;'gc&gt;(name_obj: ObjectRef&lt;'gc&gt;) -&gt; Result&lt;String, VmError&gt;</highlighted_element>
+  <language>Rust</language>
+  <offset>11</offset>
+  <length>81</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-intrinsics-string/src/lib.rs</file>
+  <line>42</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-intrinsics-string/src/lib.rs" />
+  <problem_class id="RsNeedlessLifetimes" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Unnecessary lifetime annotations</problem_class>
+  <description>Parameter types contain explicit lifetimes that could be elided</description>
+  <highlighted_element>fn string_with_span_data</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>24</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-intrinsics-unsafe/src/buffer.rs</file>
+  <line>19</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-intrinsics-unsafe/src/buffer.rs" />
+  <problem_class id="RsNeedlessLifetimes" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Unnecessary lifetime annotations</problem_class>
+  <description>Parameter types contain explicit lifetimes that could be elided</description>
+  <highlighted_element>fn stack_value_to_byte&lt;'gc&gt;(value: &amp;StackValue&lt;'gc&gt;) -&gt; Option&lt;u8&gt;</highlighted_element>
+  <language>Rust</language>
+  <offset>0</offset>
+  <length>66</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-intrinsics-unsafe/src/marshal.rs</file>
+  <line>16</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-intrinsics-unsafe/src/marshal.rs" />
+  <problem_class id="RsNeedlessLifetimes" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Unnecessary lifetime annotations</problem_class>
+  <description>Parameter types contain explicit lifetimes that could be elided</description>
+  <highlighted_element>fn offset_ptr&lt;'gc&gt;( val: StackValue&lt;'gc&gt;, byte_offset: isize, ) -&gt; Result&lt;StackValue&lt;'gc&gt;, E...</highlighted_element>
+  <language>Rust</language>
+  <offset>11</offset>
+  <length>114</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-runtime-memory/src/access.rs</file>
+  <line>2171</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-runtime-memory/src/access.rs" />
+  <problem_class id="RsNeedlessLifetimes" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Unnecessary lifetime annotations</problem_class>
+  <description>Parameter types contain explicit lifetimes that could be elided</description>
+  <highlighted_element>fn storage_is_string&lt;'a&gt;(storage: &amp;HeapStorage&lt;'a&gt;) -&gt; bool</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>59</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-runtime-memory/src/access.rs</file>
+  <line>2176</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-runtime-memory/src/access.rs" />
+  <problem_class id="RsNeedlessLifetimes" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Unnecessary lifetime annotations</problem_class>
+  <description>Parameter types contain explicit lifetimes that could be elided</description>
+  <highlighted_element>fn cross_arena_with_short_lifetime&lt;'short&gt;( gc: GCHandle&lt;'short&gt;, origin: dotnet_val...</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>144</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-runtime-memory/src/heap.rs</file>
+  <line>308</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-runtime-memory/src/heap.rs" />
+  <problem_class id="RsNeedlessLifetimes" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Unnecessary lifetime annotations</problem_class>
+  <description>Parameter types contain explicit lifetimes that could be elided</description>
+  <highlighted_element>fn object_size&lt;'gc&gt;(obj: ObjectRef&lt;'gc&gt;) -&gt; Option&lt;usize&gt;</highlighted_element>
+  <language>Rust</language>
+  <offset>0</offset>
+  <length>57</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-value/src/cts_cli_conversion.rs</file>
+  <line>154</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-value/src/cts_cli_conversion.rs" />
+  <problem_class id="RsNeedlessLifetimes" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Unnecessary lifetime annotations</problem_class>
+  <description>Parameter types contain explicit lifetimes that could be elided</description>
+  <highlighted_element>fn widen&lt;'gc&gt;(value: CTSValue&lt;'gc&gt;) -&gt; StackValue&lt;'gc&gt;</highlighted_element>
+  <language>Rust</language>
+  <offset>8</offset>
+  <length>54</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-value/src/cts_cli_conversion.rs</file>
+  <line>161</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-value/src/cts_cli_conversion.rs" />
+  <problem_class id="RsNeedlessLifetimes" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Unnecessary lifetime annotations</problem_class>
+  <description>Parameter types contain explicit lifetimes that could be elided</description>
+  <highlighted_element>fn widen_value_type&lt;'gc&gt;(value: ValueType&lt;'gc&gt;) -&gt; StackValue&lt;'gc&gt;</highlighted_element>
+  <language>Rust</language>
+  <offset>8</offset>
+  <length>66</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-value/src/cts_cli_conversion.rs</file>
+  <line>212</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-value/src/cts_cli_conversion.rs" />
+  <problem_class id="RsNeedlessLifetimes" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Unnecessary lifetime annotations</problem_class>
+  <description>Parameter types contain explicit lifetimes that could be elided</description>
+  <highlighted_element>fn narrow_scalar_value&lt;'gc&gt;( data: StackValue&lt;'gc&gt;, target: CtsScalarKind, ) -&gt; ...</highlighted_element>
+  <language>Rust</language>
+  <offset>8</offset>
+  <length>143</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-value/src/cts_cli_conversion.rs</file>
+  <line>237</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-value/src/cts_cli_conversion.rs" />
+  <problem_class id="RsNeedlessLifetimes" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Unnecessary lifetime annotations</problem_class>
+  <description>Parameter types contain explicit lifetimes that could be elided</description>
+  <highlighted_element>fn narrow_float32&lt;'gc&gt;( data: StackValue&lt;'gc&gt;, ) -&gt; Result&lt;ValueType&lt;'gc&gt;, TypeResolutio...</highlighted_element>
+  <language>Rust</language>
+  <offset>8</offset>
+  <length>107</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-value/src/cts_cli_conversion.rs</file>
+  <line>248</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-value/src/cts_cli_conversion.rs" />
+  <problem_class id="RsNeedlessLifetimes" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Unnecessary lifetime annotations</problem_class>
+  <description>Parameter types contain explicit lifetimes that could be elided</description>
+  <highlighted_element>fn narrow_float64&lt;'gc&gt;( data: StackValue&lt;'gc&gt;, ) -&gt; Result&lt;ValueType&lt;'gc&gt;, TypeResolutio...</highlighted_element>
+  <language>Rust</language>
+  <offset>8</offset>
+  <length>107</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-value/src/object/mod.rs</file>
+  <line>235</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-value/src/object/mod.rs" />
+  <problem_class id="RsNeedlessLifetimes" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Unnecessary lifetime annotations</problem_class>
+  <description>Parameter types contain explicit lifetimes that could be elided</description>
+  <highlighted_element>fn from_handle&lt;'gc&gt;(handle: ObjectHandle&lt;'gc&gt;) -&gt; Self</highlighted_element>
+  <language>Rust</language>
+  <offset>15</offset>
+  <length>54</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs</file>
+  <line>68</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs" />
+  <problem_class id="RsNeedlessLifetimes" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Unnecessary lifetime annotations</problem_class>
+  <description>Parameter types contain explicit lifetimes that could be elided</description>
+  <highlighted_element>fn managed_ptr_to_heap_object_start&lt;'gc&gt;(obj: ObjectRef&lt;'gc&gt;) -&gt; ManagedPtr&lt;'gc&gt;</highlighted_element>
+  <language>Rust</language>
+  <offset>0</offset>
+  <length>80</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-value/src/stack_value.rs</file>
+  <line>234</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-value/src/stack_value.rs" />
+  <problem_class id="RsNeedlessLifetimes" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Unnecessary lifetime annotations</problem_class>
+  <description>Parameter types contain explicit lifetimes that could be elided</description>
+  <highlighted_element>fn managed_ptr_to_raw&lt;'gc&gt;(m: &amp;StackManagedPtr&lt;'gc&gt;) -&gt; *mut u8</highlighted_element>
+  <language>Rust</language>
+  <offset>0</offset>
+  <length>63</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-value/src/stack_value.rs</file>
+  <line>982</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-value/src/stack_value.rs" />
+  <problem_class id="RsNeedlessLifetimes" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Unnecessary lifetime annotations</problem_class>
+  <description>Parameter types contain explicit lifetimes that could be elided</description>
+  <highlighted_element>fn managed_offset&lt;'gc&gt;( m: StackManagedPtr&lt;'gc&gt;, bytes: isize, ) -&gt; Result&lt;StackValue&lt;'gc&gt;, ...</highlighted_element>
+  <language>Rust</language>
+  <offset>0</offset>
+  <length>115</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/intrinsics/object_ops.rs</file>
+  <line>339</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/intrinsics/object_ops.rs" />
+  <problem_class id="RsNeedlessLifetimes" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Unnecessary lifetime annotations</problem_class>
+  <description>Parameter types contain explicit lifetimes that could be elided</description>
+  <highlighted_element>fn scalar_enum_value_from_stack&lt;'gc&gt;(value: StackValue&lt;'gc&gt;) -&gt; Option&lt;(i128, bool)&gt;</highlighted_element>
+  <language>Rust</language>
+  <offset>11</offset>
+  <length>84</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/intrinsics/object_ops.rs</file>
+  <line>349</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/intrinsics/object_ops.rs" />
+  <problem_class id="RsNeedlessLifetimes" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Unnecessary lifetime annotations</problem_class>
+  <description>Parameter types contain explicit lifetimes that could be elided</description>
+  <highlighted_element>fn enum_type_from_stack_value&lt;'gc&gt;(value: &amp;StackValue&lt;'gc&gt;) -&gt; Option&lt;TypeDescription&gt;</highlighted_element>
+  <language>Rust</language>
+  <offset>11</offset>
+  <length>86</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/context_ops.rs</file>
+  <line>369</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/context_ops.rs" />
+  <problem_class id="RsNeedlessLifetimes" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Unnecessary lifetime annotations</problem_class>
+  <description>Parameter types contain explicit lifetimes that could be elided</description>
+  <highlighted_element>fn string_with_span_data&lt;'span, R, F: FnOnce(&amp;[u8]) -&gt; R&gt;( &amp;self, span: Object&lt;'span...</highlighted_element>
+  <language>Rust</language>
+  <offset>4</offset>
+  <length>219</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/test_utils/foreign_reference.rs</file>
+  <line>38</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/test_utils/foreign_reference.rs" />
+  <problem_class id="RsNeedlessLifetimes" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">Unnecessary lifetime annotations</problem_class>
+  <description>Parameter types contain explicit lifetimes that could be elided</description>
+  <highlighted_element>fn decode_reference&lt;'gc&gt;( storage: dotnet_value::storage::FieldStorage, handle: dotnet_utils...</highlighted_element>
+  <language>Rust</language>
+  <offset>11</offset>
+  <length>140</length>
+</problem>
+</problems>

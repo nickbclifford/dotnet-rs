@@ -10,6 +10,7 @@ use dotnet_types::{
 use dotnet_value::{
     StackValue,
     object::{Object, ObjectRef},
+    storage::FieldRef,
 };
 use dotnet_vm_ops::SupportSlotOps;
 use dotnetdll::{
@@ -91,48 +92,13 @@ pub fn pre_initialize_reflection<'gc>(ctx: &mut impl ReflectionIntrinsicHost<'gc
     }
 }
 
-/// Reads the validated runtime-registry index slot from a reflection wrapper object.
-pub(crate) fn read_reflection_index<'gc>(
+// The returned field borrows only the object's storage; the loader validates owner identity.
+fn reflection_index_field<'storage, 'gc>(
     ctx: &impl ReflectionIntrinsicHost<'gc>,
-    instance: &Object<'gc>,
-) -> Result<usize, ExecutionError> {
-    let description = instance.description.clone();
-    let index_field = match ctx.loader().canonical_type_name(&description.type_name()) {
-        "System.RuntimeType" => ctx
-            .loader()
-            .runtime_type_index_field(&instance.instance_storage, description),
-        "DotnetRs.MethodInfo" => ctx
-            .loader()
-            .method_info_index_field(&instance.instance_storage, description),
-        "DotnetRs.ConstructorInfo" => ctx
-            .loader()
-            .constructor_info_index_field(&instance.instance_storage, description),
-        "DotnetRs.FieldInfo" => ctx
-            .loader()
-            .field_info_index_field(&instance.instance_storage, description),
-        _ => None,
-    };
-
-    index_field.map(|f| f.read()).ok_or_else(|| {
-        ExecutionError::InternalError(
-            format!(
-                "reflection object {} missing a validated runtime-registry index slot",
-                instance.description.type_name()
-            )
-            .into(),
-        )
-    })
-}
-
-/// Writes the validated RuntimeType index slot on a freshly allocated reflection object.
-pub(crate) fn write_reflection_index<'gc>(
-    ctx: &impl ReflectionIntrinsicHost<'gc>,
-    instance: &mut Object<'gc>,
+    instance: &'storage Object<'gc>,
     owner: TypeDescription,
-    index: usize,
-) {
-    let owner_name = owner.type_name();
-    let index_field = match ctx.loader().canonical_type_name(&owner_name) {
+) -> Option<FieldRef<'storage, usize>> {
+    match ctx.loader().canonical_type_name(&owner.type_name()) {
         "System.RuntimeType" => ctx
             .loader()
             .runtime_type_index_field(&instance.instance_storage, owner),
@@ -146,9 +112,35 @@ pub(crate) fn write_reflection_index<'gc>(
             .loader()
             .field_info_index_field(&instance.instance_storage, owner),
         _ => None,
-    };
+    }
+}
 
-    index_field
+/// Reads the validated runtime-registry index slot from a reflection wrapper object.
+pub(crate) fn read_reflection_index<'gc>(
+    ctx: &impl ReflectionIntrinsicHost<'gc>,
+    instance: &Object<'gc>,
+) -> Result<usize, ExecutionError> {
+    reflection_index_field(ctx, instance, instance.description.clone())
+        .map(|field| field.read())
+        .ok_or_else(|| {
+            ExecutionError::InternalError(
+                format!(
+                    "reflection object {} missing a validated runtime-registry index slot",
+                    instance.description.type_name()
+                )
+                .into(),
+            )
+        })
+}
+
+/// Writes the validated index slot on a freshly allocated reflection object.
+pub(crate) fn write_reflection_index<'gc>(
+    ctx: &impl ReflectionIntrinsicHost<'gc>,
+    instance: &mut Object<'gc>,
+    owner: TypeDescription,
+    index: usize,
+) {
+    reflection_index_field(ctx, instance, owner)
         .expect("validated reflection runtime-registry index support slot")
         .write(index);
 }

@@ -1,0 +1,14 @@
+<problems>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/pointer_provenance_tests.rs</file>
+  <line>2346</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/pointer_provenance_tests.rs" />
+  <problem_class id="RsUnusedMut" severity="WEAK WARNING" attribute_key="NOT_USED_ELEMENT_ATTRIBUTES">Unused `mut` modifier</problem_class>
+  <description>Unused `mut`</description>
+  <highlighted_element>mut</highlighted_element>
+  <language>Rust</language>
+  <offset>8</offset>
+  <length>3</length>
+</problem>
+</problems>

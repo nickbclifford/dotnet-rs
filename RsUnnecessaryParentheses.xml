@@ -1,0 +1,50 @@
+<problems>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-utils/src/gc/cross_arena.rs</file>
+  <line>476</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-utils/src/gc/cross_arena.rs" />
+  <problem_class id="RsUnnecessaryParentheses" severity="WEAK WARNING" attribute_key="NOT_USED_ELEMENT_ATTRIBUTES">Unnecessary parentheses</problem_class>
+  <description>Unnecessary parentheses</description>
+  <highlighted_element>(</highlighted_element>
+  <language>Rust</language>
+  <offset>22</offset>
+  <length>1</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-utils/src/gc/cross_arena.rs</file>
+  <line>476</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-utils/src/gc/cross_arena.rs" />
+  <problem_class id="RsUnnecessaryParentheses" severity="WEAK WARNING" attribute_key="NOT_USED_ELEMENT_ATTRIBUTES">Unnecessary parentheses</problem_class>
+  <description>Unnecessary parentheses</description>
+  <highlighted_element>)</highlighted_element>
+  <language>Rust</language>
+  <offset>52</offset>
+  <length>1</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm-ops/src/effects.rs</file>
+  <line>1765</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm-ops/src/effects.rs" />
+  <problem_class id="RsUnnecessaryParentheses" severity="WEAK WARNING" attribute_key="NOT_USED_ELEMENT_ATTRIBUTES">Unnecessary parentheses</problem_class>
+  <description>Unnecessary parentheses</description>
+  <highlighted_element>(</highlighted_element>
+  <language>Rust</language>
+  <offset>29</offset>
+  <length>1</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm-ops/src/effects.rs</file>
+  <line>1765</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm-ops/src/effects.rs" />
+  <problem_class id="RsUnnecessaryParentheses" severity="WEAK WARNING" attribute_key="NOT_USED_ELEMENT_ATTRIBUTES">Unnecessary parentheses</problem_class>
+  <description>Unnecessary parentheses</description>
+  <highlighted_element>)</highlighted_element>
+  <language>Rust</language>
+  <offset>59</offset>
+  <length>1</length>
+</problem>
+</problems>

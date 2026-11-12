@@ -1,0 +1,902 @@
+<problems>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-benchmarks/benches/managed_ptr_serde.rs</file>
+  <line>62</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-benchmarks/benches/managed_ptr_serde.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'MANAGED_THREAD_ID.set(self.previous)'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>26</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-utils/src/raw_block.rs</file>
+  <line>73</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-utils/src/raw_block.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'LIVE_BLOCKS.set(count.get() + 1)'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>20</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-utils/src/raw_block.rs</file>
+  <line>118</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-utils/src/raw_block.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'LIVE_BLOCKS.set(count.get() - 1)'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>20</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-value/src/object/mod.rs</file>
+  <line>1103</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-value/src/object/mod.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'MANAGED_THREAD_ID.set(self.previous)'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>30</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs</file>
+  <line>2042</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'MANAGED_THREAD_ID.set(Some(arena_id))'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>30</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs</file>
+  <line>2101</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-value/src/pointer/tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'MANAGED_THREAD_ID.set(None)'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>30</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-value/src/test_helpers.rs</file>
+  <line>37</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-value/src/test_helpers.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'MANAGED_THREAD_ID.set(self.previous)'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>26</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/executor_teardown_tests.rs</file>
+  <line>981</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/executor_teardown_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'OWNERSHIP_PANIC.set(None)'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>28</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/gc/coordinator.rs</file>
+  <line>82</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/gc/coordinator.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'COLLECTION_LOCK_DEBUG_DEPTH.set(depth.get() + 1)'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>32</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_return_tests.rs</file>
+  <line>117</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_return_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'ENTERED.set(true)'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>12</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_return_tests.rs</file>
+  <line>141</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_return_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'CASE.set(case)'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>9</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_return_tests.rs</file>
+  <line>142</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_return_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'ENTERED.set(false)'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>12</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_return_tests.rs</file>
+  <line>173</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_return_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'ENTERED.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>28</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>2153</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'INLINE_CALLS.set(count.get() + 1)'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>25</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>2170</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'INLINE_CALLS.set(0)'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>17</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>3227</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_DROPS.set(count.get() + 1)'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>27</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>3250</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_RESUMES.set(count.get() + 1)'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>25</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>3335</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_DROPS.set(0)'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>19</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>3336</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_RESUMES.set(0)'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>21</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>3337</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_NEXT.set(0)'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>18</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>3539</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_RESUMES.set(count.get() + 1)'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>25</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>3588</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_RESUMES.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>48</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>3604</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_RESUMES.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>32</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>4489</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_RESUMES.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>32</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>4517</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_RESUMES.set(count.get() + 1)'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>25</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>4555</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_RESUMES.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>32</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>4646</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_RESUMES.set(count.get() + 1)'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>25</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>4689</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_RESUMES.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>32</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>4692</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_RESUMES.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>32</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>4724</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_RESUMES.set(count.get() + 1)'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>25</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>4794</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_RESUMES.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>32</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>4808</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_DROPS.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>30</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>4840</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_DROPS.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>34</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>4856</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_DROPS.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>30</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>4857</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_RESUMES.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>32</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>4891</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_DROPS.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>34</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>4906</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_DROPS.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>30</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>4907</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_RESUMES.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>32</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>4925</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_DROPS.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>30</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>4941</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_RESUMES.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>32</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>4942</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_DROPS.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>30</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>4971</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_DROPS.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>42</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>4972</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_RESUMES.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>44</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>4978</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_DROPS.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>30</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>4980</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_DROPS.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>30</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>4981</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_RESUMES.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>32</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>5021</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_DROPS.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>30</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>5022</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_RESUMES.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>32</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>5075</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_DROPS.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>30</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>5077</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_DROPS.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>30</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>5078</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_RESUMES.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>32</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>5098</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_DROPS.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>30</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>5100</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_DROPS.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>30</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>5101</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_RESUMES.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>32</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>5110</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_DROPS.set(count.get() + 1)'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>27</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>5130</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_RESUMES.set(count.get() + 1)'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>25</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>5181</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_DROPS.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>26</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>5185</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_DROPS.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>30</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>5186</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_RESUMES.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>32</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>5286</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_RESUMES.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>32</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>5288</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_DROPS.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>30</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>5633</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_DROPS.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>30</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>5689</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_DROPS.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>30</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>5824</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_DROPS.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>30</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>5925</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_DROPS.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>42</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>5938</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_DROPS.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>42</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>5946</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_DROPS.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>30</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>5947</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_RESUMES.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>32</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>5977</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_DROPS.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>30</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>6097</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_DROPS.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>30</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs</file>
+  <line>6215</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm/src/native_substring_tests.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'BOUNDARY_DROPS.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>30</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm-data/src/frame_alloc.rs</file>
+  <line>114</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm-data/src/frame_alloc.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'THREAD_BYTES.set(thread_bytes)'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>21</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm-data/src/frame_alloc.rs</file>
+  <line>150</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm-data/src/frame_alloc.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'THREAD_BYTES.get()'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>21</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm-data/src/frame_alloc.rs</file>
+  <line>344</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm-data/src/frame_alloc.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'THREAD_BYTES.set(usize::MAX)'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>21</offset>
+  <length>4</length>
+</problem>
+<problem>
+  <file>file://$PROJECT_DIR$/crates/dotnet-vm-data/src/frame_alloc.rs</file>
+  <line>349</line>
+  <module>dotnet-rs</module>
+  <entry_point TYPE="file" FQNAME="file://$PROJECT_DIR$/crates/dotnet-vm-data/src/frame_alloc.rs" />
+  <problem_class id="RsThreadLocalStableMethodCanBeUsed" severity="WEAK WARNING" attribute_key="INFO_ATTRIBUTES">`with` call can be replaced with thread local stable method</problem_class>
+  <description>Can be replaced with 'THREAD_BYTES.set(baseline)'</description>
+  <highlighted_element>with</highlighted_element>
+  <language>Rust</language>
+  <offset>21</offset>
+  <length>4</length>
+</problem>
+</problems>

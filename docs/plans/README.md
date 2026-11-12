@@ -10,6 +10,7 @@ In priority order. Each plan's own `Status:` line is the only record of its stat
 
 | ID | Plan | Note |
 |---|---|---|
+| 17 | [Inspection-driven code quality refactor](17-inspection-quality-refactor.md) | Ordered semantic, readability and dependency slices with an inspection ledger |
 | 16 | [Retire legacy continuations and move suspending intrinsics to effects](16-retire-legacy-continuations.md) | Complete (slices 1–8); the multicast continuation for excluded shapes is deliberately kept |
 | 15 | [CoreLib `Task` and the thread pool](15-corelib-task-and-thread-pool.md) | CoreLib tasks/resources, capped background pool workers, unnamed events and managed timers are active |
 | 14 | [Canonical reflection objects across threads](14-canonical-reflection-objects.md) | Complete; shared canonical type, member and assembly objects |
@@ -36,6 +37,11 @@ Known problems without a plan. Write a plan for one only when it is chosen as th
 Evidence and IDs (p01…, R01…) are defined in the
 [pointer-provenance inventory](../pointer-provenance/INVENTORY.md).
 
+- **Standalone reflection validation feature:** enabling only
+  `dotnet-intrinsics-reflection/generic-constraint-validation` fails to compile because it does
+  not enable `dotnet-types/generic-constraint-validation`, which defines
+  `GenericLookup::validate_constraints`. The VM feature forwards both; decide whether standalone
+  feature forwarding should be supported and repair its manifest if so.
 - **Managed resource lookup cost:** after plan 15 removed the `SR` resource-string intrinsic, the
   `exception_messages` benchmark (cold first `ResourceManager` load plus 127 lookups, fresh VM
   per iteration) went from about 3.4 ms to about 121 ms (~35x). Accepted by the maintainer for
