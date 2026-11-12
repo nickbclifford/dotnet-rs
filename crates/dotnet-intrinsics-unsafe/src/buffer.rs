@@ -323,9 +323,7 @@ pub fn intrinsic_span_helpers_fill<'gc, T: UnsafeIntrinsicHost<'gc>>(
         {
             return StepResult::not_implemented(format!("SpanHelpers.Fill failed: {e}"));
         }
-        if i + 1 < len && ctx.check_gc_safe_point() {
-            return StepResult::Yield;
-        }
+        // No collection poll: a yield retries the call, which would restart the fill.
     }
 
     StepResult::Continue

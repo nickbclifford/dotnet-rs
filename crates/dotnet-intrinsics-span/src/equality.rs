@@ -18,14 +18,12 @@ use dotnetdll::prelude::MethodMemberIndex;
 
 const CHUNK_SIZE: usize = 1024 * 1024; // 1MB chunks
 
-fn run_chunked_compare<F, S>(
-    total_bytes: usize,
-    mut compare_chunk: F,
-    mut should_yield: S,
-) -> Result<bool, StepResult>
+/// Compares in bounded chunks without polling for a collection. A synchronous handler that
+/// yields is retried from its start, so the read-only pass runs to completion, as `cpblk` does;
+/// chunks only bound each range-checked read.
+fn run_chunked_compare<F>(total_bytes: usize, mut compare_chunk: F) -> Result<bool, StepResult>
 where
     F: FnMut(usize, usize) -> Result<bool, StepResult>,
-    S: FnMut() -> bool,
 {
     let mut offset = 0;
     while offset < total_bytes {
@@ -33,11 +31,7 @@ where
         if !compare_chunk(offset, current_chunk)? {
             return Ok(false);
         }
-
         offset += current_chunk;
-        if offset < total_bytes && should_yield() {
-            return Err(StepResult::Yield);
-        }
     }
 
     Ok(true)
@@ -88,23 +82,19 @@ fn chunked_sequence_equal<'gc, T: SpanIntrinsicHost<'gc>>(
     total_bytes: usize,
 ) -> Result<bool, StepResult> {
     let ctx = &*ctx;
-    run_chunked_compare(
-        total_bytes,
-        |offset, current_chunk| {
-            // SAFETY: F10.RawMemoryAccessValid — The chunk bounds come from `run_chunked_compare`, which limits every
-            // offset to `total_bytes`, the validated extent of both managed pointers.
-            let a_chunk = unsafe { a.clone().offset(offset as isize) };
-            // SAFETY: F10.RawMemoryAccessValid — As above, the validated chunk offset is within `b`'s shared extent.
-            let b_chunk = unsafe { b.clone().offset(offset as isize) };
+    run_chunked_compare(total_bytes, |offset, current_chunk| {
+        // SAFETY: F10.RawMemoryAccessValid — The chunk bounds come from `run_chunked_compare`, which limits every
+        // offset to `total_bytes`, the validated extent of both managed pointers.
+        let a_chunk = unsafe { a.clone().offset(offset as isize) };
+        // SAFETY: F10.RawMemoryAccessValid — As above, the validated chunk offset is within `b`'s shared extent.
+        let b_chunk = unsafe { b.clone().offset(offset as isize) };
 
-            with_chunk_data(ctx, &a_chunk, current_chunk, |a_slice| {
-                with_chunk_data(ctx, &b_chunk, current_chunk, |b_slice| {
-                    Ok(simd_sequence_equal(a_slice, b_slice))
-                })
+        with_chunk_data(ctx, &a_chunk, current_chunk, |a_slice| {
+            with_chunk_data(ctx, &b_chunk, current_chunk, |b_slice| {
+                Ok(simd_sequence_equal(a_slice, b_slice))
             })
-        },
-        || ctx.check_gc_safe_point(),
-    )
+        })
+    })
 }
 
 fn read_span_length_or_push_value_equality<'gc, T: SpanIntrinsicHost<'gc>>(
@@ -466,34 +456,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn run_chunked_compare_yields_when_safe_point_requested_for_large_iteration() {
-        let total_bytes = CHUNK_SIZE + 16;
-        let mut safe_point_checks = 0usize;
-        let res = run_chunked_compare(
-            total_bytes,
-            |_offset, _chunk| Ok(true),
-            || {
-                safe_point_checks += 1;
-                safe_point_checks == 1
-            },
-        );
-
-        assert_eq!(res, Err(StepResult::Yield));
-        assert_eq!(safe_point_checks, 1);
-    }
-
-    #[test]
-    fn run_chunked_compare_finishes_when_safe_point_not_requested() {
+    fn run_chunked_compare_finishes_in_one_call() {
         let total_bytes = CHUNK_SIZE + 16;
         let mut chunks = 0usize;
-        let res = run_chunked_compare(
-            total_bytes,
-            |_offset, _chunk| {
-                chunks += 1;
-                Ok(true)
-            },
-            || false,
-        );
+        let res = run_chunked_compare(total_bytes, |_offset, _chunk| {
+            chunks += 1;
+            Ok(true)
+        });
 
         assert_eq!(res, Ok(true));
         assert_eq!(chunks, 2);

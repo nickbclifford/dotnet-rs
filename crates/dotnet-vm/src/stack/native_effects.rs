@@ -662,7 +662,9 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
         )]
         // SAFETY: F10.RawMemoryAccessValid — the full range was just resolved and checked;
         // `done + chunk <= total`.
-        unsafe { dotnet_simd::fill_raw(dst.add(done), chunk, value) };
+        unsafe {
+            dotnet_simd::fill_raw(dst.add(done), chunk, value)
+        };
         Ok(chunk)
     }
     fn frame_home_block(

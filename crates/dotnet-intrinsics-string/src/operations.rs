@@ -12,29 +12,26 @@ use dotnet_value::{
     string::CLRString,
 };
 use dotnet_vm_data::StepResult;
+use dotnet_vm_ops::effects::{
+    NativeInvocation, NativeOperandView, NativeResult, NativeSelection, VmEffects,
+};
 use dotnet_vm_ops::ops::{ExceptionOps, MemoryOps, RawMemoryOps, TypedStackOps};
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 const SPAN_COPY_CHUNK_SIZE: usize = 1024;
 
-fn run_chunked_copy_with_safe_point<C, S>(
-    len: usize,
-    mut copy_chunk: C,
-    mut should_yield: S,
-) -> Result<(), StepResult>
+/// Copies `len` chars in bounded chunks without polling for a collection. The operands are
+/// ref-struct spans, which native transport excludes, and a synchronous handler that yields is
+/// retried from its start; one linear pass runs to completion instead, as `cpblk` does.
+fn run_chunked_copy<C>(len: usize, mut copy_chunk: C) -> Result<(), StepResult>
 where
     C: FnMut(usize, usize) -> Result<(), IntrinsicError>,
-    S: FnMut() -> bool,
 {
     let mut offset = 0usize;
     while offset < len {
         let chunk_len = std::cmp::min(SPAN_COPY_CHUNK_SIZE, len - offset);
         copy_chunk(offset, chunk_len).map_err(|e| StepResult::Error(e.into()))?;
         offset += chunk_len;
-
-        if offset < len && should_yield() {
-            return Err(StepResult::Yield);
-        }
     }
 
     Ok(())
@@ -91,9 +88,91 @@ fn string_slices_equal_with_comparison(a: &[u16], b: &[u16], ignore_case: bool) 
 /// System.String::Equals(string, string)
 /// System.String::Equals(string)
 /// System.String::Equals(object)
-#[dotnet_intrinsic("static bool System.String::Equals(string, string)")]
-#[dotnet_intrinsic("bool System.String::Equals(string)")]
-#[dotnet_intrinsic("bool System.String::Equals(object)")]
+// Bound each poll to the same byte count as the bulk memory intrinsics.
+const EQUALITY_CHUNK_SIZE: usize = dotnet_vm_ops::effects::BULK_CHUNK_SIZE / 2;
+
+/// Only equal-length, distinct large strings need a resumable comparison.
+pub fn string_equals_select<'gc, T: TypedStackOps<'gc> + RawMemoryOps<'gc>>(
+    _ctx: &T,
+    operands: NativeOperandView<'_, 'gc>,
+    _method: &MethodDescription,
+    _generics: &GenericLookup,
+) -> NativeSelection {
+    let (StackValue::ObjectRef(ObjectRef(Some(a))), StackValue::ObjectRef(ObjectRef(Some(b)))) =
+        (operands.peek_at(1), operands.peek_at(0))
+    else {
+        return NativeSelection::Fallback;
+    };
+    if gc_arena::Gc::as_ptr(a) == gc_arena::Gc::as_ptr(b) {
+        return NativeSelection::Fallback;
+    }
+    let (a_len, a_is_str) = heap_string_len(a);
+    let (b_len, b_is_str) = heap_string_len(b);
+    if a_is_str && b_is_str && a_len == b_len && a_len > EQUALITY_CHUNK_SIZE {
+        NativeSelection::Async(NativeInvocation {
+            start: 0,
+            length: a_len,
+            parameter_count: 2,
+        })
+    } else {
+        NativeSelection::Fallback
+    }
+}
+
+#[dotnet_intrinsic("static bool System.String::Equals(string, string)", select = string_equals_select, fallback = intrinsic_string_equals)]
+#[dotnet_intrinsic("bool System.String::Equals(string)", select = string_equals_select, fallback = intrinsic_string_equals)]
+#[dotnet_intrinsic("bool System.String::Equals(object)", select = string_equals_select, fallback = intrinsic_string_equals)]
+pub async fn string_equals_async(mut fx: VmEffects) -> NativeResult {
+    let length = fx.invocation().length;
+    let (a, b) = {
+        let mut vm = fx.vm().await?;
+        let b = vm.pop_string()?;
+        let a = vm.pop_string()?;
+        (a, b)
+    };
+    let mut offset = 0;
+    while offset < length {
+        let chunk = (length - offset).min(EQUALITY_CHUNK_SIZE);
+        let equal = {
+            let mut vm = fx.vm().await?;
+            vm.with(|region| {
+                let (
+                    StackValue::ObjectRef(ObjectRef(Some(a))),
+                    StackValue::ObjectRef(ObjectRef(Some(b))),
+                ) = (region.fetch(&a)?, region.fetch(&b)?)
+                else {
+                    return Err(dotnet_types::error::ExecutionError::InternalError(
+                        "native string equality operands invalid".into(),
+                    )
+                    .into());
+                };
+                let a_heap = a.borrow();
+                let b_heap = b.borrow();
+                let (HeapStorage::Str(a), HeapStorage::Str(b)) = (&a_heap.storage, &b_heap.storage)
+                else {
+                    return Err(dotnet_types::error::ExecutionError::InternalError(
+                        "native string equality operands invalid".into(),
+                    )
+                    .into());
+                };
+                let a = &a[offset..offset + chunk];
+                let b = &b[offset..offset + chunk];
+                Ok::<bool, dotnet_types::error::VmError>(
+                    probe_sequence_equal_u16(a, b).unwrap_or(a == b),
+                )
+            })??
+        };
+        if !equal {
+            return fx.vm().await?.push_bool(false);
+        }
+        offset += chunk;
+        if offset < length {
+            fx.yield_now().await?;
+        }
+    }
+    fx.vm().await?.push_bool(true)
+}
+
 pub fn intrinsic_string_equals<'gc, T: TypedStackOps<'gc> + RawMemoryOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
@@ -123,11 +202,10 @@ pub fn intrinsic_string_equals<'gc, T: TypedStackOps<'gc> + RawMemoryOps<'gc>>(
                 } else {
                     let length = a_len;
                     let mut offset = 0;
-                    const CHUNK_SIZE: usize = 4096; // 4K characters (8KB)
                     let mut equal = true;
 
                     while offset < length {
-                        let current_chunk = std::cmp::min(CHUNK_SIZE, length - offset);
+                        let current_chunk = std::cmp::min(EQUALITY_CHUNK_SIZE, length - offset);
 
                         let chunk_equal = {
                             let a_heap = a_handle.borrow();
@@ -150,9 +228,6 @@ pub fn intrinsic_string_equals<'gc, T: TypedStackOps<'gc> + RawMemoryOps<'gc>>(
                         }
 
                         offset += current_chunk;
-                        if offset < length && ctx.check_gc_safe_point() {
-                            return StepResult::Yield;
-                        }
                     }
                     equal
                 }
@@ -377,19 +452,15 @@ pub fn intrinsic_string_concat_three_spans<'gc, T: IntrinsicStringHost<'gc>>(
                 })
                 .map_err(|e| StepResult::Error(e.into()))?;
 
-            run_chunked_copy_with_safe_point(
-                len,
-                |offset, chunk_len| {
-                    ctx.string_with_span_data(span.clone(), TypeDescription::NULL, 2, |slice| {
-                        let start = offset * 2;
-                        let end = start + (chunk_len * 2);
-                        if let Some(chunk_bytes) = slice.get(start..end) {
-                            extend_from_utf16_ne_bytes(dest, chunk_bytes);
-                        }
-                    })
-                },
-                || ctx.check_gc_safe_point(),
-            )?;
+            run_chunked_copy(len, |offset, chunk_len| {
+                ctx.string_with_span_data(span.clone(), TypeDescription::NULL, 2, |slice| {
+                    let start = offset * 2;
+                    let end = start + (chunk_len * 2);
+                    if let Some(chunk_bytes) = slice.get(start..end) {
+                        extend_from_utf16_ne_bytes(dest, chunk_bytes);
+                    }
+                })
+            })?;
 
             Ok(())
         };
@@ -437,12 +508,6 @@ pub fn intrinsic_string_concat_three_spans<'gc, T: IntrinsicStringHost<'gc>>(
         Err(step) => return step,
     };
 
-    let total_length = data0.len() + data1.len() + data2.len();
-    const LARGE_STRING_CONCAT_THRESHOLD: usize = 1024;
-    if total_length > LARGE_STRING_CONCAT_THRESHOLD && ctx.check_gc_safe_point() {
-        return StepResult::Yield;
-    }
-
     let value = CLRString::new(data0.into_iter().chain(data1).chain(data2).collect());
     ctx.drop_top(3);
     ctx.push_string(value);
@@ -450,7 +515,71 @@ pub fn intrinsic_string_concat_three_spans<'gc, T: IntrinsicStringHost<'gc>>(
 }
 
 /// System.String::GetHashCodeOrdinalIgnoreCase()
-#[dotnet_intrinsic("int System.String::GetHashCodeOrdinalIgnoreCase()")]
+const HASH_CHUNK_SIZE: usize = dotnet_vm_ops::effects::BULK_CHUNK_SIZE / 2;
+
+pub fn string_hash_select<'gc, T: TypedStackOps<'gc> + RawMemoryOps<'gc>>(
+    _ctx: &T,
+    operands: NativeOperandView<'_, 'gc>,
+    _method: &MethodDescription,
+    _generics: &GenericLookup,
+) -> NativeSelection {
+    if let StackValue::ObjectRef(ObjectRef(Some(handle))) = operands.peek_at(0) {
+        let inner = handle.borrow();
+        if let HeapStorage::Str(chars) = &inner.storage
+            && chars.len() > HASH_CHUNK_SIZE
+        {
+            return NativeSelection::Async(NativeInvocation {
+                start: 0,
+                length: chars.len(),
+                parameter_count: 1,
+            });
+        }
+    }
+    NativeSelection::Fallback
+}
+
+#[dotnet_intrinsic("int System.String::GetHashCodeOrdinalIgnoreCase()", select = string_hash_select, fallback = intrinsic_string_get_hash_code_ordinal_ignore_case)]
+pub async fn string_hash_async(mut fx: VmEffects) -> NativeResult {
+    let length = fx.invocation().length;
+    let source = fx.vm().await?.pop_string()?;
+    let mut chars = Vec::with_capacity(length);
+    while chars.len() < length {
+        {
+            let mut vm = fx.vm().await?;
+            vm.with(|region| {
+                let StackValue::ObjectRef(ObjectRef(Some(handle))) = region.fetch(&source)? else {
+                    return Err(dotnet_types::error::ExecutionError::InternalError(
+                        "native string hash operand invalid".into(),
+                    )
+                    .into());
+                };
+                let inner = handle.borrow();
+                let HeapStorage::Str(source) = &inner.storage else {
+                    return Err(dotnet_types::error::ExecutionError::InternalError(
+                        "native string hash operand invalid".into(),
+                    )
+                    .into());
+                };
+                let end = (chars.len() + HASH_CHUNK_SIZE).min(length);
+                chars.extend_from_slice(&source[chars.len()..end]);
+                Ok::<(), dotnet_types::error::VmError>(())
+            })??;
+        }
+        if chars.len() < length {
+            fx.yield_now().await?;
+        }
+    }
+    let mut h = DefaultHasher::new();
+    String::from_utf16_lossy(&chars)
+        .to_uppercase()
+        .into_bytes()
+        .hash(&mut h);
+    fx.vm()
+        .await?
+        .with(|region| region.push_int(h.finish() as i32))??;
+    Ok(())
+}
+
 pub fn intrinsic_string_get_hash_code_ordinal_ignore_case<
     'gc,
     T: TypedStackOps<'gc> + RawMemoryOps<'gc>,
@@ -478,17 +607,12 @@ pub fn intrinsic_string_get_hash_code_ordinal_ignore_case<
 
             let mut result = Vec::with_capacity(len);
             let mut offset = 0;
-            const CHUNK_SIZE: usize = 1024;
-
             while offset < len {
-                let chunk_len = std::cmp::min(CHUNK_SIZE, len - offset);
+                let chunk_len = std::cmp::min(HASH_CHUNK_SIZE, len - offset);
                 if !extend_from_string_chunk(ctx, *handle, offset, chunk_len, &mut result) {
                     break;
                 }
                 offset += chunk_len;
-                if offset < len && ctx.check_gc_safe_point() {
-                    return StepResult::Yield;
-                }
             }
             result
         }
@@ -575,10 +699,8 @@ pub fn intrinsic_string_copy_string_content<
             );
         }
 
+        // No collection poll: a retry would restart this copy from the beginning.
         offset += chunk_len;
-        if offset < src_len && ctx.check_gc_safe_point() {
-            return StepResult::Yield;
-        }
     }
     StepResult::Continue
 }
@@ -595,41 +717,225 @@ pub fn intrinsic_string_implicit_to_span<'gc, T: IntrinsicStringHost<'gc>>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dotnet_types::error::VmError;
+    use dotnet_utils::{ArenaId, gc::ThreadSafeLock};
+    use dotnet_value::object::ObjectInner;
+    use dotnet_vm_ops::effects::{
+        NativeBackend, NativeControl, NativeEffect, NativeRegion, poll_native,
+    };
+    use gc_arena::{Arena, Collect, DynamicRootSet, Gc, GcWeak, Rootable};
+    use std::task::Poll;
 
-    #[test]
-    fn run_chunked_copy_with_safe_point_yields_for_large_copy() {
-        let len = SPAN_COPY_CHUNK_SIZE + 8;
-        let mut polls = 0usize;
-        let mut copied = 0usize;
-        let res = run_chunked_copy_with_safe_point(
-            len,
-            |_offset, chunk_len| {
-                copied += chunk_len;
-                Ok(())
-            },
-            || {
-                polls += 1;
-                polls == 1
-            },
-        );
+    #[derive(Collect)]
+    #[collect(no_drop)]
+    struct EqualityRoots<'gc> {
+        roots: DynamicRootSet<'gc>,
+        a: GcWeak<'gc, ThreadSafeLock<ObjectInner<'gc>>>,
+        b: GcWeak<'gc, ThreadSafeLock<ObjectInner<'gc>>>,
+    }
 
-        assert_eq!(res, Err(StepResult::Yield));
-        assert_eq!(polls, 1);
-        assert_eq!(copied, SPAN_COPY_CHUNK_SIZE);
+    #[derive(Default)]
+    struct EqualityBackend<'gc> {
+        operands: Vec<StackValue<'gc>>,
+        result: Option<i32>,
+        stop: bool,
+    }
+    impl<'gc> NativeBackend<'gc> for EqualityBackend<'gc> {
+        fn stop_requested(&self) -> bool {
+            self.stop
+        }
+        fn active_scope_depth(&self) -> usize {
+            0
+        }
+        fn operands(&mut self) -> &mut Vec<StackValue<'gc>> {
+            &mut self.operands
+        }
+        fn push_new_string(&mut self, _chars: Vec<u16>) -> Result<(), VmError> {
+            unreachable!()
+        }
+        fn push_output(&mut self, value: StackValue<'gc>) -> Result<(), VmError> {
+            self.result = Some(value.as_i32());
+            Ok(())
+        }
     }
 
     #[test]
-    fn run_chunked_copy_with_safe_point_completes_when_stop_not_requested() {
+    fn equality_roots_both_strings_and_resumes_after_collection() {
+        for different in [false, true] {
+            let length = EQUALITY_CHUNK_SIZE * 2 + 1;
+            let mut arena = Arena::<Rootable![EqualityRoots<'_>]>::new(|mc| {
+                let chars = vec![42; length];
+                let mut other = chars.clone();
+                if different {
+                    other[length - 1] = 43;
+                }
+                let a = Gc::new(
+                    mc,
+                    ThreadSafeLock::new(ObjectInner::new(
+                        HeapStorage::Str(CLRString::new(chars)),
+                        ArenaId::new(1),
+                    )),
+                );
+                let b = Gc::new(
+                    mc,
+                    ThreadSafeLock::new(ObjectInner::new(
+                        HeapStorage::Str(CLRString::new(other)),
+                        ArenaId::new(1),
+                    )),
+                );
+                EqualityRoots {
+                    roots: DynamicRootSet::new(mc),
+                    a: Gc::downgrade(a),
+                    b: Gc::downgrade(b),
+                }
+            });
+            let control = NativeControl::new();
+            let fx = control
+                .effects(NativeInvocation {
+                    start: 0,
+                    length,
+                    parameter_count: 2,
+                })
+                .unwrap();
+            let mut future = Box::pin(string_equals_async(fx));
+            arena.mutate(|mc, roots| {
+                let mut backend = EqualityBackend::default();
+                backend.operands.push(StackValue::ObjectRef(ObjectRef(Some(
+                    roots.a.upgrade(mc).unwrap(),
+                ))));
+                backend.operands.push(StackValue::ObjectRef(ObjectRef(Some(
+                    roots.b.upgrade(mc).unwrap(),
+                ))));
+                let mut region = NativeRegion::new(mc, roots.roots, &mut backend);
+                assert!(matches!(
+                    poll_native(&control, future.as_mut(), &mut region),
+                    Ok(Poll::Pending)
+                ));
+                assert!(backend.operands.is_empty());
+            });
+            assert_eq!(control.take_effect(), Some(NativeEffect::Yield));
+            arena.finish_cycle();
+            arena.mutate(|mc, roots| {
+                assert!(roots.a.upgrade(mc).is_some() && roots.b.upgrade(mc).is_some());
+                let mut backend = EqualityBackend {
+                    stop: true,
+                    ..Default::default()
+                };
+                let mut region = NativeRegion::new(mc, roots.roots, &mut backend);
+                assert!(matches!(
+                    poll_native(&control, future.as_mut(), &mut region),
+                    Ok(Poll::Pending)
+                ));
+            });
+            assert_eq!(control.take_effect(), Some(NativeEffect::Yield));
+            arena.mutate(|mc, roots| {
+                let mut backend = EqualityBackend::default();
+                let mut region = NativeRegion::new(mc, roots.roots, &mut backend);
+                assert!(matches!(
+                    poll_native(&control, future.as_mut(), &mut region),
+                    Ok(Poll::Pending)
+                ));
+            });
+            assert_eq!(control.take_effect(), Some(NativeEffect::Yield));
+            arena.finish_cycle();
+            arena.mutate(|mc, roots| {
+                let mut backend = EqualityBackend::default();
+                let mut region = NativeRegion::new(mc, roots.roots, &mut backend);
+                assert!(matches!(
+                    poll_native(&control, future.as_mut(), &mut region),
+                    Ok(Poll::Ready(Ok(())))
+                ));
+                assert_eq!(backend.result, Some(i32::from(!different)));
+            });
+            drop(future);
+            arena.finish_cycle();
+            arena.mutate(|mc, roots| {
+                assert!(roots.a.upgrade(mc).is_none() && roots.b.upgrade(mc).is_none())
+            });
+        }
+    }
+
+    #[test]
+    fn hash_keeps_utf16_and_progress_across_collection() {
+        let length = HASH_CHUNK_SIZE * 2 + 1;
+        let mut chars = vec![b'a' as u16; length];
+        chars[HASH_CHUNK_SIZE - 1] = 0xd83d;
+        chars[HASH_CHUNK_SIZE] = 0xde00;
+        let mut expected = DefaultHasher::new();
+        String::from_utf16_lossy(&chars)
+            .to_uppercase()
+            .into_bytes()
+            .hash(&mut expected);
+        let expected = expected.finish() as i32;
+        let mut arena = Arena::<Rootable![EqualityRoots<'_>]>::new(|mc| {
+            let a = Gc::new(
+                mc,
+                ThreadSafeLock::new(ObjectInner::new(
+                    HeapStorage::Str(CLRString::new(chars)),
+                    ArenaId::new(1),
+                )),
+            );
+            EqualityRoots {
+                roots: DynamicRootSet::new(mc),
+                a: Gc::downgrade(a),
+                b: Gc::downgrade(a),
+            }
+        });
+        let control = NativeControl::new();
+        let fx = control
+            .effects(NativeInvocation {
+                start: 0,
+                length,
+                parameter_count: 1,
+            })
+            .unwrap();
+        let mut future = Box::pin(string_hash_async(fx));
+        arena.mutate(|mc, roots| {
+            let mut backend = EqualityBackend::default();
+            backend.operands.push(StackValue::ObjectRef(ObjectRef(Some(
+                roots.a.upgrade(mc).unwrap(),
+            ))));
+            let mut region = NativeRegion::new(mc, roots.roots, &mut backend);
+            assert!(matches!(
+                poll_native(&control, future.as_mut(), &mut region),
+                Ok(Poll::Pending)
+            ));
+        });
+        assert_eq!(control.take_effect(), Some(NativeEffect::Yield));
+        arena.finish_cycle();
+        arena.mutate(|mc, roots| {
+            assert!(roots.a.upgrade(mc).is_some());
+            let mut backend = EqualityBackend::default();
+            let mut region = NativeRegion::new(mc, roots.roots, &mut backend);
+            assert!(matches!(
+                poll_native(&control, future.as_mut(), &mut region),
+                Ok(Poll::Pending)
+            ));
+        });
+        assert_eq!(control.take_effect(), Some(NativeEffect::Yield));
+        arena.finish_cycle();
+        arena.mutate(|mc, roots| {
+            let mut backend = EqualityBackend::default();
+            let mut region = NativeRegion::new(mc, roots.roots, &mut backend);
+            assert!(matches!(
+                poll_native(&control, future.as_mut(), &mut region),
+                Ok(Poll::Ready(Ok(())))
+            ));
+            assert_eq!(backend.result, Some(expected));
+        });
+        drop(future);
+        arena.finish_cycle();
+        arena.mutate(|mc, roots| assert!(roots.a.upgrade(mc).is_none()));
+    }
+
+    #[test]
+    fn run_chunked_copy_completes_in_one_call() {
         let len = SPAN_COPY_CHUNK_SIZE * 2 + 8;
         let mut copied = 0usize;
-        let res = run_chunked_copy_with_safe_point(
-            len,
-            |_offset, chunk_len| {
-                copied += chunk_len;
-                Ok(())
-            },
-            || false,
-        );
+        let res = run_chunked_copy(len, |_offset, chunk_len| {
+            copied += chunk_len;
+            Ok(())
+        });
 
         assert_eq!(res, Ok(()));
         assert_eq!(copied, len);

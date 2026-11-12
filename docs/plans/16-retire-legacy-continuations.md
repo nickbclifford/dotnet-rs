@@ -324,7 +324,7 @@ exclusions. Slice 3 then removed the reflection continuation; the remaining orde
      both layout guards, and the multicast, threading and lock CLR fixtures in both configurations.
      The unmanaged timed-wait test covers successful acquisition and timeout across a collection,
      including exactly one flag write. The multicast fixture covers a `ref bool` Monitor call.
-6. **Bulk intrinsics (partial: memory family complete; string and span-equality families open).** `mem_helpers`/`buffer` first (correctness), then string, then span
+6. **Bulk intrinsics (complete).** `mem_helpers`/`buffer` first (correctness), then string, then span
    equality, one family per commit, each gated on a benchmark comparison against the parent
    commit. `cpblk`/`initblk` keep progress across the yield even if they stay instructions.
    - Tests: first, a `multithreading` repro for an overlapping 2 MiB+ `Buffer.Memmove` while
@@ -346,9 +346,9 @@ exclusions. Slice 3 then removed the reflection continuation; the remaining orde
      they run to completion. This deviates from "keep progress across the yield": it removes the
      restart hazard instead, at the cost of a collection request waiting for a long block
      (bounded by memcpy time, at most 4 GiB for the `uint` forms).
-   - Kept: `SpanHelpers.Fill<T>` for non-byte `T` (and null or non-pointer destinations) still
-     uses the element loop with a per-element safepoint poll, which restarts from the beginning.
-     It is idempotent but shares the stale-operand hazard; convert it with the string families.
+   - `SpanHelpers.Fill<T>` for non-byte `T` (and null or non-pointer destinations) keeps the
+     synchronous element loop; the string commit removed its per-element poll, so it runs to
+     completion instead of restarting.
    - Tests: `memmove_overlap_gc_42` and `bulk_fill_gc_42` (both against the CLR, `multithreading`
      only, each crossing GC stops from a forcing thread). Workspace nextest passed in ST
      (809 in vm, cli, unsafe) and `multithreading` (1,210; the known timer fixture flaked once and
@@ -369,6 +369,36 @@ exclusions. Slice 3 then removed the reflection continuation; the remaining orde
      `constructors.rs`, `operations.rs`, `search.rs`) and span/string equality
      (`equality.rs`, `operations.rs`) still return `Yield` from sync handlers and, with the
      constructors, still re-allocate on retry; each needs its own commit and benchmark.
+   - Partial follow-up: ordinary `String.Equals`, `GetHashCodeOrdinalIgnoreCase`,
+     `IsNullOrWhiteSpace`, and the repeated-character and char-array constructors now keep
+     their roots and progress in native bodies for large inputs. Their applicable synchronous
+     fallbacks and the substring fallback run to completion. Unit tests collect between
+     chunks, including a surrogate pair across a hash chunk boundary, and the MT
+     `string_equality_gc_42` fixture compares equality, whitespace, and construction results
+     with the CLR while a second thread forces collections. `string_char_repeat_42` checks that
+     a throwing constructor leaves the destination unassigned (the slice 4 follow-up).
+   - String and span completion (review): every remaining mid-operation poll is removed, and
+     those handlers run to completion, by the rule accepted for `cpblk`: a single linear pass
+     over the operands does not poll. This covers `String(ReadOnlySpan<char>)`, `String(char*)`,
+     `Concat` of three spans, `CopyStringContent`, span `SequenceEqual` and the pre-allocation
+     poll in `FastAllocateString`. The span and `char*` operands are ref structs or unmanaged C
+     strings, which native transport excludes, so an async body was not an option for them.
+     No string, span or unsafe intrinsic now returns `Yield`. Safepoints taken before any work
+     starts remain: `newarr` and the reflection `MakeGenericType`/`GetGenericArguments` handlers
+     (the latter polls inside a loop over a few type arguments and restarts harmlessly); slice 8
+     should decide whether to keep them.
+   - The three slice 6 GC fixtures start a second thread, so `crates/dotnet-cli/build.rs` now
+     skips them without `multithreading`; `e5750bba` had left the ST fixture run failing.
+   - Validation: workspace nextest 1,215 passed (MT) and 930 passed (ST); workspace clippy
+     clean in both.
+   - Benchmark (review, `bench-fat`, `taskset -c 0`, four alternating pairs against
+     `120b595c`, mean change): ST `string` +1.23%, `span` +0.19%, `span_equality` +0.40%,
+     `memory` +0.39%, `unsafe_buffer` −0.14%, `json` +0.64%; MT `string` −6.46%, `span`
+     −0.94%, `span_equality` −1.09%, `memory` −0.35%, `unsafe_buffer` −0.22%, `json` −0.49%.
+     In a steady-state profile the new selectors do not register (`string_equals_select`
+     0.02%), and the hot `IsNullOrWhiteSpace` handler goes from 46.7% to 47.4% of cycles, as its
+     loop changed; the MT `string` gain largely reverses the code-placement loss recorded above.
+     Accepted.
 7. **Static-init triggers.** One `ensure_initialized` path for `newobj`,
    `prepare_method_initialization`, `RunClassConstructor` **and the native-call preflight in
    `dispatch_pending_native_call`**; delete `retrying_initializer`, frame `initializer_claim`,

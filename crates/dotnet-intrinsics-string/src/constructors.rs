@@ -9,7 +9,10 @@ use dotnet_value::{
     with_vector,
 };
 use dotnet_vm_data::StepResult;
-use dotnet_vm_ops::ops::{ExceptionOps, RawMemoryOps, TypedStackOps};
+use dotnet_vm_ops::{
+    effects::{NativeInvocation, NativeOperandView, NativeResult, NativeSelection, VmEffects},
+    ops::{ExceptionOps, RawMemoryOps, TypedStackOps},
+};
 
 fn parse_string_length<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc>>(
     ctx: &mut T,
@@ -49,12 +52,6 @@ fn parse_string_length<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc> + RawMemor
         ));
     }
 
-    // Check GC safe point before allocating large strings
-    const LARGE_STRING_THRESHOLD: usize = 1024;
-    if len > LARGE_STRING_THRESHOLD && ctx.check_gc_safe_point() {
-        return Err(StepResult::Yield);
-    }
-
     Ok(len)
 }
 
@@ -83,10 +80,9 @@ fn readonly_span_to_vec<'gc, T: IntrinsicStringHost<'gc>>(
         })
         .map_err(|e| StepResult::Error(e.into()))?;
 
+        // No collection poll: the span operand is a ref struct, which native transport
+        // excludes, and a yield would retry the constructor from its start.
         offset += chunk_len;
-        if offset < len && ctx.check_gc_safe_point() {
-            return Err(StepResult::Yield);
-        }
     }
 
     Ok(result)
@@ -115,8 +111,70 @@ pub fn intrinsic_string_fast_allocate_string<
     StepResult::Continue
 }
 
+/// Select large arrays; spans and invalid inputs retain the existing validation path.
+pub fn string_array_select<'gc, T: IntrinsicStringHost<'gc>>(
+    _ctx: &T,
+    operands: NativeOperandView<'_, 'gc>,
+    _method: &MethodDescription,
+    _generics: &GenericLookup,
+) -> NativeSelection {
+    if let StackValue::ObjectRef(ObjectRef(Some(handle))) = operands.peek_at(0) {
+        let inner = handle.borrow();
+        if let HeapStorage::Vec(vector) = &inner.storage
+            && vector.layout.length > REPEAT_CHUNK_SIZE
+        {
+            return NativeSelection::Async(NativeInvocation {
+                start: 0,
+                length: vector.layout.length,
+                parameter_count: 1,
+            });
+        }
+    }
+    NativeSelection::Fallback
+}
+
 /// System.String::.ctor(char[])
-#[dotnet_intrinsic("void System.String::.ctor(char[])")]
+#[dotnet_intrinsic("void System.String::.ctor(char[])", select = string_array_select, fallback = intrinsic_string_ctor_char_array)]
+pub async fn string_array_async(mut fx: VmEffects) -> NativeResult {
+    let length = fx.invocation().length;
+    let source = fx.vm().await?.pop_object()?;
+    let mut chars = Vec::with_capacity(length);
+    while chars.len() < length {
+        {
+            let mut vm = fx.vm().await?;
+            vm.with(|region| {
+                let StackValue::ObjectRef(ObjectRef(Some(handle))) = region.fetch(&source)? else {
+                    return Err(dotnet_types::error::ExecutionError::InternalError(
+                        "native string array source invalid".into(),
+                    )
+                    .into());
+                };
+                let inner = handle.borrow();
+                let HeapStorage::Vec(vector) = &inner.storage else {
+                    return Err(dotnet_types::error::ExecutionError::InternalError(
+                        "native string array source invalid".into(),
+                    )
+                    .into());
+                };
+                let end = (chars.len() + REPEAT_CHUNK_SIZE).min(length);
+                if let Some(bytes) = vector.get().get(chars.len() * 2..end * 2) {
+                    extend_from_utf16_ne_bytes(&mut chars, bytes);
+                } else {
+                    return Err(dotnet_types::error::ExecutionError::InternalError(
+                        "native string array is shorter than its length".into(),
+                    )
+                    .into());
+                }
+                Ok::<(), dotnet_types::error::VmError>(())
+            })??;
+        }
+        if chars.len() < length {
+            fx.yield_now().await?;
+        }
+    }
+    fx.vm().await?.push_new_string(chars)
+}
+
 pub fn intrinsic_string_ctor_char_array<'gc, T: IntrinsicStringHost<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
@@ -150,9 +208,6 @@ pub fn intrinsic_string_ctor_char_array<'gc, T: IntrinsicStringHost<'gc>>(
                         }
                     });
                     offset += chunk_len;
-                    if offset < len && ctx.check_gc_safe_point() {
-                        return StepResult::Yield;
-                    }
                 }
                 result
             }
@@ -173,7 +228,44 @@ pub fn intrinsic_string_ctor_char_array<'gc, T: IntrinsicStringHost<'gc>>(
 ///
 /// ECMA-335 does not define this BCL constructor; the CLR throws
 /// `ArgumentOutOfRangeException` for a negative count.
-#[dotnet_intrinsic("void System.String::.ctor(char, int)")]
+const REPEAT_CHUNK_SIZE: usize = dotnet_vm_ops::effects::BULK_CHUNK_SIZE / 2;
+
+pub fn string_repeat_select<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc>>(
+    _ctx: &T,
+    operands: NativeOperandView<'_, 'gc>,
+    _method: &MethodDescription,
+    _generics: &GenericLookup,
+) -> NativeSelection {
+    if let (StackValue::Int32(count), StackValue::Int32(c)) =
+        (operands.peek_at(0), operands.peek_at(1))
+        && count > REPEAT_CHUNK_SIZE as i32
+        && count <= 0x2000_0000
+    {
+        NativeSelection::Async(NativeInvocation {
+            start: c as u16 as usize,
+            length: count as usize,
+            parameter_count: 2,
+        })
+    } else {
+        NativeSelection::Fallback
+    }
+}
+
+#[dotnet_intrinsic("void System.String::.ctor(char, int)", select = string_repeat_select, fallback = intrinsic_string_ctor_char_count)]
+pub async fn string_repeat_async(mut fx: VmEffects) -> NativeResult {
+    let invocation = fx.invocation();
+    fx.vm().await?.discard_scalars(2)?;
+    let mut chars = Vec::with_capacity(invocation.length);
+    while chars.len() < invocation.length {
+        let end = (chars.len() + REPEAT_CHUNK_SIZE).min(invocation.length);
+        chars.resize(end, invocation.start as u16);
+        if end < invocation.length {
+            fx.yield_now().await?;
+        }
+    }
+    fx.vm().await?.push_new_string(chars)
+}
+
 pub fn intrinsic_string_ctor_char_count<
     'gc,
     T: TypedStackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc>,
@@ -265,10 +357,6 @@ pub fn intrinsic_string_ctor_char_ptr<'gc, T: TypedStackOps<'gc> + RawMemoryOps<
                 }
                 chars.push(c);
                 i += 1;
-
-                if i % 1024 == 0 && ctx.check_gc_safe_point() {
-                    return StepResult::Yield;
-                }
             }
         }
         CLRString::new(chars)

@@ -308,6 +308,7 @@ mod substring_chunk_tests {
     struct Mock<'gc> {
         operands: Vec<StackValue<'gc>>,
         outputs: Vec<Vec<u16>>,
+        boolean: Option<i32>,
         stop: bool,
     }
     impl<'gc> NativeBackend<'gc> for Mock<'gc> {
@@ -324,6 +325,131 @@ mod substring_chunk_tests {
             self.outputs.push(chars);
             Ok(())
         }
+        fn push_output(&mut self, value: StackValue<'gc>) -> Result<(), VmError> {
+            self.boolean = Some(value.as_i32());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn whitespace_keeps_source_and_progress_across_collections() {
+        let length = super::WHITESPACE_CHUNK_SIZE * 2 + 1;
+        for nonwhite in [false, true] {
+            let mut chars = vec![b' ' as u16; length];
+            chars[super::WHITESPACE_CHUNK_SIZE] = 0x2003;
+            if nonwhite {
+                chars[length - 1] = b'x' as u16;
+            }
+            let mut arena = Arena::<Rootable![Roots<'_>]>::new(|mc| {
+                let source = Gc::new(
+                    mc,
+                    ThreadSafeLock::new(ObjectInner::new(
+                        HeapStorage::Str(CLRString::new(chars)),
+                        ArenaId::new(1),
+                    )),
+                );
+                Roots {
+                    roots: DynamicRootSet::new(mc),
+                    weak: Gc::downgrade(source),
+                }
+            });
+            let control = NativeControl::new();
+            let fx = control
+                .effects(NativeInvocation {
+                    start: 0,
+                    length,
+                    parameter_count: 1,
+                })
+                .unwrap();
+            let mut future = Box::pin(super::whitespace_async(fx));
+            arena.mutate(|mc, roots| {
+                let mut backend = Mock::default();
+                backend.operands.push(StackValue::ObjectRef(ObjectRef(Some(
+                    roots.weak.upgrade(mc).unwrap(),
+                ))));
+                let mut region = NativeRegion::new(mc, roots.roots, &mut backend);
+                assert!(matches!(
+                    poll_native(&control, future.as_mut(), &mut region),
+                    Ok(Poll::Pending)
+                ));
+            });
+            assert_eq!(control.take_effect(), Some(NativeEffect::Yield));
+            arena.finish_cycle();
+            arena.mutate(|mc, roots| {
+                assert!(roots.weak.upgrade(mc).is_some());
+                let mut backend = Mock::default();
+                let mut region = NativeRegion::new(mc, roots.roots, &mut backend);
+                assert!(matches!(
+                    poll_native(&control, future.as_mut(), &mut region),
+                    Ok(Poll::Pending)
+                ));
+            });
+            assert_eq!(control.take_effect(), Some(NativeEffect::Yield));
+            arena.finish_cycle();
+            arena.mutate(|mc, roots| {
+                let mut backend = Mock::default();
+                let mut region = NativeRegion::new(mc, roots.roots, &mut backend);
+                assert!(matches!(
+                    poll_native(&control, future.as_mut(), &mut region),
+                    Ok(Poll::Ready(Ok(())))
+                ));
+                assert_eq!(backend.boolean, Some(i32::from(!nonwhite)));
+            });
+            drop(future);
+            arena.finish_cycle();
+            arena.mutate(|mc, roots| assert!(roots.weak.upgrade(mc).is_none()));
+        }
+    }
+
+    #[test]
+    fn repeated_constructor_keeps_progress_across_yields() {
+        let length = dotnet_vm_ops::effects::BULK_CHUNK_SIZE + 1;
+        // The closure supplies the higher-ranked lifetime required by Arena::new.
+        #[allow(clippy::redundant_closure)]
+        let mut arena = Arena::<Rootable![DynamicRootSet<'_>]>::new(|mc| DynamicRootSet::new(mc));
+        let control = NativeControl::new();
+        let fx = control
+            .effects(NativeInvocation {
+                start: 0xd800,
+                length,
+                parameter_count: 2,
+            })
+            .unwrap();
+        let mut future = Box::pin(crate::constructors::string_repeat_async(fx));
+        arena.mutate(|mc, roots| {
+            let mut backend = Mock::default();
+            backend
+                .operands
+                .extend([StackValue::Int32(0xd800), StackValue::Int32(length as i32)]);
+            let mut region = NativeRegion::new(mc, *roots, &mut backend);
+            assert!(matches!(
+                poll_native(&control, future.as_mut(), &mut region),
+                Ok(Poll::Pending)
+            ));
+            assert!(backend.outputs.is_empty());
+        });
+        assert_eq!(control.take_effect(), Some(NativeEffect::Yield));
+        arena.finish_cycle();
+        arena.mutate(|mc, roots| {
+            let mut backend = Mock::default();
+            let mut region = NativeRegion::new(mc, *roots, &mut backend);
+            assert!(matches!(
+                poll_native(&control, future.as_mut(), &mut region),
+                Ok(Poll::Pending)
+            ));
+            assert!(backend.outputs.is_empty());
+        });
+        assert_eq!(control.take_effect(), Some(NativeEffect::Yield));
+        arena.finish_cycle();
+        arena.mutate(|mc, roots| {
+            let mut backend = Mock::default();
+            let mut region = NativeRegion::new(mc, *roots, &mut backend);
+            assert!(matches!(
+                poll_native(&control, future.as_mut(), &mut region),
+                Ok(Poll::Ready(Ok(())))
+            ));
+            assert_eq!(backend.outputs, vec![vec![0xd800; length]]);
+        });
     }
 
     #[test]
@@ -521,9 +647,6 @@ pub fn intrinsic_string_substring<'gc, T: IntrinsicStringHost<'gc>>(
                     }
                 };
                 offset += current_chunk;
-                if offset < l && ctx.check_gc_safe_point() {
-                    return StepResult::Yield;
-                }
             }
             result_vec
         }
@@ -574,8 +697,79 @@ pub fn intrinsic_string_is_null_or_empty<'gc, T: TypedStackOps<'gc>>(
     StepResult::Continue
 }
 
+const WHITESPACE_CHUNK_SIZE: usize = dotnet_vm_ops::effects::BULK_CHUNK_SIZE / 2;
+
+pub fn whitespace_select<'gc, T: TypedStackOps<'gc> + RawMemoryOps<'gc>>(
+    _ctx: &T,
+    operands: NativeOperandView<'_, 'gc>,
+    _method: &MethodDescription,
+    _generics: &GenericLookup,
+) -> NativeSelection {
+    if let StackValue::ObjectRef(ObjectRef(Some(handle))) = operands.peek_at(0) {
+        let inner = handle.borrow();
+        if let HeapStorage::Str(chars) = &inner.storage
+            && chars.len() > WHITESPACE_CHUNK_SIZE
+        {
+            return NativeSelection::Async(NativeInvocation {
+                start: 0,
+                length: chars.len(),
+                parameter_count: 1,
+            });
+        }
+    }
+    NativeSelection::Fallback
+}
+
+fn all_whitespace(chars: &[u16]) -> bool {
+    probe_all_ascii_whitespace(chars).unwrap_or_else(|| {
+        chars.iter().all(|&c| {
+            char::from_u32(c as u32)
+                .map(|c| c.is_whitespace())
+                .unwrap_or(false)
+        })
+    })
+}
+
 /// System.String::IsNullOrWhiteSpace(string)
-#[dotnet_intrinsic("static bool System.String::IsNullOrWhiteSpace(string)")]
+#[dotnet_intrinsic("static bool System.String::IsNullOrWhiteSpace(string)", select = whitespace_select, fallback = intrinsic_string_is_null_or_white_space)]
+pub async fn whitespace_async(mut fx: VmEffects) -> NativeResult {
+    let length = fx.invocation().length;
+    let source = fx.vm().await?.pop_string()?;
+    let mut offset = 0;
+    while offset < length {
+        let chunk = (length - offset).min(WHITESPACE_CHUNK_SIZE);
+        let all_white = {
+            let mut vm = fx.vm().await?;
+            vm.with(|region| {
+                let StackValue::ObjectRef(ObjectRef(Some(handle))) = region.fetch(&source)? else {
+                    return Err(dotnet_types::error::ExecutionError::InternalError(
+                        "native whitespace source invalid".into(),
+                    )
+                    .into());
+                };
+                let inner = handle.borrow();
+                let HeapStorage::Str(chars) = &inner.storage else {
+                    return Err(dotnet_types::error::ExecutionError::InternalError(
+                        "native whitespace source invalid".into(),
+                    )
+                    .into());
+                };
+                Ok::<bool, dotnet_types::error::VmError>(all_whitespace(
+                    &chars[offset..offset + chunk],
+                ))
+            })??
+        };
+        if !all_white {
+            return fx.vm().await?.push_bool(false);
+        }
+        offset += chunk;
+        if offset < length {
+            fx.yield_now().await?;
+        }
+    }
+    fx.vm().await?.push_bool(true)
+}
+
 pub fn intrinsic_string_is_null_or_white_space<'gc, T: TypedStackOps<'gc> + RawMemoryOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
@@ -619,14 +813,7 @@ pub fn intrinsic_string_is_null_or_white_space<'gc, T: TypedStackOps<'gc> + RawM
                     match &inner.storage {
                         HeapStorage::Str(s) => {
                             let chunk = &s[offset..offset + current_chunk_size];
-                            let chunk_all_white =
-                                probe_all_ascii_whitespace(chunk).unwrap_or_else(|| {
-                                    chunk.iter().all(|&c| {
-                                        char::from_u32(c as u32)
-                                            .map(|c| c.is_whitespace())
-                                            .unwrap_or(false)
-                                    })
-                                });
+                            let chunk_all_white = all_whitespace(chunk);
                             if !chunk_all_white {
                                 all_white = false;
                             }
@@ -640,9 +827,6 @@ pub fn intrinsic_string_is_null_or_white_space<'gc, T: TypedStackOps<'gc> + RawM
                 }
 
                 offset += current_chunk_size;
-                if offset < len && ctx.check_gc_safe_point() {
-                    return StepResult::Yield;
-                }
             }
             all_white
         }

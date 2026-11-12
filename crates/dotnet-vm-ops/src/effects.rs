@@ -830,7 +830,10 @@ impl<'gc, 'a> NativeRegion<'gc, 'a> {
         let source = self.fetch(source)?;
         let destination = self.fetch(destination)?;
         // SAFETY: F10.RawMemoryAccessValid — forwarded caller contract.
-        unsafe { self.backend.bulk_copy_chunk(source, destination, total, done) }
+        unsafe {
+            self.backend
+                .bulk_copy_chunk(source, destination, total, done)
+        }
     }
     unsafe fn bulk_fill_chunk(
         &mut self,
@@ -841,7 +844,10 @@ impl<'gc, 'a> NativeRegion<'gc, 'a> {
     ) -> Result<usize, VmError> {
         let destination = self.fetch(destination)?;
         // SAFETY: F10.RawMemoryAccessValid — forwarded caller contract.
-        unsafe { self.backend.bulk_fill_chunk(destination, total, done, value) }
+        unsafe {
+            self.backend
+                .bulk_fill_chunk(destination, total, done, value)
+        }
     }
     fn discard_scalars(&mut self, count: usize) -> Result<(), VmError> {
         let operands = self.backend.operands();

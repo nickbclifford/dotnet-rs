@@ -79,6 +79,17 @@ diff_test!(
     "tests/fixtures/unsafe/bulk_fill_gc_42.cs"
 );
 
+#[cfg(feature = "multithreading")]
+diff_test!(
+    string_equality_gc_matches_dotnet,
+    "tests/fixtures/strings/equality_gc_42.cs"
+);
+
+diff_test!(
+    string_char_repeat_matches_dotnet,
+    "tests/fixtures/strings/string_char_repeat_42.cs"
+);
+
 // Rejected candidates: structs/interlocked_misaligned_1 (intentional ECMA alignment
 // divergence);
 // exceptions/unhandled_exception_254 and stack_trace_*_254 (the in-process fixture oracle is
