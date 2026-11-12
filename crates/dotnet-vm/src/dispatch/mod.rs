@@ -518,9 +518,8 @@ impl<'gc> ExecutionEngine<'gc> {
             let result = ctx.dispatch_method(invoke_method, lookup);
             *ctx.original_ip = saved_ip;
             *ctx.original_stack_height = saved_height;
-            let initializer = (matches!(result, StepResult::FramePushed)
-                && ctx.frame_stack.len() == depth + 1
-                && ctx.frame_stack.current_frame().state.info_handle.is_cctor)
+            // A type initializer runs as an effect; this step retries once it completes.
+            let initializer = ctx.has_initializer_gate(depth)
                 // Retained synchronous fallbacks retry without advancing the caller.
                 || (matches!(result, StepResult::Yield)
                     && ctx.frame_stack.len() == depth

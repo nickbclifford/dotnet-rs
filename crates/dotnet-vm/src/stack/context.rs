@@ -66,6 +66,8 @@ pub(crate) struct NativeActivation<'gc> {
     pub operands: Vec<StackValue<'gc>>,
     pub outputs: Vec<StackValue<'gc>>,
     pub instruction: Option<InstructionCompletion<'gc>>,
+    #[collect(require_static)]
+    pub resume: Option<super::native_effects::InitializerResume>,
     pub id: dotnet_vm_data::NativeId,
     pub method: crate::CollectableMethodDescription,
     pub parent_destination: Option<dotnet_vm_data::NativeReturnDestination>,
@@ -296,16 +298,6 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
     }
 
     #[inline]
-    fn cctor_type_desc_and_lookup(
-        frame: &dotnet_vm_data::StackFrame<'gc>,
-    ) -> (TypeDescription, GenericLookup) {
-        let type_desc = frame.state.info_handle.source.parent.clone();
-        // Reuse the existing Arc<[ConcreteType]> directly — no Vec allocation.
-        let cctor_generics = GenericLookup::from_type_arc(frame.generic_inst.type_generics.clone());
-        (type_desc, cctor_generics)
-    }
-
-    #[inline]
     pub(crate) fn on_pop_safe(&mut self) -> Result<(), crate::error::VmError> {
         if let Some(frame) = self.frame_stack.current_frame_opt_mut() {
             frame.stack_height =
@@ -518,10 +510,6 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         self.trace_method_exit_for_frame(&frame);
         self.release_synchronized_lock(&mut frame);
 
-        if let Some(mut claim) = frame.initializer_claim.take() {
-            claim.succeed();
-        }
-
         if frame.is_finalizer {
             self.local.heap.processing_finalizer.set(false);
         }
@@ -622,52 +610,6 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
 
         self.unwind_native_at(self.frame_stack.len());
         self.release_synchronized_lock(&mut frame);
-
-        // The capturing caller owns publication and wrapping of its requested initializer.
-        let capturing_initializer = matches!(
-            (*self.exception_mode, frame.native_return),
-            (ExceptionState::Unwinding(dotnet_vm_data::UnwindState { target: dotnet_vm_data::UnwindTarget::Native { destination, .. }, .. }), Some(child)) if destination == child
-        );
-        if frame.state.info_handle.is_cctor && !capturing_initializer {
-            let (type_desc, cctor_generics) = Self::cctor_type_desc_and_lookup(&frame);
-            // Wrap exception in TypeInitializationException per ECMA-335 §II.10.5.3.3
-            let current_exception = match *self.exception_mode {
-                ExceptionState::Throwing(ex, _) => Some(ex),
-                ExceptionState::Searching(s) => Some(s.exception),
-                ExceptionState::Unwinding(u) => u.exception,
-                ExceptionState::ExecutingHandler(u) => u.exception,
-                ExceptionState::Filtering(f) => Some(f.exception),
-                ExceptionState::None => None,
-            };
-
-            if let Some(inner) = current_exception {
-                // This updates self.exception_mode to Throwing. That is safe because unwind_frame
-                // is called during the exception handling loop in dotnet-exceptions, and the next
-                // iteration will see the new Throwing state.
-                let result = self.throw_type_initialization_exception(&type_desc, Some(inner));
-                if let (StepResult::Exception, ExceptionState::Throwing(exception, _)) =
-                    (result, *self.exception_mode)
-                {
-                    self.shared.statics.mark_failed_with_exception(
-                        type_desc.clone(),
-                        &cctor_generics,
-                        exception,
-                    );
-                } else {
-                    self.shared
-                        .statics
-                        .mark_failed(type_desc.clone(), &cctor_generics);
-                }
-            } else {
-                self.shared
-                    .statics
-                    .mark_failed(type_desc.clone(), &cctor_generics);
-            }
-        }
-
-        if let Some(mut claim) = frame.initializer_claim.take() {
-            claim.fail();
-        }
 
         if frame.is_finalizer {
             self.local.heap.processing_finalizer.set(false);

@@ -284,6 +284,8 @@ fn main() {
             || file_name == "circular_init_mt_42"
             || file_name == "cctor_wait_success_42"
             || file_name == "cctor_wait_failure_42"
+            || file_name == "cctor_wait_triggers_success_42"
+            || file_name == "cctor_wait_triggers_failure_42"
             // Plan 16 slice 6: a second thread forces collections during bulk operations.
             || file_name == "memmove_overlap_gc_42"
             || file_name == "bulk_fill_gc_42"

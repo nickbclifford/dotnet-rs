@@ -2768,7 +2768,10 @@ fn native_activation_retries_target_after_initializer() {
             })
         })
         .unwrap();
-    assert!(matches!(first, StepResult::NativeSuspended(_)), "{first:?}");
+    assert!(
+        matches!(first, StepResult::Yield | StepResult::NativeSuspended(_)),
+        "{first:?}"
+    );
     executor
         .with_arena(|arena| {
             arena.mutate(|_, engine| {
@@ -2789,7 +2792,7 @@ fn native_activation_retries_target_after_initializer() {
                         .frame_stack
                         .current_frame()
                         .native_return
-                        .is_none()
+                        .is_some()
                 );
             })
         })
@@ -3924,70 +3927,6 @@ fn native_initializer_abandoned_claim_fails_on_cleanup() {
             .statics
             .get_init_state(subject, &GenericLookup::default()),
         crate::statics::InitState::Failed
-    );
-    CALL_TARGET.with(|slot| *slot.borrow_mut() = None);
-}
-
-#[test]
-fn native_initializer_observes_legacy_failure_with_original_inner() {
-    use dotnet_vm_ops::{MemoryOps, StaticsOps};
-    let (mut executor, exception_type) = boundary_executor_with_initializer(false, true);
-    let subject = initializer_test_subject(&executor, "LegacyFailureSubject");
-    executor
-        .with_arena(|arena| {
-            arena.mutate_root(|gc, engine| {
-                // SAFETY: F1.GcHandleRooted — the engine remains the live arena root during this mutation.
-                let gc = unsafe { test_gc_handle(gc, engine) };
-                let mut ctx = engine.ves_context(gc);
-                assert_eq!(
-                    ctx.initialize_static_storage(subject.clone(), GenericLookup::default()),
-                    StepResult::FramePushed
-                );
-                let inner = ctx.new_object(exception_type.clone()).unwrap();
-                let inner = ctx.alloc_obj_ref(gc, inner);
-                ctx.local
-                    .heap
-                    .gchandles
-                    .borrow_mut()
-                    .push(Some((inner, GCHandleType::Weak)));
-                *ctx.exception_mode = ExceptionState::Throwing(inner, false);
-                ctx.unwind_frame();
-                *ctx.exception_mode = ExceptionState::None;
-            })
-        })
-        .unwrap();
-    executor.perform_full_gc().unwrap();
-    executor
-        .with_arena(|arena| {
-            arena.mutate_root(|gc, engine| {
-                // SAFETY: F1.GcHandleRooted — the engine remains the live arena root during this mutation.
-                let gc = unsafe { test_gc_handle(gc, engine) };
-                let wrapper = engine
-                    .stack
-                    .shared
-                    .statics
-                    .failed_exception(subject.clone(), &GenericLookup::default(), gc)
-                    .unwrap();
-                let original = engine.stack.local.heap.gchandles.borrow()[0]
-                    .as_ref()
-                    .unwrap()
-                    .0;
-                let inner = wrapper.as_object(|object| {
-                    object
-                        .instance_storage
-                        .field::<ObjectRef>(exception_type, "_innerException")
-                        .unwrap()
-                        .read()
-                });
-                assert_eq!(inner, original);
-                assert!(original.0.is_some());
-            })
-        })
-        .unwrap();
-    let result = start_initializer_test(&mut executor);
-    assert!(
-        matches!(result, StepResult::MethodThrew(ref exception) if exception.type_name == "System.TypeInitializationException"),
-        "{result:?}"
     );
     CALL_TARGET.with(|slot| *slot.borrow_mut() = None);
 }
@@ -6727,7 +6666,7 @@ fn worker_teardown_cleans_native_before_retiring_caller() {
 
 #[cfg(feature = "multithreading")]
 #[test]
-fn legacy_initializer_host_error_releases_waiter() {
+fn trigger_initializer_host_error_releases_waiter() {
     use dotnet_vm_ops::StaticsOps;
     use std::{
         sync::mpsc,
@@ -6792,7 +6731,7 @@ fn legacy_initializer_host_error_releases_waiter() {
                                     .info_handle
                                     .is_cctor
                             );
-                            assert!(engine.stack.execution.call_state.native.is_empty());
+                            assert!(!engine.stack.execution.call_state.native.is_empty());
                         })
                     })
                     .unwrap();
@@ -6839,43 +6778,6 @@ fn legacy_initializer_host_error_releases_waiter() {
         matches!(resume(&mut executor), StepResult::MethodThrew(ref exception) if exception.type_name == "System.TypeInitializationException")
     );
     CALL_TARGET.with(|slot| *slot.borrow_mut() = None);
-}
-
-#[test]
-fn legacy_initializer_frame_retirement_fails_claim() {
-    use dotnet_vm_ops::StaticsOps;
-    for pool in [false, true] {
-        let (mut executor, _) = boundary_executor_with_initializer(false, true);
-        let subject = initializer_test_subject(&executor, "RetiredLegacySubject");
-        executor
-            .with_arena(|arena| {
-                arena.mutate_root(|gc, engine| {
-                    // SAFETY: F1.GcHandleRooted — the engine is rooted throughout this mutation.
-                    let gc = unsafe { test_gc_handle(gc, engine) };
-                    let result = engine
-                        .ves_context(gc)
-                        .initialize_static_storage(subject.clone(), GenericLookup::default());
-                    assert!(!matches!(
-                        result,
-                        StepResult::Error(_) | StepResult::Exception
-                    ));
-                    let mut frame = engine.stack.execution.frame_stack.pop().unwrap();
-                    assert!(frame.initializer_claim.is_some());
-                    if pool {
-                        frame.prepare_for_pool();
-                    }
-                    drop(frame);
-                })
-            })
-            .unwrap();
-        assert_eq!(
-            executor
-                .shared
-                .statics
-                .get_init_state(subject, &GenericLookup::default()),
-            crate::statics::InitState::Failed
-        );
-    }
 }
 
 #[test]

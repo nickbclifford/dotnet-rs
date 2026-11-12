@@ -10,7 +10,7 @@ use dotnet_intrinsics_threading::MonitorHost;
 use dotnet_runtime_memory::ops::BaseMemoryOps;
 use dotnet_runtime_resolver::resolution::TypeResolutionExt;
 use dotnet_types::{
-    WellKnown, error::VmError, generics::GenericLookup, members::MethodDescription,
+    TypeDescription, WellKnown, error::VmError, generics::GenericLookup, members::MethodDescription,
 };
 use dotnet_value::{
     CLRString, StackValue,
@@ -30,6 +30,22 @@ use std::task::Poll;
 enum NativeEntry {
     Intrinsic(fn(VmEffects) -> NativeFuture),
     Instruction(StaticFieldAction),
+    /// Initialize a type, then resume the interrupted dispatch or instruction.
+    Initializer(TypeDescription, GenericLookup, InitializerResume),
+}
+
+/// How the interrupted caller continues once its type initializer has completed.
+#[derive(Clone)]
+pub(crate) enum InitializerResume {
+    /// Re-execute the current instruction (or multicast step) with its operands intact.
+    Retry,
+    /// Dispatch the method again: initialization was triggered below the instruction, after
+    /// delegate, reflection or expression dispatch had already rewritten the operand stack.
+    Dispatch(
+        MethodDescription,
+        GenericLookup,
+        super::call_ops_impl::ResolvedMethodDispatchMode,
+    ),
 }
 
 fn reflection_prepare_error<'gc>(
@@ -1164,6 +1180,55 @@ impl<'gc> VesContext<'_, 'gc> {
         )
     }
 
+    /// Ensure `description` is initialized before the caller proceeds.
+    ///
+    /// Returns `Continue` when initialization has completed (or is recursive on this thread).
+    /// Otherwise starts an `ensure_initialized` activation: the initializer runs under a
+    /// capturing boundary, so outer filters see the `TypeInitializationException`, never the
+    /// original exception, matching the CLR. On success the caller resumes as `resume` says.
+    pub(crate) fn initialize_type_then(
+        &mut self,
+        description: TypeDescription,
+        generics: &GenericLookup,
+        resume: InitializerResume,
+    ) -> StepResult {
+        // Static storage is keyed per type instantiation: trim call-site generics to the
+        // declaring type's arity so keys stay stable.
+        let arity = description.definition().generic_parameters.len();
+        let generics =
+            GenericLookup::new(generics.type_generics.iter().take(arity).cloned().collect());
+        let state = self
+            .shared
+            .statics
+            .get_init_state(description.clone(), &generics);
+        if state == crate::statics::InitState::Initialized
+            || state == crate::statics::InitState::Initializing(self.thread_id.get().as_u64())
+        {
+            return StepResult::Continue;
+        }
+        let depth = self.frame_stack.len();
+        let resume = if self.frame_stack.current_frame().multicast_state.is_some() {
+            // A multicast step rebuilds its operands from retained arguments on retry.
+            InitializerResume::Retry
+        } else {
+            resume
+        };
+        if let InitializerResume::Dispatch(method, lookup, _) = &resume
+            && self.has_staged_native_call(depth)
+        {
+            self.retain_nested_native_target(depth, method, lookup);
+        }
+        let method = self.state().info_handle.source.clone();
+        self.start_native_inner(
+            method,
+            &generics.clone(),
+            None,
+            None,
+            NativeEntry::Initializer(description, generics, resume),
+            NativeDispatchMode::InlineCall,
+        )
+    }
+
     fn start_native_inner(
         &mut self,
         method: MethodDescription,
@@ -1178,6 +1243,7 @@ impl<'gc> VesContext<'_, 'gc> {
             NativeEntry::Instruction(action) => {
                 usize::from(matches!(action.kind, StaticFieldKind::Store { .. }))
             }
+            NativeEntry::Initializer(..) => 0,
             NativeEntry::Intrinsic(_) => {
                 signature.parameters.len()
                     + usize::from(
@@ -1249,7 +1315,10 @@ impl<'gc> VesContext<'_, 'gc> {
             )
         {
             NativeOutput::Object
-        } else if matches!(entry, NativeEntry::Instruction(_)) {
+        } else if matches!(
+            entry,
+            NativeEntry::Instruction(_) | NativeEntry::Initializer(..)
+        ) {
             NativeOutput::Void
         } else {
             let shape = multicast_output(self, &method, generics);
@@ -1340,7 +1409,14 @@ impl<'gc> VesContext<'_, 'gc> {
                 }
             }
         }
-        let (future, instruction) = match entry {
+        let (future, instruction, resume) = match entry {
+            NativeEntry::Initializer(description, generics, resume) => {
+                let future: NativeFuture = Box::pin(async move {
+                    let mut fx = fx;
+                    fx.ensure_initialized(description, generics).await
+                });
+                (future, None, Some(resume))
+            }
             NativeEntry::Instruction(action) => {
                 let description = action.field.parent.clone();
                 let generics = action.generics.clone();
@@ -1349,9 +1425,13 @@ impl<'gc> VesContext<'_, 'gc> {
                     fx.ensure_initialized(description, generics).await
                 });
                 let operand = operands.pop();
-                (future, Some(InstructionCompletion { action, operand }))
+                (
+                    future,
+                    Some(InstructionCompletion { action, operand }),
+                    None,
+                )
             }
-            NativeEntry::Intrinsic(entry) => (entry(fx), None),
+            NativeEntry::Intrinsic(entry) => (entry(fx), None, None),
         };
         self.call_state.last_native_id = next_id;
         self.call_state.native.push(NativeActivation {
@@ -1371,6 +1451,7 @@ impl<'gc> VesContext<'_, 'gc> {
             operands,
             outputs: Vec::new(),
             instruction,
+            resume,
             caller_depth: self.frame_stack.len(),
             caller_ip: self.state().ip,
             stack_height: self.top_of_stack(),
@@ -1452,18 +1533,12 @@ impl<'gc> VesContext<'_, 'gc> {
         }
     }
 
-    pub(crate) fn retain_native_target_after_initializer(
-        &mut self,
-        caller_depth: usize,
-        method: &MethodDescription,
-        generics: &GenericLookup,
-    ) {
-        if let Some(work) = self.call_state.native.last_mut()
-            && work.caller_depth == caller_depth
-            && let Some(pending) = work.pending.as_mut().filter(|pending| pending.staged)
-        {
-            pending.redirected = Some((method.clone(), generics.clone()));
-        }
+    /// Whether a type-initializer activation is live for the frame at `depth`.
+    pub(crate) fn has_initializer_gate(&self, depth: usize) -> bool {
+        self.call_state
+            .native
+            .last()
+            .is_some_and(|work| work.caller_depth == depth && work.resume.is_some())
     }
 
     pub(crate) fn try_start_multicast(
@@ -2019,6 +2094,31 @@ impl<'gc> VesContext<'_, 'gc> {
                     work.cleanup();
                     return StepResult::internal_error("native result does not match signature");
                 }
+                if let Some(resume) = work.resume.take() {
+                    let caller_ip = work.caller_ip;
+                    let height = work.stack_height;
+                    let nested = work.parent_destination.is_some();
+                    work.cleanup();
+                    return match resume {
+                        // A nested activation leaves its parent's staged call to re-dispatch.
+                        InitializerResume::Retry => StepResult::Yield,
+                        InitializerResume::Dispatch(..) if nested => StepResult::Yield,
+                        InitializerResume::Dispatch(method, lookup, mode) => {
+                            let saved_ip = *self.original_ip;
+                            let saved_height = *self.original_stack_height;
+                            *self.original_ip = caller_ip;
+                            *self.original_stack_height = height;
+                            let result = self.dispatch_method_with_mode(method, lookup, mode);
+                            *self.original_ip = saved_ip;
+                            *self.original_stack_height = saved_height;
+                            if result == StepResult::Continue {
+                                StepResult::Jump(caller_ip + 1)
+                            } else {
+                                result
+                            }
+                        }
+                    };
+                }
                 if let Some(instruction) = work.instruction.take() {
                     if let Some(value) = instruction.operand {
                         self.push(value);
@@ -2111,32 +2211,6 @@ impl<'gc> VesContext<'_, 'gc> {
         }
     }
     fn dispatch_pending_native_call(&mut self, mut work: NativeActivation<'gc>) -> StepResult {
-        let preflight = work
-            .pending
-            .as_ref()
-            .filter(|pending| !pending.staged && pending.call.method.method().name != ".cctor")
-            .map(|pending| (pending.call.method.clone(), pending.call.generics.clone()));
-        if let Some((method, generics)) = preflight {
-            let id = work.id;
-            let depth = self.frame_stack.len();
-            self.call_state.native.push(work);
-            let saved_ip = *self.original_ip;
-            let saved_height = *self.original_stack_height;
-            *self.original_ip = self.state().ip;
-            *self.original_stack_height = self.top_of_stack();
-            let result = self.prepare_method_initialization(&method, &generics);
-            *self.original_ip = saved_ip;
-            *self.original_stack_height = saved_height;
-            match result {
-                StepResult::Continue => {
-                    work = self.call_state.native.pop().expect("pending native call");
-                }
-                StepResult::FramePushed if self.frame_stack.len() == depth + 1 => {
-                    return StepResult::NativeSuspended(id);
-                }
-                other => return other,
-            }
-        }
         let pending = work.pending.as_mut().expect("pending native call");
         let signature = pending.call.method.signature();
         let expected = signature.parameters.len() + usize::from(signature.instance);

@@ -1,7 +1,4 @@
-use crate::{
-    context::ResolutionContext, gc::coordinator::GCCoordinator, layout::static_fields,
-    threading::ThreadManagerOps,
-};
+use crate::{context::ResolutionContext, layout::static_fields};
 use dotnet_assemblies::AssemblyLoader;
 use dotnet_types::{
     TypeDescription,
@@ -1006,70 +1003,6 @@ impl StaticStorageManager {
             // Notify any threads waiting for initialization
             storage.init_cond.notify_all();
         }
-    }
-
-    /// Wait for a type's initialization to complete if another thread is currently initializing it.
-    ///
-    /// Returns `true` when the caller should yield to a GC safe point and retry later,
-    /// or `false` when initialization is no longer in progress.
-    ///
-    /// The registration's edge is removed before every return, including a GC-yield request.
-    ///
-    /// This method is only valid after [`StaticInitResult::Waiting`] is returned. A
-    /// single-threaded build cannot produce that result, so it has no valid caller
-    /// there; reaching the wait arm in that configuration panics.
-    pub fn wait_for_init(
-        &self,
-        description: TypeDescription,
-        generics: &GenericLookup,
-        thread_manager: &impl ThreadManagerOps,
-        registration: StaticWaitRegistration,
-        _gc_coordinator: &GCCoordinator,
-    ) -> bool {
-        let storage = self.get(description, generics);
-        let mut should_yield = false;
-
-        #[allow(
-            clippy::never_loop,
-            reason = "single-threaded builds can reach this loop only through an invariant violation"
-        )]
-        loop {
-            // Check state before acquiring lock
-            let state = storage.init_state();
-            if !state.is_initializing() {
-                break;
-            }
-
-            // Check for GC safe point before waiting
-            if thread_manager.is_gc_stop_requested() {
-                should_yield = true;
-                break;
-            }
-
-            // Try to wait with a timeout
-            #[cfg(feature = "multithreading")]
-            {
-                let mut lock = storage.init_mutex.lock();
-                if !storage.init_state().is_initializing() {
-                    break;
-                }
-
-                // Wait for a short duration to allow periodic safe point checks
-                use std::time::Duration;
-                let _ = storage
-                    .init_cond
-                    .wait_for(lock.raw_mut(), Duration::from_millis(10));
-            }
-            #[cfg(not(feature = "multithreading"))]
-            {
-                unreachable!(
-                    "wait_for_init is unreachable in single-threaded builds: StaticInitResult::Waiting cannot be produced when only one thread exists"
-                );
-            }
-        }
-
-        drop(registration);
-        should_yield
     }
 }
 

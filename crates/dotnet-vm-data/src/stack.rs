@@ -32,6 +32,7 @@ pub struct MulticastState<'gc> {
     pub targets: ObjectHandle<'gc>,
     pub next_index: usize,
     pub args: Vec<StackValue<'gc>>,
+    /// Set when a type initializer is running for the current target; the step then retries.
     pub retrying_initializer: bool,
 }
 
@@ -55,7 +56,7 @@ pub struct NativeReturnDestination {
     pub generation: u64,
 }
 
-/// A synchronization-only obligation owned by a legacy initializer frame.
+/// A synchronization-only obligation owned by an initializer activation.
 ///
 /// # Safety
 /// Implementations must contain no GC references: frames do not trace this interface.
@@ -77,8 +78,6 @@ pub struct StackFrame<'gc> {
     pub is_finalizer: bool,
     pub multicast_state: Option<MulticastState<'gc>>,
     pub native_return: Option<NativeReturnDestination>,
-    // INVARIANT: F6.InitializerClaimLifetime — frame disposal and pooling drop the synchronization-only obligation.
-    pub initializer_claim: Option<Box<dyn InitializerClaim>>,
     /// Homes of the locals and arguments this frame's method addresses with `ldloca` and
     /// `ldarga`.
     pub homes: FrameHomes,
@@ -107,7 +106,6 @@ impl<'gc> StackFrame<'gc> {
             is_finalizer: false,
             multicast_state: None,
             native_return: None,
-            initializer_claim: None,
             homes: FrameHomes::default(),
             constructor_result: None,
             sync_lock: None,
@@ -131,7 +129,6 @@ impl<'gc> StackFrame<'gc> {
         self.is_finalizer = false;
         self.multicast_state = None;
         self.native_return = None;
-        self.initializer_claim = None;
         self.constructor_result = None;
         self.sync_lock = None;
         self.homes.release();
@@ -147,7 +144,6 @@ impl<'gc> StackFrame<'gc> {
         self.is_finalizer = false;
         self.multicast_state = None;
         self.native_return = None;
-        self.initializer_claim = None;
         self.constructor_result = None;
         self.sync_lock = None;
     }
@@ -156,8 +152,7 @@ impl<'gc> StackFrame<'gc> {
 // SAFETY: F5.TracesEveryGcRef — `StackFrame` traces all GC-managed fields it can contain:
 // `exception_stack` entries, optional `multicast_state`, the synchronized-method `sync_lock`, and the references serialized in its
 // local `homes`. The native return destination
-// contains only an ID and generation. Initializer claims contain synchronization state only;
-// Retry state for byref monitor fallbacks and Thread.Join contains only static metadata and time.
+// contains only an ID and generation. // Retry state for byref monitor fallbacks and Thread.Join contains only static metadata and time.
 // Constructor completion also carries only static metadata; its
 // receiver bytes are traced through the caller's homes.
 unsafe impl<'gc> Collect<'gc> for StackFrame<'gc> {

@@ -186,6 +186,30 @@ diff_test!(
     "tests/fixtures/statics/cctor_filter_42.cs"
 );
 diff_test!(
+    statics_cctor_filter_newobj_matches_dotnet,
+    "tests/fixtures/statics/cctor_filter_newobj_42.cs"
+);
+diff_test!(
+    statics_cctor_filter_call_matches_dotnet,
+    "tests/fixtures/statics/cctor_filter_call_42.cs"
+);
+diff_test!(
+    statics_cctor_filter_delegate_matches_dotnet,
+    "tests/fixtures/statics/cctor_filter_delegate_42.cs"
+);
+diff_test!(
+    statics_cctor_filter_delegate_multicast_matches_dotnet,
+    "tests/fixtures/statics/cctor_filter_delegate_multicast_42.cs"
+);
+diff_test!(
+    statics_cctor_filter_reflection_matches_dotnet,
+    "tests/fixtures/statics/cctor_filter_reflection_42.cs"
+);
+diff_test!(
+    statics_cctor_filter_run_class_constructor_matches_dotnet,
+    "tests/fixtures/statics/cctor_filter_run_class_constructor_42.cs"
+);
+diff_test!(
     statics_cctor_run_class_constructor_matches_dotnet,
     "tests/fixtures/statics/cctor_run_class_constructor_42.cs"
 );
@@ -206,6 +230,24 @@ diff_test!(
 diff_test!(
     statics_cctor_wait_failure_matches_dotnet,
     "tests/fixtures/statics/cctor_wait_failure_42.cs"
+);
+#[cfg(feature = "multithreading")]
+diff_test!(
+    statics_cctor_wait_triggers_success_matches_dotnet,
+    "tests/fixtures/statics/cctor_wait_triggers_success_42.cs"
+);
+#[cfg(feature = "multithreading")]
+diff_test!(
+    statics_cctor_wait_triggers_failure_matches_dotnet,
+    "tests/fixtures/statics/cctor_wait_triggers_failure_42.cs"
+);
+diff_test!(
+    statics_cctor_recursive_triggers_matches_dotnet,
+    "tests/fixtures/statics/cctor_recursive_triggers_42.cs"
+);
+diff_test!(
+    statics_cctor_success_triggers_matches_dotnet,
+    "tests/fixtures/statics/cctor_success_triggers_42.cs"
 );
 #[cfg(all(feature = "multithreading", not(feature = "fuzzing")))]
 diff_test!(

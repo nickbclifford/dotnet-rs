@@ -42,7 +42,8 @@ pub use stack::{
 pub enum VmContinuation<'gc> {
     /// No pending cross-safe-point state; normal execution.
     None,
-    /// A legacy static-initialization trigger yielded for a GC-safe-point retry.
+    /// A synchronous handler yielded for a GC-safe-point retry (no handler sets this now;
+    /// plan 16 slice 8 removes it).
     /// `back_up_ip` was called before yielding; IP is already restored. This marker is cleared
     /// when the executor re-enters the VM because the retry is encoded in the restored frame state.
     RetryInstruction,

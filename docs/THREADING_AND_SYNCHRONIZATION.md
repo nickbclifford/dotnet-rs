@@ -213,8 +213,8 @@ pending request:
   mutation and rechecks readiness after waking; in MT these waits participate in GC-stop handling,
   and pending finalizers are scheduled before an ordinary finalizer wait sleeps. Excluded monitor
   byref calls with Transient or Unmanaged origins retain the safe-point-aware synchronous
-  handlers (`enter_safe` and `enter_with_timeout_safe`). Legacy static-initializer waiters use
-  `StaticStorageManager::wait_for_init` and periodically check for a pending stop. See the
+  handlers (`enter_safe` and `enter_with_timeout_safe`). Every static-initializer trigger (field
+  access, `newobj`, eligible calls, `RunClassConstructor`) waits through `ensure_initialized`. See the
   [condition-wait design](plans/08-async-effects/slice-5-condition-waits.md) and
   [static-initialization design](plans/08-async-effects/slice-4-static-initialization.md).
 
@@ -256,7 +256,7 @@ When a `GcScopeGuard` is active (the `active_borrows` scope counter > 0), `VesCo
 
 The path to thread suspension:
 1. `VesContext::check_gc_safe_point()` first checks the `active_borrows` scope counter; if it is > 0 it returns `false` to prevent deadlocks (the thread cannot safely park while holding GC borrows). Otherwise it evaluates `ThreadManager::is_gc_stop_requested()`.
-2. If `true`, the operation yields after bounded work. Legacy initializer triggers use `yield_and_retry`; native activations retain their progress and resume without replaying the instruction.
+2. If `true`, the operation yields after bounded work. Native activations retain their progress and resume without replaying the instruction.
 3. The executor loop in `crates/dotnet-vm/src/executor.rs` sees the request after `mutate_root` returns and calls `ThreadManagerOps::safe_point(thread_id, coordinator)`.
 4. In `basic.rs`, `safe_point()` first short-circuits (returns immediately) if `is_gc_stop_requested()` is false or the thread-local `IS_PERFORMING_GC` flag is set; otherwise it sets the thread state to `AtSafePoint`, notifies the STW coordinator, and blocks on a condition variable.
 5. While blocked, it may be woken up to process a `GCCommand` (via `execute_gc_command_for_current_thread`) before going back to sleep.

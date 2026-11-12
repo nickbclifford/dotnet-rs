@@ -24,7 +24,6 @@ state on the caller's frame:
 | Reflection retry test seam | `reflection_retry_completed_collection_does_not_retry` drives a `GC.Collect` target through the legacy continuation |
 | `StackFrame::monitor_retry` + `monitor_retry_deadline`/`monitor_clear_retry` | timed byref `Monitor` fallbacks (Transient/Unmanaged `bool&`) and `Thread.Join(int)` (Join removed in slice 5) |
 | `NativeDispatchMode::Other` + `fallback =` registration | the residual callers in plan 13 |
-| `prepare_method_initialization`, `newobj` and `RunClassConstructor` initialization | legacy static-init triggers (README "Legacy static-initialization triggers") |
 
 ### Declined shapes (why the continuations are still live)
 
@@ -39,15 +38,6 @@ origins. The remaining declined shapes are:
 
 Deleting either continuation still requires a decision for the remaining declined shapes.
 
-### Native calls still use legacy initialization
-
-`dispatch_pending_native_call` (`native_effects.rs`) runs `prepare_method_initialization` as a
-preflight for every unstaged native call, saving and restoring `original_ip` /
-`original_stack_height` around it so the legacy retry machinery does not replay the caller. Every
-effect body that calls managed code (multicast, reflection, and anything new in this plan)
-therefore depends on the legacy static-init trigger. Static-init removal must convert this
-preflight to `ensure_initialized`, not just the three IL triggers.
-
 ### Bulk loops restart from zero
 
 The chunked loops keep no progress: `StepResult::Yield` re-executes the call instruction, which
@@ -60,9 +50,8 @@ been reproduced. A suspending body that keeps its offset in the future fixes bot
 construction.
 
 Note: `VesContext::unwind_frame` is **not** legacy plumbing. It is the exception unwinder's frame
-pop (`dotnet-exceptions/src/lib.rs`). Only its late `TypeInitializationException` wrapping
-(`is_cctor && !capturing_initializer`) and `initializer_claim` failure belong to the legacy
-static-init triggers.
+pop (`dotnet-exceptions/src/lib.rs`). Its late `TypeInitializationException` wrapping and
+`initializer_claim` failure were removed with slice 7.
 
 ## Fallback audit (what can and cannot go)
 
@@ -75,13 +64,13 @@ Checked against the code on `main`. "Reachable" means a valid guest program can 
 | `GC.Collect` x3 | **Removed (slice 5)** | Native bodies request a full collection and resume after the executor services it. |
 | Bulk string/mem/span/buffer loops | **Remove, measured** | Plan 04 measured a large-call cost for native activations. Each family needs a before/after on its benchmark (`substring`, `end_to_end`, `runtime_primitives`); small-input paths keep an inline fast path as Substring does. A fast path registered as a sync `fallback` is also what any remaining `Other` dispatch receives, so it must either handle every input size or `Other` must have no producer for that intrinsic. Overlapping memmove (above) is a correctness reason, not only a cleanup. |
 | `cpblk`/`initblk` instruction yields | **Fix, then decide** | These are instructions, not intrinsics, but share `chunked_copy_with_safe_point` and its restart-from-zero overlap hazard. At minimum keep progress across the yield; whether they become effects is decided with the `mem_helpers` family. |
-| Multicast `Invoke` (`MulticastState`) | **Keep for excluded shapes** | Ref-structs, byref returns, `TypedReference` and unsupported byref origins remain excluded; see "Kept". The `retrying_initializer` flag goes with the static-init slice. |
+| Multicast `Invoke` (`MulticastState`) | **Keep for excluded shapes** | Ref-structs, byref returns, `TypedReference` and unsupported byref origins remain excluded; see "Kept". `MulticastState::retrying_initializer` stays, now meaning "retry this step after the type-initializer activation completes" (slice 7); it goes with `MulticastState`. |
 | Reflection `InvokeReturn` / `reflection_pending` | **Removed (slice 3)** | Every remaining declined shape was byref-like, which the CLR refuses with `NotSupportedException` before the target runs; the body now raises that, and Activator's binding and default-value cases. Byref write-back after a throw and ambiguous-match "first best match" remain README deviations. |
 | Monitor byref `Transient` / `Unmanaged` fallback | **Removed (slice 5b)** | Slice 5 kept both, but its own probe shows the only `Transient bool&` candidate (`ldflda` on a struct value on the evaluation stack) is invalid IL: ECMA-335 §III.4.11 allows only an object, managed pointer or unmanaged pointer as `ldflda`'s operand (unlike `ldfld`, not a value-type instance), and the CLR rejects it with `InvalidProgramException`. That leaves `Unmanaged`, which is cheap to admit as a byref origin (no new hazard; see slice 5b). |
 | `newobj` of an intrinsic constructor (formerly `execute_intrinsic_call`) | **Removed (slice 4)** | Completion (`complete_constructor_receiver`) can be the activation's completion action, as `Jump` is for inline calls. Intrinsic constructors **do** suspend: `String::.ctor(char[])`, `.ctor(char, int)`, `.ctor(ReadOnlySpan<char>)` and `.ctor(char*)` yield at safepoints (`constructors.rs`). `newobj` now dispatches intrinsic constructors in `NativeDispatchMode::Constructor`, so an async constructor body can suspend and the value-type receiver is completed only on success. The synchronous string constructors still return their safepoint `Yield` and re-allocate on retry until slice 6 converts them; that slice should add a managed-exception case showing the receiver is not published. |
 | `.cctor` dispatch, span equality slow path, `Expression.Compile` redirect | **Keep** | They dispatch managed bodies, never intrinsics; `Other` is correct for them. |
 | `ExecutionEngine::unified_dispatch`/`dispatch_method` public APIs (`ResolvedMethodDispatchMode::ExecutionEngineApi`) | **Removed (slice 4)** | Plan 13 kept them as a host entry contract, but no production code calls them: the only callers are `condition_wait_tests.rs` and `native_substring_tests.rs`. `ExecutionEngineApi` sends intrinsics straight to `intrinsic_call`, i.e. the sync handler, so every async-only intrinsic is unreachable through them. Delete both APIs, `dispatch_resolved_method_for_engine_api`, `unified_dispatch_for_engine_api` and the `ExecutionEngineApi` mode; port those tests to drive guest IL or the inline path. |
-| Legacy static-init (`newobj`, `prepare_method_initialization`, `RunClassConstructor`) | **Remove last** | Highest risk: three triggers with different operand contracts, `retrying_initializer`, `initializer_claim` on frames, legacy condvar `wait_for_init`, and the late wrapping that differs from the field path. Do it only after dispatch is inline everywhere, so one `ensure_initialized` effect can serve all callers. |
+| Legacy static-init (`newobj`, `prepare_method_initialization`, `RunClassConstructor`) | **Removed (slice 7)** | All triggers run `ensure_initialized` through `VesContext::initialize_type_then`; frame `initializer_claim`, legacy `wait_for_init`, the late wrapping in `unwind_frame`, `yield_and_retry` and the preflight in `dispatch_pending_native_call` are gone. |
 | Substring valid-small fast path | **Keep** | Measured in plan 13. |
 | `monitor_retry` frame field | **Removed (slice 5b)** | Timed Monitor byrefs now use native effects. |
 
@@ -406,17 +395,48 @@ exclusions. Slice 3 then removed the reflection continuation; the remaining orde
    wrapping in `unwind_frame`, and update the plan 08 static-initialization slice document.
    - Tests: `statics/cctor_filter_42.cs` and its `newobj`/call/`RunClassConstructor`/delegate/
      reflection variants against the CLR; recursive and cross-thread initialization.
-   - Partial: `RunClassConstructor` uses `ensure_initialized`; the filter and recursive
-     non-generic comparison passes, as do the cross-thread success and failure fixtures.
-     The closed-generic identity mismatch (handle-derived arguments carry the corlib
-     resolution, field operands the referencing assembly's, and `ConcreteType` equality
-     includes it) is resolved: `StaticStorageManager` now builds every shard and thread-static
-     key from canonicalized type arguments (`canonical_concrete` in `statics.rs`: primitives
-     and array/vector/pointer shapes carry no resolution, user types are spelled by their
-     resolved `TypeDef`), with `init` recording loader-resolved aliases for the loader-free
-     lookups. `statics/cctor_generic_handle_42.cs` compares handle-first and field-first
-     initialization against the CLR. Still open: the `newobj` and
-     `prepare_method_initialization` triggers remain on `unwind_frame`.
+   - Complete. `VesContext::initialize_type_then` (`native_effects.rs`) is the one trigger:
+     it returns `Continue` when the type is `Initialized` or `Initializing` on this thread, and
+     otherwise starts an activation (`NativeEntry::Initializer`) whose future is
+     `ensure_initialized`. The cctor runs under a capturing boundary, so outer filters see only
+     the `TypeInitializationException`, never the original exception, as on the CLR. Both
+     `newobj` (through `StaticsOps::initialize_static_storage`) and
+     `prepare_method_initialization` (every `dispatch_method*`) use it.
+   - Resumption. `newobj` and a multicast fallback step use `InitializerResume::Retry`
+     (`Yield`, instruction re-executed with its operands intact; `MulticastState::
+     retrying_initializer` rebuilds the step). Dispatch triggers use
+     `InitializerResume::Dispatch(method, lookup, mode)`: on completion the same dispatch is
+     re-run from the operand stack as it stood, and `Continue` becomes `Jump(caller_ip + 1)`.
+     Dispatch resumption, not instruction replay, is what delegates need: delegate dispatch has
+     already replaced the receiver with the target's arguments, and the previous replay re-ran
+     `callvirt Invoke` over that stack (a delegate to a static method of a non-`beforefieldinit`
+     type failed with a type mismatch before this slice; `cctor_success_triggers_42` covers it).
+     Under a staged native call the activation is nested; completion leaves the parent's
+     staged call to re-dispatch, and the preflight in `dispatch_pending_native_call` is deleted
+     (the staged dispatch reaches the same trigger).
+   - Removed: frame `initializer_claim`, legacy `StaticStorageManager::wait_for_init`,
+     `unwind_frame`'s late wrapping and `cctor_type_desc_and_lookup`, `yield_and_retry`,
+     `retain_native_target_after_initializer`, and the `original_ip`/`original_stack_height`
+     save-restore around initialization. `StackFrame` shrank by 16 bytes (560 to 544).
+   - Kept: `MulticastState::retrying_initializer` (see "Kept"); `VmContinuation::RetryInstruction`
+     is now never set (slice 8 deletes it); the `original_ip` save-restore around synchronous
+     fallbacks in `handle_multicast_step` and `dispatch_pending_native_call`.
+   - Tests, all against the CLR: `statics/cctor_filter_{newobj,call,delegate,delegate_multicast,
+     reflection,run_class_constructor}_42.cs` (filter must see `TypeInitializationException`
+     only; stdout compared), `cctor_success_triggers_42.cs` (each trigger on success, including
+     delegates to static and instance methods and a multicast), `cctor_recursive_triggers_42.cs`
+     (same-thread recursion through `newobj`, call and delegate), and `cctor_wait_triggers_
+     {success,failure}_42.cs` (MT: waiters via `newobj`, call, delegate; failure checks the
+     same inner exception object). Unit tests that built a legacy initializer frame were
+     replaced or retargeted (`trigger_initializer_host_error_releases_waiter`).
+   - Not changed by this slice and worth knowing: the reflection filter variant cannot observe
+     timing (the exception is rethrown after `TargetInvocationException` unwrapping), so it
+     only checks the final type. A synchronous intrinsic that yields from a re-dispatched
+     delegate target would retry the instruction over the rewritten stack, as before.
+   - Untested limitation: static storage keys canonicalize through aliases recorded by `init`,
+     so cross-assembly `TypeRef`-versus-`TypeDef` unification depends on `init` having seen the
+     spelling first. This slice's `get_init_state` pre-check does not change that (an unseen
+     spelling falls through to the activation, whose probe calls `init`).
 8. **Cleanup.** `grep` every item in the Problem table; remove leftovers; update the README
    "Fallback continuations" and "Legacy static-initialization triggers" entries and plan 08's
    residual-callers text.

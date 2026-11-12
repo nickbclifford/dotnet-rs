@@ -470,10 +470,6 @@ and frame retirement clear it.
 
 `VesContext` exposes explicit helpers for continuation state transitions:
 
-- `yield_and_retry()` — for legacy initializer triggers, records `VmContinuation::RetryInstruction` when no traced continuation
-  state is already queued, restores the instruction snapshot via `back_up_ip`, then returns
-  `StepResult::Yield`. If handler-unwind state is already present, that state is preserved because
-  the retry itself is encoded by the restored IP/stack snapshot.
 - `set_frame_return_action(action)` — stores the per-frame `FrameReturnAction` for excluded
   reflection calls' post-return handling.
 - `push_handler_unwind(state)` / `pop_handler_unwind()` — mutate

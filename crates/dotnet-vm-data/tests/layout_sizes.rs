@@ -32,14 +32,14 @@ const STACK_FRAME_SIZE_MATRIX: [(bool, usize); 2] = [
     // Runtime temporary homes add a 24-byte Vec and an 8-byte completion handle.
     // Native return destinations add a stable identity and generation.
     // Removing the heap-backed monitor retry saved 8 bytes.
-    // The initializer claim is an optional boxed synchronization-only interface.
     // A synchronized method's monitor object adds an optional 8-byte reference and the
     // `synchronized` flag pads MethodInfo by another 8 bytes.
     // Removing the reflection continuation (a return-action Vec and a boxed pending target)
     // saved 32 bytes.
+    // Moving type initialization to effects removed the 16-byte frame initializer claim.
     // (multithreading, expected_size)
-    (false, 560),
-    (true, 560),
+    (false, 544),
+    (true, 544),
 ];
 
 #[cfg(target_pointer_width = "64")]

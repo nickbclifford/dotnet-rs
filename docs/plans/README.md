@@ -10,7 +10,7 @@ In priority order. Each plan's own `Status:` line is the only record of its stat
 
 | ID | Plan | Note |
 |---|---|---|
-| 16 | [Retire legacy continuations and move suspending intrinsics to effects](16-retire-legacy-continuations.md) | In progress; slices 1–6 complete; next is slice 7 (static-init triggers) |
+| 16 | [Retire legacy continuations and move suspending intrinsics to effects](16-retire-legacy-continuations.md) | In progress; slices 1–7 complete; next is slice 8 (cleanup) |
 | 15 | [CoreLib `Task` and the thread pool](15-corelib-task-and-thread-pool.md) | CoreLib tasks/resources, capped background pool workers, unnamed events and managed timers are active |
 | 14 | [Canonical reflection objects across threads](14-canonical-reflection-objects.md) | Complete; shared canonical type, member and assembly objects |
 | 13 | [Async intrinsic API: the body is the implementation](13-async-intrinsic-api.md) | Complete; body validation, inline dispatch and optional fallbacks verified; measured Substring fast path retained |
@@ -61,11 +61,6 @@ Evidence and IDs (p01…, R01…) are defined in the
   `ArgumentException("Arg_MustBeType")`; the CLR runs the string constructor, which the VM
   implements only through the intrinsic-constructor `newobj` protocol.
 - **Reflection byref write-back after throws:** byref arguments are written back when the invoked guest method throws, unlike the CLR.
-- **Legacy static-initialization triggers:** `newobj`, eligible calls through
-  `prepare_method_initialization` and `RuntimeHelpers.RunClassConstructor` retain the legacy
-  `unwind_frame` wrapper, after outer filters have already run on the original exception. Their
-  timing and wrapping differ from the field-instruction effect path described in the
-  [static-initialization slice](08-async-effects/slice-4-static-initialization.md).
 - **Fallback continuations for excluded shapes:** `MulticastState` remains for ref-struct
   values and byref targets containing managed pointers, byref returns and `TypedReference`.
   Non-null heap, frame-home, static, unmanaged and MT cross-arena byref arguments with

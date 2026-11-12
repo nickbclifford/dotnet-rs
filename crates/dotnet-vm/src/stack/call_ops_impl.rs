@@ -4,7 +4,7 @@ use crate::{
     stack::{
         context::VesContext,
         ops::{
-            ArgumentOps, CallArgumentBufferOps, EvalStackOps, ExceptionOps, LoaderOps, StaticsOps,
+            ArgumentOps, CallArgumentBufferOps, EvalStackOps, ExceptionOps, LoaderOps,
             TypedStackOps, UnifiedDispatchTarget, VmCallOps, VmLoaderOps, VmResolutionOps,
         },
         receiver_object_generics,
@@ -191,7 +191,7 @@ fn try_redirect_expression_compile_to_interpreter(
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum ResolvedMethodDispatchMode {
+pub(crate) enum ResolvedMethodDispatchMode {
     VmContext,
     InlineCall,
 }
@@ -648,7 +648,7 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
 }
 
 impl<'a, 'gc> VesContext<'a, 'gc> {
-    fn dispatch_method_with_mode(
+    pub(crate) fn dispatch_method_with_mode(
         &mut self,
         method: MethodDescription,
         lookup: GenericLookup,
@@ -656,26 +656,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
     ) -> StepResult {
         let _gc = self.gc;
 
-        let depth = self.frame_stack.len();
-        let initialized = if vm_unlikely!(self.has_staged_native_call(depth)) {
-            self.retain_nested_native_target(depth, &method, &lookup);
-            let saved_ip = *self.original_ip;
-            let saved_height = *self.original_stack_height;
-            *self.original_ip = self.frame_stack.state().ip;
-            *self.original_stack_height = self.top_of_stack();
-            let result = self.prepare_method_initialization(&method, &lookup);
-            *self.original_ip = saved_ip;
-            *self.original_stack_height = saved_height;
-            let initializer = matches!(result, StepResult::FramePushed)
-                && self.frame_stack.len() == depth + 1
-                && self.frame_stack.current_frame().state.info_handle.is_cctor;
-            if initializer || matches!(result, StepResult::Yield) {
-                self.retain_native_target_after_initializer(depth, &method, &lookup);
-            }
-            result
-        } else {
-            self.prepare_method_initialization(&method, &lookup)
-        };
+        let initialized = self.prepare_method_initialization(&method, &lookup, mode);
         if initialized != StepResult::Continue {
             return initialized;
         }
@@ -697,6 +678,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         &mut self,
         method: &MethodDescription,
         lookup: &GenericLookup,
+        mode: ResolvedMethodDispatchMode,
     ) -> StepResult {
         // ECMA-335 §II.10.5.3.3: initialize before static, value-type instance,
         // and constructor calls when the type is not beforefieldinit.
@@ -706,7 +688,17 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
                 method.parent.clone().is_value_type(&self.current_context())
             );
             if is_static || is_value_type || method.method().name == ".ctor" {
-                return self.initialize_static_storage(method.parent.clone(), lookup.clone());
+                // The initializer runs as an `ensure_initialized` effect; the dispatch resumes
+                // from its operands once it completes.
+                return self.initialize_type_then(
+                    method.parent.clone(),
+                    lookup,
+                    super::native_effects::InitializerResume::Dispatch(
+                        method.clone(),
+                        lookup.clone(),
+                        mode,
+                    ),
+                );
             }
         }
         StepResult::Continue

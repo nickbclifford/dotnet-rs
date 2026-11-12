@@ -4,8 +4,9 @@
 **Outcome:** `ldsfld`, `stsfld` and `ldsflda` check published initialization state and use
 `ensure_initialized` for slow states in both configurations, without replaying the field instruction.
 Field-triggered exception wrapping is verified against CLR for the
-`statics/cctor_filter_42.cs` filter shape. Other initialization triggers remain on their existing
-path.
+`statics/cctor_filter_42.cs` filter shape. `newobj`, eligible calls and `RunClassConstructor`
+were migrated onto the same effect by [plan 16](../16-retire-legacy-continuations.md) slice 7;
+the "Current paths" section below records the state this slice shipped.
 
 This slice builds on the completed [retained-arena lifetime prerequisite](../09-retired-arena-lifetime.md):
 the original inner exception remains accessible after its owner exits and through collection.
@@ -22,27 +23,23 @@ intrinsic fields. Both completion paths share the field operations, preserving v
 and generic-instantiation keying.
 `ldsflda` produces a `PointerOrigin::Static`, not a heap or frame-home byref.
 
-The other callers stay **legacy** in this slice:
+The other callers were **legacy** when this slice shipped and moved in plan 16 slice 7:
 
-- `newobj` initializes before allocating the non-intrinsic object and pushing its constructor;
-  intrinsic constructor branches bypass this call. Its constructor operands and existing retry
-  behavior must remain intact.
+- `newobj` calls `initialize_static_storage` before allocating the non-intrinsic object; it now
+  starts an `ensure_initialized` activation (`VesContext::initialize_type_then`) and retries the
+  instruction with its operands intact when the type is initialized.
 - `dispatch_method_with_mode`, through `prepare_method_initialization`, initializes before
   eligible static, value-type instance and constructor calls only when the type is not
-  `beforefieldinit`. This includes pending targets of native calls, multicast and reflection;
-  preserve their initializer retry and return-action handling.
-- `RuntimeHelpers.RunClassConstructor` resolves its peeked `RuntimeTypeHandle`, initializes,
-  and pops the argument only after success. It keeps the synchronous intrinsic path and retry.
+  `beforefieldinit`. It starts the same activation and, on completion, re-dispatches the method
+  from the operand stack. A staged native call (multicast, reflection) nests the activation under
+  its parent; the preflight in `dispatch_pending_native_call` no longer exists.
+- `RuntimeHelpers.RunClassConstructor` was already an effect (`ensure_initialized` from the
+  intrinsic body).
 
-These triggers have different completion and operand contracts from field instructions. Moving
-them is not required for the field consumer and would expand the migration into method dispatch,
-constructor and intrinsic completion. Keep their existing initialization timing and semantics;
-the filter-order improvement is required for the migrated field-triggered path, not claimed for
-these legacy triggers. In particular, preserve the legacy late wrapping in `unwind_frame` and
-its `.cctor` return handling while those callers need them. Remove field-initialization replay,
-not shared `back_up_ip`, `yield_and_retry`, `RetryInstruction` or auto-invoked `.cctor` handling
-that the legacy callers still use. Do not let that legacy handling double-publish or rewrap an
-initializer owned by `ensure_initialized`.
+Consequently the legacy `unwind_frame` wrapping, frame `initializer_claim`, `wait_for_init` and
+`yield_and_retry` are gone, and every trigger shows outer filters only the
+`TypeInitializationException`, matching the CLR (`statics/cctor_filter_*_42.cs`). The text below
+describes the design as first written; where it says "legacy", read it as the state before slice 7.
 
 `StaticStorageManager::init` keys storage by type and generic lookup, returns `Execute`,
 `Initialized`, `Recursive`, `Failed` or an owned `Waiting` registration. `InitState` encodes state

@@ -24,23 +24,6 @@ use dotnetdll::prelude::{MethodMemberIndex, MethodType};
 use std::ptr::NonNull;
 
 impl<'a, 'gc> VesContext<'a, 'gc> {
-    /// Yield to a GC safe point and retry the current instruction on resume.
-    /// Used by legacy static-initialization triggers, not by static field instructions.
-    /// Marks `VmContinuation::RetryInstruction` when no traced continuation state is already
-    /// queued, then restores the IP/stack snapshot. Existing handler-unwind state is preserved;
-    /// the retry itself is encoded by `back_up_ip()`.
-    #[inline]
-    pub fn yield_and_retry(&mut self) -> StepResult {
-        if matches!(
-            &*self.continuation,
-            dotnet_vm_data::VmContinuation::None | dotnet_vm_data::VmContinuation::RetryInstruction
-        ) {
-            *self.continuation = dotnet_vm_data::VmContinuation::RetryInstruction;
-        }
-        self.back_up_ip();
-        StepResult::Yield
-    }
-
     /// Save the executing handler before starting nested exception control flow.
     pub fn push_handler_unwind(&mut self, state: dotnet_vm_data::UnwindState<'gc>) {
         let frame_index = state.cursor.frame_index;
@@ -995,92 +978,12 @@ impl<'a, 'gc> StaticsOps<'gc> for VesContext<'a, 'gc> {
         description: TypeDescription,
         generics: GenericLookup,
     ) -> StepResult {
-        // Static storage is keyed per-type-instantiation, so only parent type generics matter.
-        // Some call sites may carry extra generics from the invoking method context; trim to the
-        // declaring type arity to keep .cctor/stateful static storage keying stable.
-        let type_arity = description.definition().generic_parameters.len();
-        let type_generics = GenericLookup::new(
-            generics
-                .type_generics
-                .iter()
-                .take(type_arity)
-                .cloned()
-                .collect(),
-        );
-        let thread_id = self.thread_id.get();
-        // Use the type instantiation generics (not the calling frame's generics) so that
-        // static field layouts for generic types like Task<T> resolve TypeGeneric(0) correctly.
-        let context = self.with_generics(&type_generics);
-
-        match self
-            .shared
-            .statics
-            .init(description.clone(), &context, thread_id)
-        {
-            Ok(crate::statics::StaticInitResult::Execute(cctor, mut claim)) => {
-                let depth = self.frame_stack.len();
-                let result = self.dispatch_method(cctor, type_generics);
-                if self.frame_stack.len() > depth {
-                    self.frame_stack.current_frame_mut().initializer_claim = Some(Box::new(claim));
-                } else if matches!(result, StepResult::Continue) {
-                    dotnet_vm_data::stack::InitializerClaim::succeed(&mut claim);
-                }
-                result
-            }
-            Ok(crate::statics::StaticInitResult::Initialized)
-            | Ok(crate::statics::StaticInitResult::Recursive) => StepResult::Continue,
-            Ok(crate::statics::StaticInitResult::Waiting(registration)) => {
-                #[cfg(feature = "multithreading")]
-                {
-                    if self.shared.statics.wait_for_init(
-                        description.clone(),
-                        &type_generics,
-                        self.shared.thread_manager.as_ref(),
-                        registration,
-                        &self.shared.gc_coordinator,
-                    ) {
-                        return self.yield_and_retry();
-                    }
-                    // Re-check initialization state after waiting.
-                    // If the .cctor failed in another thread, we must throw TypeInitializationException.
-                    let state = self
-                        .shared
-                        .statics
-                        .get_init_state(description.clone(), &type_generics);
-                    match state {
-                        crate::statics::InitState::Initialized => {
-                            // Success - continue with the operation
-                        }
-                        crate::statics::InitState::Failed => {
-                            return self.throw_type_initialization_exception(&description, None);
-                        }
-                        _ => {
-                            // VM invariant: once `wait_for_init` returns without yielding, the
-                            // state machine must have converged to Initialized or Failed.
-                            // Any other state is an internal synchronization bug.
-                            unreachable!(
-                                "Type initialization for '{}' ended in unexpected state {:?}",
-                                description.type_name(),
-                                state
-                            );
-                        }
-                    }
-                }
-                #[cfg(not(feature = "multithreading"))]
-                {
-                    drop(registration);
-                    unreachable!(
-                        "single-threaded static initialization cannot wait for another thread"
-                    )
-                }
-                #[cfg(feature = "multithreading")]
-                StepResult::Continue
-            }
-            Ok(crate::statics::StaticInitResult::Failed) => {
-                self.throw_type_initialization_exception(&description, None)
-            }
-            Err(e) => StepResult::Error(e.into()),
-        }
+        // `newobj` re-executes with its operands intact once the initializer completes.
+        self.initialize_type_then(
+            description,
+            &generics,
+            super::native_effects::InitializerResume::Retry,
+        )
     }
 }
 
