@@ -324,13 +324,43 @@ exclusions. Slice 3 then removed the reflection continuation; the remaining orde
      both layout guards, and the multicast, threading and lock CLR fixtures in both configurations.
      The unmanaged timed-wait test covers successful acquisition and timeout across a collection,
      including exactly one flag write. The multicast fixture covers a `ref bool` Monitor call.
-6. **Bulk intrinsics.** `mem_helpers`/`buffer` first (correctness), then string, then span
+6. **Bulk intrinsics (partial: memory family complete; string and span-equality families open).** `mem_helpers`/`buffer` first (correctness), then string, then span
    equality, one family per commit, each gated on a benchmark comparison against the parent
    commit. `cpblk`/`initblk` keep progress across the yield even if they stay instructions.
    - Tests: first, a `multithreading` repro for an overlapping 2 MiB+ `Buffer.Memmove` while
      another thread forces collections (expected to fail before the change). Then a large-input
      fixture per family that crosses a GC safepoint and is collected mid-copy, and the benchmark
      numbers recorded in this plan.
+   - Memory family (done): the repro failed before the change (`ObjectRef codec host invariant
+     violation: OwnerUnavailable`, exit 101): a synchronous handler that yields is retried from
+     its start with its operands restored, so a partial overlapping move was re-run over
+     already-moved bytes and the retained owner was gone. `Buffer.Memmove` (4 registrations),
+     `SpanHelpers.ClearWithoutReferences` (2) and the byte-compatible `SpanHelpers.Fill<T>` now
+     have async bodies (`memmove_async`, `clear_async`, `fill_async`) that root the pointers as
+     descriptors and call `bulk_copy_chunk`/`bulk_fill_chunk` per 1 MiB chunk, re-resolving and
+     range-checking both operands each time. Copy direction is a pure function of the unchanged
+     addresses and `done` counts in iteration order, so progress survives every yield. Selectors
+     pick the async body only above one chunk; smaller operations keep a single-step sync
+     handler that cannot reach a safepoint (a measured-fast-path fallback, as for Substring).
+   - `cpblk`, `initblk`, `Unsafe.CopyBlock*` and `Unsafe.InitBlock*` no longer poll mid-copy:
+     they run to completion. This deviates from "keep progress across the yield": it removes the
+     restart hazard instead, at the cost of a collection request waiting for a long block
+     (bounded by memcpy time, at most 4 GiB for the `uint` forms).
+   - Kept: `SpanHelpers.Fill<T>` for non-byte `T` (and null or non-pointer destinations) still
+     uses the element loop with a per-element safepoint poll, which restarts from the beginning.
+     It is idempotent but shares the stale-operand hazard; convert it with the string families.
+   - Tests: `memmove_overlap_gc_42` and `bulk_fill_gc_42` (both against the CLR, `multithreading`
+     only, each crossing GC stops from a forcing thread). Workspace nextest passed in ST
+     (809 in vm, cli, unsafe) and `multithreading` (1,210; the known timer fixture flaked once and
+     passed on rerun); clippy clean in both. No benchmark was run: small operations take the same
+     single-copy path as before, and the async path is only selected above 1 MiB.
+   - Found, not fixed: `Span<byte>.Clear()` on a 3 MiB span takes ~42 s and never reaches
+     `clear_select`, on the parent commit too; its registered signature is not the one `Clear`
+     calls, so `clear_async` has no fixture. Needs its own investigation.
+   - Open: the string family (constructors, concat, copy/insert/replace/search loops at
+     `constructors.rs`, `operations.rs`, `search.rs`) and span/string equality
+     (`equality.rs`, `operations.rs`) still return `Yield` from sync handlers and, with the
+     constructors, still re-allocate on retry; each needs its own commit and benchmark.
 7. **Static-init triggers.** One `ensure_initialized` path for `newobj`,
    `prepare_method_initialization`, `RunClassConstructor` **and the native-call preflight in
    `dispatch_pending_native_call`**; delete `retrying_initializer`, frame `initializer_claim`,

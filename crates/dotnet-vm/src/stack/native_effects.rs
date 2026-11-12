@@ -603,6 +603,68 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
         });
         Ok(())
     }
+    unsafe fn bulk_copy_chunk(
+        &mut self,
+        source: StackValue<'gc>,
+        destination: StackValue<'gc>,
+        total: usize,
+        done: usize,
+    ) -> Result<usize, VmError> {
+        use dotnet_value::pointer::RetainedPtr;
+        use dotnet_vm_ops::effects::BULK_CHUNK_SIZE;
+        use dotnet_vm_ops::ops::RawMemoryOps;
+        let source = RetainedPtr::try_from_stack_value(source)?;
+        let destination = RetainedPtr::try_from_stack_value(destination)?;
+        let src = self.context.retained_range(&source, total)?;
+        let dst = self.context.retained_range(&destination, total)?;
+        let chunk = BULK_CHUNK_SIZE.min(total.saturating_sub(done));
+        if chunk == 0 || src == dst {
+            return Ok(chunk);
+        }
+        let overlap = src.addr() < dst.addr().saturating_add(total)
+            && dst.addr() < src.addr().saturating_add(total);
+        // A forward-overlapping move must run from the end, so `done` counts from the tail.
+        let backward = overlap && dst.addr() > src.addr();
+        let start = if backward { total - done - chunk } else { done };
+        #[expect(
+            clippy::multiple_unsafe_ops_per_block,
+            reason = "offsetting and moving the same chunk share one range proof"
+        )]
+        // SAFETY: F10.RawMemoryAccessValid — both full ranges were just resolved and checked;
+        // `start + chunk <= total`. Overlap is handled by `ptr::copy`, and chunk order
+        // preserves memmove semantics across suspensions because the direction is a pure
+        // function of the unchanged addresses.
+        unsafe {
+            if overlap {
+                std::ptr::copy(src.add(start), dst.add(start), chunk);
+            } else {
+                dotnet_simd::copy_nonoverlapping_raw(dst.add(start), src.add(start), chunk);
+            }
+        }
+        Ok(chunk)
+    }
+    unsafe fn bulk_fill_chunk(
+        &mut self,
+        destination: StackValue<'gc>,
+        total: usize,
+        done: usize,
+        value: u8,
+    ) -> Result<usize, VmError> {
+        use dotnet_value::pointer::RetainedPtr;
+        use dotnet_vm_ops::effects::BULK_CHUNK_SIZE;
+        use dotnet_vm_ops::ops::RawMemoryOps;
+        let destination = RetainedPtr::try_from_stack_value(destination)?;
+        let dst = self.context.retained_range(&destination, total)?;
+        let chunk = BULK_CHUNK_SIZE.min(total.saturating_sub(done));
+        #[expect(
+            clippy::multiple_unsafe_ops_per_block,
+            reason = "offsetting and filling the same chunk share one range proof"
+        )]
+        // SAFETY: F10.RawMemoryAccessValid — the full range was just resolved and checked;
+        // `done + chunk <= total`.
+        unsafe { dotnet_simd::fill_raw(dst.add(done), chunk, value) };
+        Ok(chunk)
+    }
     fn frame_home_block(
         &self,
         serial: dotnet_value::pointer::FrameHomeSerial,

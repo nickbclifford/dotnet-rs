@@ -1,4 +1,4 @@
-use crate::mem_helpers::{chunked_copy_with_safe_point, chunked_fill_with_safe_point};
+use crate::mem_helpers::{copy_one_chunk, fill_one_chunk};
 use crate::{NULL_REF_MSG, UnsafeIntrinsicHost, marshal::offset_ptr, ptr_info};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
@@ -783,7 +783,7 @@ pub fn intrinsic_unsafe_copy_block<
 
     // SAFETY: F10.RawMemoryAccessValid — retained_range checked the full managed range; retained operands stay alive through the call. Unmanaged validity and synchronization follow the guest intrinsic contract.
 
-    unsafe { chunked_copy_with_safe_point(ctx, source, destination, size) }
+    unsafe { copy_one_chunk(source, destination, size) }
 }
 
 #[dotnet_intrinsic(
@@ -819,5 +819,5 @@ pub fn intrinsic_unsafe_init_block<
 
     // SAFETY: F10.RawMemoryAccessValid — retained_range checked the full managed range; retained operands stay alive through the call. Unmanaged validity and synchronization follow the guest intrinsic contract.
 
-    unsafe { chunked_fill_with_safe_point(ctx, destination, size, val) }
+    unsafe { fill_one_chunk(destination, size, val) }
 }

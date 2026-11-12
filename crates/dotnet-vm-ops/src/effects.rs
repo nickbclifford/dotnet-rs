@@ -308,6 +308,9 @@ pub struct NativeEventMethods {
     pub get_handle: dotnet_types::members::MethodDescription,
 }
 
+/// Bytes a bulk memory intrinsic moves between GC safepoint polls.
+pub const BULK_CHUNK_SIZE: usize = 1024 * 1024;
+
 /// Adapter supplied for one poll. It owns no native future and must not dispatch recursively.
 pub trait NativeBackend<'gc> {
     fn stop_requested(&self) -> bool;
@@ -414,6 +417,35 @@ pub trait NativeBackend<'gc> {
     }
     fn push_output(&mut self, _value: StackValue<'gc>) -> Result<(), VmError> {
         Err(internal("native output unavailable"))
+    }
+    /// Copy the next chunk of a `total`-byte memmove, `done` bytes of which are complete in
+    /// iteration order, and return the number of bytes copied. Both ranges are resolved afresh
+    /// from the pointers, so no raw address survives a suspension.
+    ///
+    /// # Safety
+    /// Unmanaged ranges must remain valid for `total` bytes with synchronized access; managed
+    /// ranges are checked by the backend.
+    unsafe fn bulk_copy_chunk(
+        &mut self,
+        _source: StackValue<'gc>,
+        _destination: StackValue<'gc>,
+        _total: usize,
+        _done: usize,
+    ) -> Result<usize, VmError> {
+        Err(internal("native bulk copy unavailable"))
+    }
+    /// Fill the next chunk of a `total`-byte range with `value` and return its length.
+    ///
+    /// # Safety
+    /// As for [`NativeBackend::bulk_copy_chunk`].
+    unsafe fn bulk_fill_chunk(
+        &mut self,
+        _destination: StackValue<'gc>,
+        _total: usize,
+        _done: usize,
+        _value: u8,
+    ) -> Result<usize, VmError> {
+        Err(internal("native bulk fill unavailable"))
     }
 }
 
@@ -767,6 +799,49 @@ impl<'gc, 'a> NativeRegion<'gc, 'a> {
     fn push_bool(&mut self, value: bool) -> Result<(), VmError> {
         self.backend
             .push_output(StackValue::Int32(i32::from(value)))
+    }
+    /// Pop a pointer-like operand. Raw addresses are kept as native integers; managed pointers
+    /// are rooted as descriptors, so only their owner (never an address) survives a poll.
+    fn pop_pointer(&mut self) -> Result<RootedValue, VmError> {
+        let value = self
+            .backend
+            .operands()
+            .last()
+            .ok_or_else(|| internal("native operand underflow"))?
+            .clone();
+        let value = match value {
+            StackValue::UnmanagedPtr(pointer) => {
+                StackValue::NativeInt(pointer.0.as_ptr().expose_provenance() as isize)
+            }
+            value @ (StackValue::NativeInt(_) | StackValue::ManagedPtr(_)) => value,
+            _ => return Err(internal("native bulk pointer operand invalid")),
+        };
+        let root = self.root(value)?;
+        self.backend.operands().pop();
+        Ok(root)
+    }
+    unsafe fn bulk_copy_chunk(
+        &mut self,
+        source: &RootedValue,
+        destination: &RootedValue,
+        total: usize,
+        done: usize,
+    ) -> Result<usize, VmError> {
+        let source = self.fetch(source)?;
+        let destination = self.fetch(destination)?;
+        // SAFETY: F10.RawMemoryAccessValid — forwarded caller contract.
+        unsafe { self.backend.bulk_copy_chunk(source, destination, total, done) }
+    }
+    unsafe fn bulk_fill_chunk(
+        &mut self,
+        destination: &RootedValue,
+        total: usize,
+        done: usize,
+        value: u8,
+    ) -> Result<usize, VmError> {
+        let destination = self.fetch(destination)?;
+        // SAFETY: F10.RawMemoryAccessValid — forwarded caller contract.
+        unsafe { self.backend.bulk_fill_chunk(destination, total, done, value) }
     }
     fn discard_scalars(&mut self, count: usize) -> Result<(), VmError> {
         let operands = self.backend.operands();
@@ -1585,6 +1660,42 @@ impl<'fx> VmAccess<'fx> {
     }
     pub fn discard_scalars(&mut self, count: usize) -> NativeResult {
         Ok(self.with(|region| region.discard_scalars(count))??)
+    }
+    pub fn pop_pointer(&mut self) -> Result<RootedValue, NativeFailure> {
+        Ok(self.with(|region| region.pop_pointer())??)
+    }
+    /// Copy one bounded chunk of a memmove and return its length.
+    ///
+    /// # Safety
+    /// Unmanaged ranges must stay valid for `total` bytes, with synchronized access. Managed
+    /// ranges are resolved and checked on every call.
+    pub unsafe fn bulk_copy_chunk(
+        &mut self,
+        source: &RootedValue,
+        destination: &RootedValue,
+        total: usize,
+        done: usize,
+    ) -> Result<usize, NativeFailure> {
+        Ok(self.with(|region| {
+            // SAFETY: F10.RawMemoryAccessValid — this method's caller supplies the contract.
+            unsafe { region.bulk_copy_chunk(source, destination, total, done) }
+        })??)
+    }
+    /// Fill one bounded chunk and return its length.
+    ///
+    /// # Safety
+    /// As for [`VmAccess::bulk_copy_chunk`].
+    pub unsafe fn bulk_fill_chunk(
+        &mut self,
+        destination: &RootedValue,
+        total: usize,
+        done: usize,
+        value: u8,
+    ) -> Result<usize, NativeFailure> {
+        Ok(self.with(|region| {
+            // SAFETY: F10.RawMemoryAccessValid — this method's caller supplies the contract.
+            unsafe { region.bulk_fill_chunk(destination, total, done, value) }
+        })??)
     }
     pub fn push_new_string(&mut self, chars: Vec<u16>) -> NativeResult {
         Ok(self.with(|region| region.backend.push_new_string(chars))??)

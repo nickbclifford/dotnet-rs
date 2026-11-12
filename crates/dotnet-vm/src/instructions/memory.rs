@@ -34,28 +34,15 @@ pub fn cpblk<'gc, T: StackOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc>>(
         return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
-    // Perform the move in chunks to allow GC safe points if necessary.
-    // Since our GC is currently non-moving, raw pointers remain valid across safe points.
-    const CHUNK_SIZE: usize = 1024 * 1024; // 1MB chunks
-    let mut offset = 0;
-    while offset < size {
-        let current_chunk = std::cmp::min(size - offset, CHUNK_SIZE);
-        #[expect(
-            clippy::multiple_unsafe_ops_per_block,
-            reason = "validating and moving the same caller-provided raw chunk share one range proof"
-        )]
-        // SAFETY: F10.RawMemoryAccessValid — The CIL `cpblk` contract requires non-null source and destination ranges valid
-        // for `size` bytes. `offset..offset + current_chunk` stays within that range, and
-        // `ptr::copy` preserves the instruction's overlap-permitted memmove semantics.
-        unsafe {
-            validate_atomic_access(src.add(offset), false);
-            validate_atomic_access(dest.add(offset), false);
-            ptr::copy(src.add(offset), dest.add(offset), current_chunk);
-        }
-        offset += current_chunk;
-        if offset < size && ctx.check_gc_safe_point() {
-            return StepResult::Yield;
-        }
+    // The move runs to completion without polling for a collection: a retry would re-execute
+    // the instruction from its start, and restarting a partial overlapping move corrupts it.
+    // A long block therefore delays a stop-the-world request until it finishes.
+    // SAFETY: F10.RawMemoryAccessValid — The CIL `cpblk` contract requires non-null source and destination ranges valid
+    // for `size` bytes; `ptr::copy` preserves the instruction's overlap-permitted memmove semantics.
+    unsafe {
+        validate_atomic_access(src, false);
+        validate_atomic_access(dest, false);
+        ptr::copy(src, dest, size);
     }
     StepResult::Continue
 }
@@ -74,25 +61,11 @@ pub fn initblk<'gc, T: StackOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc>>(
         return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
-    // Perform the initialization in chunks to allow GC safe points if necessary.
-    const CHUNK_SIZE: usize = 1024 * 1024; // 1MB chunks
-    let mut offset = 0;
-    while offset < size {
-        let current_chunk = std::cmp::min(size - offset, CHUNK_SIZE);
-        #[expect(
-            clippy::multiple_unsafe_ops_per_block,
-            reason = "validating and initializing the same caller-provided raw chunk share one range proof"
-        )]
-        // SAFETY: F10.RawMemoryAccessValid — The CIL `initblk` contract requires a non-null destination valid for `size`
-        // bytes. `offset..offset + current_chunk` stays within that caller-provided range.
-        unsafe {
-            validate_atomic_access(addr.add(offset), false);
-            ptr::write_bytes(addr.add(offset), val, current_chunk);
-        }
-        offset += current_chunk;
-        if offset < size && ctx.check_gc_safe_point() {
-            return StepResult::Yield;
-        }
+    // Runs to completion without polling for a collection; see `cpblk`.
+    // SAFETY: F10.RawMemoryAccessValid — The CIL `initblk` contract requires a non-null destination valid for `size` bytes.
+    unsafe {
+        validate_atomic_access(addr, false);
+        ptr::write_bytes(addr, val, size);
     }
     StepResult::Continue
 }

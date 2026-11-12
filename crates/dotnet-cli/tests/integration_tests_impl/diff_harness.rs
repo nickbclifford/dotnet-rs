@@ -67,6 +67,18 @@ macro_rules! diff_test_exit_code {
     };
 }
 
+#[cfg(feature = "multithreading")]
+diff_test!(
+    memmove_overlap_gc_matches_dotnet,
+    "tests/fixtures/unsafe/memmove_overlap_gc_42.cs"
+);
+
+#[cfg(feature = "multithreading")]
+diff_test!(
+    bulk_fill_gc_matches_dotnet,
+    "tests/fixtures/unsafe/bulk_fill_gc_42.cs"
+);
+
 // Rejected candidates: structs/interlocked_misaligned_1 (intentional ECMA alignment
 // divergence);
 // exceptions/unhandled_exception_254 and stack_trace_*_254 (the in-process fixture oracle is

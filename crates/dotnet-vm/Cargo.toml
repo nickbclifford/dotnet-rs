@@ -9,6 +9,7 @@ lru = { workspace = true }
 dotnet-assemblies = { workspace = true }
 dotnet-runtime-resolver = { workspace = true, default-features = false }
 dotnet-runtime-memory = { workspace = true, default-features = false }
+dotnet-simd = { workspace = true, default-features = false }
 dotnet-exceptions = { path = "../dotnet-exceptions", default-features = false }
 dotnet-intrinsics-core = { workspace = true, default-features = false }
 dotnet-intrinsics-delegates = { workspace = true, default-features = false }

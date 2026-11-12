@@ -1,4 +1,4 @@
-use crate::mem_helpers::{chunked_copy_with_safe_point, chunked_fill_with_safe_point};
+use crate::mem_helpers::{copy_one_chunk, fill_one_chunk};
 use crate::{NULL_REF_MSG, UnsafeIntrinsicHost, ptr_info};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{error::ExecutionError, generics::GenericLookup, members::MethodDescription};
@@ -10,9 +10,10 @@ use dotnet_value::{
     pointer::RetainedPtr,
 };
 use dotnet_vm_data::StepResult;
+use dotnet_vm_ops::effects::{
+    BULK_CHUNK_SIZE, NativeInvocation, NativeOperandView, NativeResult, NativeSelection, VmEffects,
+};
 use dotnet_vm_ops::ops::{EvalStackOps, ExceptionOps, LoaderOps, TypedStackOps};
-
-const MEM_OP_CHUNK_SIZE: usize = 1024 * 1024; // 1MB chunks
 
 #[inline]
 fn stack_value_to_byte<'gc>(value: &StackValue<'gc>) -> Option<u8> {
@@ -38,35 +39,101 @@ fn retained_fill_destination<'gc>(
     }
 }
 
-fn chunked_clear_with_safe_point<'gc, T: UnsafeIntrinsicHost<'gc>>(
-    ctx: &mut T,
-    dst: *mut u8,
-    total_count: usize,
-) -> StepResult {
-    let mut offset = 0usize;
-    while offset < total_count {
-        let current_chunk = std::cmp::min(total_count - offset, MEM_OP_CHUNK_SIZE);
-        #[expect(
-            clippy::multiple_unsafe_ops_per_block,
-            reason = "forming the chunk pointer and clearing that chunk share one validated range proof"
-        )]
-        // SAFETY: F10.RawMemoryAccessValid — Destination pointer is valid for `total_count` bytes by intrinsic contract.
-        unsafe {
-            dotnet_simd::clear_raw(dst.add(offset), current_chunk);
-        }
-        offset += current_chunk;
-        if offset < total_count && ctx.check_gc_safe_point() {
-            return StepResult::Yield;
-        }
-    }
-
-    StepResult::Continue
+/// Selects the async body only for byte counts above one chunk; smaller operations cannot
+/// reach a safepoint, so they keep the single-poll synchronous handler.
+fn exceeds_chunk(bytes: Option<usize>) -> bool {
+    bytes.is_none_or(|bytes| bytes > BULK_CHUNK_SIZE)
 }
 
-#[dotnet_intrinsic("static void System.Buffer::Memmove(byte*, byte*, ulong)")]
-#[dotnet_intrinsic("static void System.Buffer::Memmove<T>(T&, T&, ulong)")]
-#[dotnet_intrinsic("static void System.Buffer::Memmove<T>(T&, T&, nuint)")]
-#[dotnet_intrinsic("static void System.SpanHelpers::Memmove(ref byte, ref byte, nuint)")]
+fn scalar_len(value: StackValue<'_>) -> Option<isize> {
+    match value {
+        StackValue::Int32(v) => Some(v as isize),
+        StackValue::Int64(v) => Some(v as isize),
+        StackValue::NativeInt(v) => Some(v),
+        _ => None,
+    }
+}
+
+/// Element size in bytes of `Memmove<T>`'s `T`, or 0 for the byte-count overloads.
+pub fn memmove_select<'gc, T: UnsafeIntrinsicHost<'gc>>(
+    ctx: &T,
+    operands: NativeOperandView<'_, 'gc>,
+    _method: &MethodDescription,
+    generics: &GenericLookup,
+) -> NativeSelection {
+    let Some(len) = scalar_len(operands.peek_at(0)) else {
+        return NativeSelection::Fallback;
+    };
+    let element = if generics.method_generics.is_empty() {
+        0
+    } else {
+        let Ok(target) = generics.method_arg(0) else {
+            return NativeSelection::Fallback;
+        };
+        let Ok(layout) = ctx.unsafe_type_layout(target.clone()) else {
+            return NativeSelection::Fallback;
+        };
+        layout.size().as_usize()
+    };
+    let bytes = if element == 0 {
+        Some(len as usize)
+    } else {
+        element.checked_mul(len as usize)
+    };
+    if exceeds_chunk(bytes) {
+        NativeSelection::Async(NativeInvocation {
+            start: element,
+            length: len as usize,
+            parameter_count: 3,
+        })
+    } else {
+        NativeSelection::Fallback
+    }
+}
+
+/// Copies in bounded chunks. Pointers are rooted descriptors resolved afresh for every chunk,
+/// so a collection between chunks neither invalidates them nor restarts the move.
+#[dotnet_intrinsic("static void System.Buffer::Memmove(byte*, byte*, ulong)", select = memmove_select, fallback = intrinsic_buffer_memmove)]
+#[dotnet_intrinsic("static void System.Buffer::Memmove<T>(T&, T&, ulong)", select = memmove_select, fallback = intrinsic_buffer_memmove)]
+#[dotnet_intrinsic("static void System.Buffer::Memmove<T>(T&, T&, nuint)", select = memmove_select, fallback = intrinsic_buffer_memmove)]
+#[dotnet_intrinsic("static void System.SpanHelpers::Memmove(ref byte, ref byte, nuint)", select = memmove_select, fallback = intrinsic_buffer_memmove)]
+pub async fn memmove_async(mut fx: VmEffects) -> NativeResult {
+    let invocation = fx.invocation();
+    let (source, destination, total) = {
+        let mut vm = fx.vm().await?;
+        vm.discard_scalars(1)?;
+        let source = vm.pop_pointer()?;
+        let destination = vm.pop_pointer()?;
+        let total = if invocation.start == 0 {
+            invocation.length
+        } else {
+            match invocation.start.checked_mul(invocation.length) {
+                Some(bytes) => bytes,
+                None => {
+                    return Err(vm.exception(
+                        "System.OverflowException",
+                        "Arithmetic operation resulted in an overflow.",
+                    )?);
+                }
+            }
+        };
+        (source, destination, total)
+    };
+    let mut done = 0usize;
+    while done < total {
+        {
+            let mut vm = fx.vm().await?;
+            // SAFETY: F10.RawMemoryAccessValid — managed ranges are resolved and checked for the
+            // full `total` bytes on every chunk; unmanaged ranges follow the guest contract.
+            done += unsafe { vm.bulk_copy_chunk(&source, &destination, total, done)? };
+        }
+        if done < total {
+            fx.yield_now().await?;
+        }
+    }
+    Ok(())
+}
+
 #[allow(unused_variables)]
 pub fn intrinsic_buffer_memmove<'gc, T: UnsafeIntrinsicHost<'gc>>(
     ctx: &mut T,
@@ -94,11 +161,57 @@ pub fn intrinsic_buffer_memmove<'gc, T: UnsafeIntrinsicHost<'gc>>(
     let source = dotnet_vm_ops::vm_try!(ctx.retained_range(&src, total_count));
     let destination = dotnet_vm_ops::vm_try!(ctx.retained_range(&dst, total_count));
     // SAFETY: F10.RawMemoryAccessValid — retained_range checked the full managed range; retained operands stay alive through the call. Unmanaged validity and synchronization follow the guest intrinsic contract.
-    unsafe { chunked_copy_with_safe_point(ctx, source, destination, total_count) }
+    unsafe { copy_one_chunk(source, destination, total_count) }
 }
 
-#[dotnet_intrinsic("static void System.SpanHelpers::ClearWithoutReferences(ref byte, nuint)")]
-#[dotnet_intrinsic("static void System.SpanHelpers::ClearWithoutReferences(byte*, nuint)")]
+pub fn clear_select<'gc, T: UnsafeIntrinsicHost<'gc>>(
+    _ctx: &T,
+    operands: NativeOperandView<'_, 'gc>,
+    _method: &MethodDescription,
+    _generics: &GenericLookup,
+) -> NativeSelection {
+    match scalar_len(operands.peek_at(0)) {
+        Some(len) if exceeds_chunk(Some(len.max(0) as usize)) => {
+            NativeSelection::Async(NativeInvocation {
+                start: 0,
+                length: len.max(0) as usize,
+                parameter_count: 2,
+            })
+        }
+        _ => NativeSelection::Fallback,
+    }
+}
+
+#[dotnet_intrinsic("static void System.SpanHelpers::ClearWithoutReferences(ref byte, nuint)", select = clear_select, fallback = intrinsic_span_helpers_clear_without_references)]
+#[dotnet_intrinsic("static void System.SpanHelpers::ClearWithoutReferences(byte*, nuint)", select = clear_select, fallback = intrinsic_span_helpers_clear_without_references)]
+pub async fn clear_async(fx: VmEffects) -> NativeResult {
+    fill_async_with(fx, 0).await
+}
+
+async fn fill_async_with(mut fx: VmEffects, value: u8) -> NativeResult {
+    let invocation = fx.invocation();
+    let total = invocation.length;
+    let destination = {
+        let mut vm = fx.vm().await?;
+        // The selector captured the length (and fill value); drop them, then the pointer.
+        vm.discard_scalars(invocation.parameter_count - 1)?;
+        vm.pop_pointer()?
+    };
+    let mut done = 0usize;
+    while done < total {
+        {
+            let mut vm = fx.vm().await?;
+            // SAFETY: F10.RawMemoryAccessValid — the range is resolved and checked for the full
+            // `total` bytes on every chunk; unmanaged ranges follow the guest contract.
+            done += unsafe { vm.bulk_fill_chunk(&destination, total, done, value)? };
+        }
+        if done < total {
+            fx.yield_now().await?;
+        }
+    }
+    Ok(())
+}
+
 #[allow(unused_variables)]
 pub fn intrinsic_span_helpers_clear_without_references<'gc, T: UnsafeIntrinsicHost<'gc>>(
     ctx: &mut T,
@@ -110,10 +223,59 @@ pub fn intrinsic_span_helpers_clear_without_references<'gc, T: UnsafeIntrinsicHo
     let total_count = len.max(0) as usize;
 
     let destination = dotnet_vm_ops::vm_try!(ctx.retained_range(&dst, total_count));
-    chunked_clear_with_safe_point(ctx, destination, total_count)
+    // SAFETY: F10.RawMemoryAccessValid — retained_range checked the full destination range.
+    unsafe { fill_one_chunk(destination, total_count, 0) }
 }
 
-#[dotnet_intrinsic("static void System.SpanHelpers::Fill<T>(T&, nuint, T)")]
+/// Byte-compatible fills over one chunk stay synchronous. Larger ones capture the fill byte and
+/// length for the async body. Wider element types keep the synchronous element loop (see the
+/// plan's "Kept" table), as do null destinations and wrong operand shapes (they throw there).
+pub fn fill_select<'gc, T: UnsafeIntrinsicHost<'gc>>(
+    ctx: &T,
+    operands: NativeOperandView<'_, 'gc>,
+    _method: &MethodDescription,
+    generics: &GenericLookup,
+) -> NativeSelection {
+    let (Some(byte), Some(len)) = (
+        stack_value_to_byte(&operands.peek_at(0)),
+        scalar_len(operands.peek_at(1)),
+    ) else {
+        return NativeSelection::Fallback;
+    };
+    let len = len.max(0) as usize;
+    let destination = operands.peek_at(2);
+    let Ok(target) = generics.cloned_method_arg(0) else {
+        return NativeSelection::Fallback;
+    };
+    let Ok(layout) = ctx.unsafe_type_layout(target) else {
+        return NativeSelection::Fallback;
+    };
+    let byte_compatible = layout.size().as_usize() == 1
+        && matches!(
+            layout.as_ref(),
+            LayoutManager::Scalar(Scalar::Int8 | Scalar::UInt8)
+        );
+    let pointer_like = matches!(
+        destination,
+        StackValue::NativeInt(_) | StackValue::UnmanagedPtr(_) | StackValue::ManagedPtr(_)
+    ) && !destination.is_null();
+    if byte_compatible && pointer_like && exceeds_chunk(Some(len)) {
+        NativeSelection::Async(NativeInvocation {
+            start: byte as usize,
+            length: len,
+            parameter_count: 3,
+        })
+    } else {
+        NativeSelection::Fallback
+    }
+}
+
+#[dotnet_intrinsic("static void System.SpanHelpers::Fill<T>(T&, nuint, T)", select = fill_select, fallback = intrinsic_span_helpers_fill)]
+pub async fn fill_async(fx: VmEffects) -> NativeResult {
+    let byte = fx.invocation().start as u8;
+    fill_async_with(fx, byte).await
+}
+
 #[allow(unused_variables)]
 pub fn intrinsic_span_helpers_fill<'gc, T: UnsafeIntrinsicHost<'gc>>(
     ctx: &mut T,
@@ -145,11 +307,9 @@ pub fn intrinsic_span_helpers_fill<'gc, T: UnsafeIntrinsicHost<'gc>>(
         && let Some(byte_value) = stack_value_to_byte(&value)
         && let Some(dst) = dotnet_vm_ops::vm_try!(retained_fill_destination(&destination))
     {
-        // `dst` keeps any cross-arena owner leased through the synchronous fill
-        // and is dropped before a `Yield` reaches the scheduler.
         let address = dotnet_vm_ops::vm_try!(ctx.retained_range(&dst, len));
-        // SAFETY: F10.RawMemoryAccessValid — retained_range checked the full managed range; retained operands stay alive through the call. Unmanaged validity and synchronization follow the guest intrinsic contract.
-        let result = unsafe { chunked_fill_with_safe_point(ctx, address, len, byte_value) };
+        // SAFETY: F10.RawMemoryAccessValid — retained_range checked the full managed range; `dst` keeps its owner alive through the call. Unmanaged validity and synchronization follow the guest intrinsic contract.
+        let result = unsafe { fill_one_chunk(address, len, byte_value) };
         drop(dst);
         return result;
     }

@@ -1,117 +1,36 @@
 use dotnet_vm_data::StepResult;
-use dotnet_vm_ops::ops::RawMemoryOps;
 use std::ptr;
 
-const MEM_OP_CHUNK_SIZE: usize = 1024 * 1024; // 1MB chunks
-
-#[inline]
-pub(crate) fn ranges_overlap(src: *const u8, dst: *mut u8, len: usize) -> bool {
-    let src_start = src.addr();
-    let dst_start = dst.addr();
-    let src_end = src_start.saturating_add(len);
-    let dst_end = dst_start.saturating_add(len);
-    src_start < dst_end && dst_start < src_end
-}
-
+/// Moves `total_count` bytes with memmove semantics in one step. Operations above
+/// [`dotnet_vm_ops::effects::BULK_CHUNK_SIZE`] reach the chunked native body instead, so this
+/// never reaches a safepoint.
+///
 /// # Safety
-/// The accessed ranges must remain live across safepoint polls, with synchronized
-/// reads and exclusive writes and no conflicting live Rust references. Source
-/// bytes must be initialized. Copy ranges may overlap. Unmanaged ranges are
-/// guaranteed by the guest unsafe-memory contract; retained owners keep managed
-/// allocations alive for the complete call.
-pub(crate) unsafe fn chunked_copy_with_safe_point<'gc, T: RawMemoryOps<'gc>>(
-    ctx: &mut T,
+/// Both ranges must be valid for `total_count` bytes, with synchronized reads and exclusive
+/// writes and no conflicting live Rust references. Source bytes must be initialized.
+/// Unmanaged ranges are guaranteed by the guest unsafe-memory contract; retained owners keep
+/// managed allocations alive for the complete call.
+pub(crate) unsafe fn copy_one_chunk(
     src: *const u8,
     dst: *mut u8,
     total_count: usize,
 ) -> StepResult {
-    if total_count == 0 || src == dst {
-        return StepResult::Continue;
+    if total_count != 0 && src != dst.cast_const() {
+        // SAFETY: F10.RawMemoryAccessValid — the caller proved both ranges; `copy` has memmove
+        // semantics for overlapping ranges.
+        unsafe { ptr::copy(src, dst, total_count) };
     }
-
-    let overlap = ranges_overlap(src, dst, total_count);
-    let copy_backward = overlap && dst.addr() > src.addr();
-
-    if overlap {
-        if copy_backward {
-            let mut remaining = total_count;
-            while remaining > 0 {
-                let current_chunk = std::cmp::min(remaining, MEM_OP_CHUNK_SIZE);
-                let start = remaining - current_chunk;
-                // SAFETY: F10.RawMemoryAccessValid — `start` is within the caller-validated source range.
-                let src_chunk = unsafe { src.add(start) };
-                // SAFETY: F10.RawMemoryAccessValid — `start` is within the caller-validated destination range.
-                let dst_chunk = unsafe { dst.add(start) };
-                // SAFETY: F10.RawMemoryAccessValid — The two chunk pointers are valid for `current_chunk` bytes; `copy`
-                // preserves memmove semantics for the overlapping range.
-                unsafe { ptr::copy(src_chunk, dst_chunk, current_chunk) };
-                remaining = start;
-                if remaining > 0 && ctx.check_gc_safe_point() {
-                    return StepResult::Yield;
-                }
-            }
-            return StepResult::Continue;
-        }
-
-        let mut offset = 0usize;
-        while offset < total_count {
-            let current_chunk = std::cmp::min(total_count - offset, MEM_OP_CHUNK_SIZE);
-            // SAFETY: F10.RawMemoryAccessValid — `offset` is within the caller-validated source range.
-            let src_chunk = unsafe { src.add(offset) };
-            // SAFETY: F10.RawMemoryAccessValid — `offset` is within the caller-validated destination range.
-            let dst_chunk = unsafe { dst.add(offset) };
-            // SAFETY: F10.RawMemoryAccessValid — The two chunk pointers are valid for `current_chunk` bytes and may overlap.
-            unsafe { ptr::copy(src_chunk, dst_chunk, current_chunk) };
-            offset += current_chunk;
-            if offset < total_count && ctx.check_gc_safe_point() {
-                return StepResult::Yield;
-            }
-        }
-        return StepResult::Continue;
-    }
-
-    let mut offset = 0usize;
-    while offset < total_count {
-        let current_chunk = std::cmp::min(total_count - offset, MEM_OP_CHUNK_SIZE);
-        // SAFETY: F10.RawMemoryAccessValid — `offset` is within the caller-validated destination range.
-        let dst_chunk = unsafe { dst.add(offset) };
-        // SAFETY: F10.RawMemoryAccessValid — `offset` is within the caller-validated source range.
-        let src_chunk = unsafe { src.add(offset) };
-        // SAFETY: F10.RawMemoryAccessValid — This branch proved the source and destination ranges do not overlap.
-        unsafe { dotnet_simd::copy_nonoverlapping_raw(dst_chunk, src_chunk, current_chunk) };
-        offset += current_chunk;
-        if offset < total_count && ctx.check_gc_safe_point() {
-            return StepResult::Yield;
-        }
-    }
-
     StepResult::Continue
 }
 
+/// Fills `total_count` bytes in one step.
+///
 /// # Safety
-/// The accessed ranges must remain live across safepoint polls, with synchronized
-/// reads and exclusive writes and no conflicting live Rust references. Source
-/// bytes must be initialized. Copy ranges may overlap. Unmanaged ranges are
-/// guaranteed by the guest unsafe-memory contract; retained owners keep managed
-/// allocations alive for the complete call.
-pub(crate) unsafe fn chunked_fill_with_safe_point<'gc, T: RawMemoryOps<'gc>>(
-    ctx: &mut T,
-    dst: *mut u8,
-    total_count: usize,
-    value: u8,
-) -> StepResult {
-    let mut offset = 0usize;
-    while offset < total_count {
-        let current_chunk = std::cmp::min(total_count - offset, MEM_OP_CHUNK_SIZE);
-        // SAFETY: F10.RawMemoryAccessValid — `offset` is within the caller-validated destination range.
-        let dst_chunk = unsafe { dst.add(offset) };
-        // SAFETY: F10.RawMemoryAccessValid — The destination chunk is valid for `current_chunk` bytes by intrinsic contract.
-        unsafe { dotnet_simd::fill_raw(dst_chunk, current_chunk, value) };
-        offset += current_chunk;
-        if offset < total_count && ctx.check_gc_safe_point() {
-            return StepResult::Yield;
-        }
+/// The destination must be valid for `total_count` bytes by the intrinsic contract.
+pub(crate) unsafe fn fill_one_chunk(dst: *mut u8, total_count: usize, value: u8) -> StepResult {
+    if total_count != 0 {
+        // SAFETY: F10.RawMemoryAccessValid — the caller proved the destination range.
+        unsafe { dotnet_simd::fill_raw(dst, total_count, value) };
     }
-
     StepResult::Continue
 }

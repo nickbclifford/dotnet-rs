@@ -676,6 +676,7 @@ dependencies = [
  "dotnet-pinvoke",
  "dotnet-runtime-memory",
  "dotnet-runtime-resolver",
+ "dotnet-simd",
  "dotnet-tracer",
  "dotnet-types",
  "dotnet-utils",
