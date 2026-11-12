@@ -352,8 +352,16 @@ exclusions. Slice 3 then removed the reflection continuation; the remaining orde
    - Tests: `memmove_overlap_gc_42` and `bulk_fill_gc_42` (both against the CLR, `multithreading`
      only, each crossing GC stops from a forcing thread). Workspace nextest passed in ST
      (809 in vm, cli, unsafe) and `multithreading` (1,210; the known timer fixture flaked once and
-     passed on rerun); clippy clean in both. No benchmark was run: small operations take the same
-     single-copy path as before, and the async path is only selected above 1 MiB.
+     passed on rerun); clippy clean in both.
+   - Benchmark (review, `bench-fat`, `taskset -c 0`, four alternating pairs against
+     `1bb0f642`, mean change): ST `unsafe_buffer` +0.01%, `memory` +0.15%, `span` +0.46%,
+     `json` +1.56%, `string` −1.07%; MT `unsafe_buffer` +0.39%, `memory` +0.38%, `span` +0.30%,
+     `json` −0.36%, `string` +7.18% (+5.6 to +9.0%). The MT `string` change is code placement,
+     not work: `perf stat --test` instructions and branches match to 0.01%, and the hottest
+     function (`intrinsic_string_is_null_or_white_space`, 42–45% of steady-state cycles) is
+     byte-identical but moved so its hot loop now straddles a 64-byte line. Accepted.
+   - `cpblk`/`initblk` running to completion is accepted: the CLR's block-copy helpers do not
+     poll for GC either, and the delay is bounded by one memcpy.
    - Found, not fixed: `Span<byte>.Clear()` on a 3 MiB span takes ~42 s and never reaches
      `clear_select`, on the parent commit too; its registered signature is not the one `Clear`
      calls, so `clear_async` has no fixture. Needs its own investigation.

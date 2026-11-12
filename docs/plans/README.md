@@ -116,6 +116,15 @@ Evidence and IDs (p01…, R01…) are defined in the
 - **Thread-static retention:** thread-static storage and its object references remain rooted until
   VM shutdown, including after an explicit worker exits, so outstanding byrefs remain valid.
   Reclaiming these values when no byref can reach them remains unplanned.
+- **`Span<byte>.Clear()` is very slow on large spans:** clearing 3 MiB takes about 42 s and never
+  reaches the `SpanHelpers.ClearWithoutReferences` intrinsic, so it runs as interpreted IL
+  (found in [plan 16](16-retire-legacy-continuations.md) slice 6; present before it). Find the
+  path `Clear` takes in this CoreLib and route it to the intrinsic.
+- **String benchmark is code-placement sensitive in MT:** `string` moved +7% in plan 16 slice 6
+  (and +33%, then −8%, in slice 3) with unchanged instruction counts, because its hot
+  `IsNullOrWhiteSpace` loop shifts across cache-line boundaries as the binary changes. Compare
+  `perf stat` instructions before attributing a `string` change to a commit; consider aligning
+  hot intrinsic loops if this keeps masking real changes.
 - **Timer pool-thread fixture under load:** `threading_timer_callback_pool_thread_42` failed
   twice during full parallel `dotnet-cli` integration runs on 2026-11-11 (once single-threaded,
   once during plan 16 slice 4 validation) and passed every isolated and repeated run. The
