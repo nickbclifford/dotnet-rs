@@ -420,7 +420,8 @@ The aligned static-reference atomic path has a known provenance limitation under
 
 1. **Re-run/resume interpreter control flow in-place**
    - Uses `VmContinuation<'gc>` on `ThreadContext<'gc>`.
-   - Covers retrying the current instruction and preserving nested handler-unwind queues.
+   - Covers preserving nested handler-unwind queues; instruction retry is a `Yield` with the
+     instruction's operands intact.
 2. **Retain native progress and call managed code**
    - Uses the `CallState` activation stack, separate from handler-unwind state.
    - Retains traced operands and root sets across executor turns; a managed child carries its
@@ -434,10 +435,9 @@ The aligned static-reference atomic path has a known provenance limitation under
      calls made while `processing_finalizer` is set return immediately through both the selector
      and the legacy fallback, while other non-inline calls retain their legacy retry. Admitted
      monitor calls use the same condition driver; excluded shapes retain their legacy paths.
-3. **Resume with return-value post-processing after a managed call returns**
-   - Uses per-frame `FrameReturnAction` on `StackFrame<'gc>`.
-   - Covers excluded reflection calls using the synchronous fallback; admitted calls transform
-     their own results in their activation.
+3. **Return-value post-processing after a managed call returns**
+   - Reflection calls transform their own results in their native activation. The former
+     per-frame `FrameReturnAction`/`InvokeReturn` continuation no longer exists.
 
 ### `VmContinuation<'gc>`
 
@@ -445,33 +445,13 @@ The aligned static-reference atomic path has a known provenance limitation under
 continuation state:
 
 - `None` — no pending continuation state.
-- `RetryInstruction` — previous safe-point yield requested an instruction retry (IP/stack restored
-  before yielding). This marker is cleared on VM re-entry; the restored IP/stack is what actually
-  drives the retry.
 - `HandlerUnwinds(Vec<UnwindState<'gc>>)` — queued unwind states for nested `leave`/`finally`
   transitions that may span safe points.
-
-### `FrameReturnAction`
-
-`FrameReturnAction` is a per-frame continuation action for return handling. The current variant is:
-
-- `InvokeReturn(RuntimeType)` — after a legacy reflection call returns, apply boxing,
-  coercion and null handling using the captured return type metadata. Admitted reflection
-  calls instead root their arguments and constructed receiver in a native activation and
-  transform their own successful result. Declared byref returns are rejected before dispatch.
-
-Because `FrameReturnAction` contains only `'static` metadata (`RuntimeType`), it does not add any
-new GC references to trace. A reflected target delayed by its type initializer retains a traced
-`ReflectionPending` on the caller, so initializer completion retries that target without applying
-its return action. Synchronous completion applies the action immediately; exceptional unwinding
-and frame retirement clear it.
 
 ### `VesContext` continuation API
 
 `VesContext` exposes explicit helpers for continuation state transitions:
 
-- `set_frame_return_action(action)` — stores the per-frame `FrameReturnAction` for excluded
-  reflection calls' post-return handling.
 - `push_handler_unwind(state)` / `pop_handler_unwind()` — mutate
   `VmContinuation::HandlerUnwinds` as unwind work is suspended/resumed.
 

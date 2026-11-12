@@ -65,21 +65,20 @@ need three functions. This plan settles the API first.
 
 **Out of scope:**
 - The residual non-inline callers:
-  - Targets dispatched by the legacy `MulticastState` continuation (`dispatch/mod.rs`) and the
-    legacy reflection `InvokeReturn` continuation (`reflection_ops_impl.rs`)
-  - `newobj` of an intrinsic constructor (`intrinsic_call` from `instructions/objects/mod.rs`),
-    whose completion must finish the constructor receiver
+  - Targets dispatched by the legacy `MulticastState` continuation (`dispatch/mod.rs`); the
+    reflection `InvokeReturn` continuation was removed by plan 16
+  - Plan 16 later removed `newobj` of an intrinsic constructor (it now dispatches inline with a
+    completion action) and the public `ExecutionEngine::unified_dispatch`/`dispatch_method`
+    APIs; neither is a residual caller.
   - `.cctor` dispatch, the span equality slow path and the `Expression.Compile` redirect, all
     of which dispatch managed bodies, never intrinsics
-  - Public `ExecutionEngine::unified_dispatch` and `ExecutionEngine::dispatch_method` host
-    entry APIs, whose non-inline dispatch contract is preserved
 
-  Retiring those continuations is the separate "Fallback continuations for excluded shapes"
-  item.
+  Plan 16 retired the others; the multicast continuation remains for excluded shapes.
 - Transport for transient and unmanaged `bool&` origins. A `Transient` pointer is a value
   type on the evaluation stack and would need tracing; an `Unmanaged` one is a raw address
-  whose stability across a suspension the VM can't check. The monitor byref variants keep
-  their fallback and the frame retry deadline for those two shapes only. `Static` origins are
+  whose stability across a suspension the VM can't check. (Plan 16 slice 5b later admitted
+  `Unmanaged` and rejected `Transient`.) The monitor byref variants kept
+  their fallback and the frame retry deadline for those two shapes only at plan time. `Static` origins are
   in scope (see below).
 - Reflection argument validation and transport shapes. Reflection keeps its fallback.
 - Migrating any further intrinsics. They wait for this plan.

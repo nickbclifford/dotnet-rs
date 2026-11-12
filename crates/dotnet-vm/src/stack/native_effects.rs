@@ -2262,18 +2262,6 @@ impl<'gc> VesContext<'_, 'gc> {
         let result = self.dispatch_method_inline(method.clone(), generics);
         *self.original_ip = saved_ip;
         *self.original_stack_height = saved_height;
-        // A synchronous target can finish, advance this frame's IP itself and then yield so the
-        // executor can collect. That is completion, not a request to retry: replaying
-        // the call would repeat its effects and trip the caller-IP check on the next turn.
-        let completed_yield = matches!(result, StepResult::Yield)
-            && self.frame_stack.len() == depth
-            && self.state().ip != ip_before;
-        let result = if completed_yield {
-            self.frame_stack.state_mut().ip = ip_before;
-            StepResult::Continue
-        } else {
-            result
-        };
         match result {
             StepResult::FramePushed if self.frame_stack.len() == depth + 1 => {
                 let child = self.frame_stack.current_frame_mut();
@@ -2317,7 +2305,6 @@ impl<'gc> VesContext<'_, 'gc> {
                     dotnet_vm_data::NativeReturnDestination { id, generation },
                     value,
                 ) {
-                    Ok(()) if completed_yield => StepResult::Yield,
                     Ok(()) => StepResult::Continue,
                     Err(error) => StepResult::Error(error),
                 }

@@ -1,6 +1,6 @@
 # Retire legacy continuations and move suspending intrinsics to effects
 
-**Status:** In progress
+**Status:** Complete (one deliberately kept continuation; see "Kept")
 **Outcome:** Every intrinsic that blocks, retries or yields for a GC safepoint is an async
 body, and the guest-visible dispatch routes that still push `MulticastState` or
 `FrameReturnAction::InvokeReturn` frames use effects. Each legacy mechanism either is deleted
@@ -440,6 +440,24 @@ exclusions. Slice 3 then removed the reflection continuation; the remaining orde
 8. **Cleanup.** `grep` every item in the Problem table; remove leftovers; update the README
    "Fallback continuations" and "Legacy static-initialization triggers" entries and plan 08's
    residual-callers text.
+   - Complete. Removed: `VmContinuation::RetryInstruction` and its clearing in `run_inner` (nothing
+     set it after slice 7); the `completed_yield` handling in `dispatch_pending_native_call` and
+     the caller-IP comparison in `handle_multicast_step` (`GC.Collect` was the only target that
+     advanced the IP and then yielded; `rg 'increment_ip'` next to a `Yield` finds none); the
+     `VesInternals::back_up_ip` trait method and impl (no callers); the stale doc sections on
+     `RetryInstruction`/`FrameReturnAction` in `GC_AND_MEMORY_SAFETY.md`. Plan 08, plan 13,
+     `DELEGATES_AND_DISPATCH.md` and the README were updated to match.
+   - Verified still live: `MulticastState::retrying_initializer` (set in `handle_multicast_step`
+     when a retained fallback target starts a type initializer; read on the next step) and the
+     synchronous-yield retry (`Yield` at the same depth) for reflection `MakeGenericType` and
+     `GetGenericArguments`, `newarr` and `InitializerResume::Retry`.
+   - Not changed, needs a benchmark: `ExecutionState::original_ip`/`original_stack_height` are
+     now write-only (`back_up_ip` was their only reader). `step_normal` still stores both on every
+     instruction, and the save/restore around dispatch exists only to feed them. Deleting them
+     touches the hot path that the "Inlining hazard" note above shows is layout-sensitive, so it
+     is left for a measured follow-up.
+   - Fixed the `VmEffects::collect` doc comment (slice 5 review note): it resumes after one turn,
+     and the request stays pending if the coordinator is busy.
 
 ## Done when
 

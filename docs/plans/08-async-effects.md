@@ -4,8 +4,9 @@
 **Outcome:** `String.Substring`, admitted multicast delegate invocation, reflection `Invoke`, static
 field initialization, `GC.WaitForPendingFinalizers` and `Monitor.Enter` run as async native
 bodies in both configurations for admitted shapes. Their existing fixtures pass. The bespoke
-mechanisms they replace are deleted, except the scoped multicast continuation, reflection return
-handling, legacy static-initializer triggers and timed monitor retry described below.
+mechanisms they replace are deleted, except the scoped multicast continuation for excluded
+shapes. Reflection return handling, the legacy static-initializer triggers and timed monitor
+retry were retired by [plan 16](16-retire-legacy-continuations.md).
 
 Builds on the explicit Substring continuation ([plan 04](04-native-continuations.md)) and keeps
 its scheduling and rooting contract. Detailed notes for slices 2–5 are in
@@ -18,7 +19,7 @@ Native operations that cross GC safepoints, re-enter managed code or wait need a
 and scheduling contract. The consumers use native effects for admitted calls in both ST and MT:
 Substring's bounded copy, multicast target calls, reflection invocation, static field
 initialization, finalizer waiting and monitor acquisition. The synchronous and continuation
-fallbacks below preserve excluded call shapes and initialization triggers.
+fallback below preserves excluded multicast call shapes (plan 16 retired the others).
 
 ## Scope
 
@@ -61,7 +62,7 @@ Out:
   continuation, not permission to transport excluded pointers or reject previously supported
   invocations. The fallback is `invoke_delegate` → `MulticastState` → `handle_multicast_step`;
   single-target dispatch does not use it. The slice note defines admission and verification.
-- **Reflection fallback (2026-11-06).** Keep and correct the existing return continuation only
+- **Reflection fallback (2026-11-06; removed by plan 16 slice 3).** Keep and correct the existing return continuation only
   for reflection calls excluded from effects, including non-inline dispatch. Plan 13 routes
   tail-prefixed intrinsic calls inline; supported reflection shapes use transparent effects there.
   The slice 3 note defines the fallback's lifetime,
@@ -71,14 +72,15 @@ Out:
   `ConstructorInfo.Invoke` overloads in `runtime_method_info_intrinsic_call`, and the fallback
   for `Activator.CreateInstance(Type, object[])` in `intrinsic_activator_create_instance_type_args`.
   The existing early rejection of unsupported declared byref returns remains.
-- **Monitor timeout fallback (2026-11-07).** For timed monitor calls excluded from effects,
+- **Monitor timeout fallback (2026-11-07; removed by plan 16 slice 5b).** For timed monitor calls excluded from effects,
   use a frame-associated retry deadline rather than the shared host-thread-local deadline.
   Admitted calls retain activation-owned deadlines. The slice 5 note specifies the record's
   lifetime, cleanup and verification; pointer admission and monitor ownership are unchanged.
 - **Static initialization** uses the capturing `try_call` for field instructions. The
   CLR-diffed `statics/cctor_filter_42.cs` shape observes a `TypeInitializationException` in its
   filter; see the [slice 4 note](08-async-effects/slice-4-static-initialization.md) for scope.
-  The scoped legacy triggers—`newobj`, eligible method dispatch through
+  Plan 16 slice 7 replaced the scoped legacy triggers with one effects path
+  (`initialize_type_then`) and deleted the retry and unwind-time wrapping. They were `newobj`, eligible method dispatch through
   `prepare_method_initialization`, and `RuntimeHelpers.RunClassConstructor`—retain retry and
   unwind-time wrapping. The [static initialization note](08-async-effects/slice-4-static-initialization.md)
   specifies their timing and operand contracts.
@@ -327,8 +329,9 @@ commitment, and checks declared byref returns before any side effect.
 5. **`WaitForPendingFinalizers`, then `Monitor.Enter`,** through one condition-wait protocol.
 
 Each slice ends with its consumer on the new path for admitted shapes and its tests enabled.
-The four scoped legacy paths are the multicast continuation, reflection return handling, legacy
-static-initializer triggers and timed monitor retries. Add facade operations only when a consumer
+Of the four scoped legacy paths (multicast continuation, reflection return handling, legacy
+static-initializer triggers, timed monitor retries), only the multicast continuation for
+excluded shapes remains after plan 16. Add facade operations only when a consumer
 needs them.
 
 ## Done when
@@ -352,7 +355,8 @@ needs them.
 
 **Slices 2–5:** described in each completed note under `08-async-effects/`. The consumer's
 fixtures pass, CLR comparisons cover applicable exception or filter ordering, and the listed
-bespoke mechanisms are removed except for the four scoped legacy paths above.
+bespoke mechanisms are removed except for the scoped legacy paths above, of which only the
+multicast continuation remains (plan 16).
 
 ## Slice 1 verification
 

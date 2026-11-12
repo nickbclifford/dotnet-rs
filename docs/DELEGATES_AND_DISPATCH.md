@@ -81,11 +81,10 @@ Single delegate invocation:
 Scalars, object references, and supported heap and frame-home byrefs are rooted while
 `multicast_body` calls each resolved target through the transparent call effect. Each target is
 resolved on demand; the last return is published, and exceptions cross the native boundary without
-resuming the body. Calls dispatched through an existing managed caller use a synthetic `Invoke`
-frame for return completion. Single-target delegates remain synchronous.
+resuming the body. Single-target delegates remain synchronous.
 
-Unsupported declared returns, aggregates and pointer origins, including static-field byrefs,
-use `MulticastState`. `ExecutionEngine::handle_multicast_step` retains the original arguments,
+Ref-struct values, byref targets containing managed pointers, byref returns, `TypedReference`
+and `Transient` byrefs (invalid) are excluded; the first four use `MulticastState`. `ExecutionEngine::handle_multicast_step` retains the original arguments,
 discards intermediate returns, and dispatches each target in order. If dispatch starts or waits
 for a type initializer, it rebuilds the pending target call after initialization instead of
 advancing the list. The effects call handler similarly retains a pending target across initialization.

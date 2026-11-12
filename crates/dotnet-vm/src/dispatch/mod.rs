@@ -328,17 +328,6 @@ impl<'gc> ExecutionEngine<'gc> {
         if self.native_runnable() {
             return self.resume_native_effect(gc);
         }
-        // `RetryInstruction` records the reason for the previous safe-point yield. The actual
-        // retry is already encoded in the restored IP/stack snapshot, so clear the marker once the
-        // executor re-enters the VM. Do this outside the batched instruction loop to keep the hot
-        // dispatch path free of continuation polling.
-        if matches!(
-            &self.stack.execution.continuation,
-            dotnet_vm_data::VmContinuation::RetryInstruction
-        ) {
-            self.stack.execution.continuation = dotnet_vm_data::VmContinuation::None;
-        }
-
         loop {
             if self.stack.shared.is_abort_requested() {
                 // Final snapshot before aborting to ensures correct dump in test harness
@@ -521,9 +510,7 @@ impl<'gc> ExecutionEngine<'gc> {
             // A type initializer runs as an effect; this step retries once it completes.
             let initializer = ctx.has_initializer_gate(depth)
                 // Retained synchronous fallbacks retry without advancing the caller.
-                || (matches!(result, StepResult::Yield)
-                    && ctx.frame_stack.len() == depth
-                    && ctx.state().ip == ip_before);
+                || (matches!(result, StepResult::Yield) && ctx.frame_stack.len() == depth);
             if let Some(state) = ctx
                 .frame_stack
                 .frames

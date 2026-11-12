@@ -989,17 +989,6 @@ impl<'a, 'gc> StaticsOps<'gc> for VesContext<'a, 'gc> {
 
 impl<'a, 'gc> VesInternals<'gc> for VesContext<'a, 'gc> {
     #[inline]
-    fn back_up_ip(&mut self) {
-        self.frame_stack.current_frame_mut().state.ip = *self.original_ip;
-        self.evaluation_stack.truncate(*self.original_stack_height);
-        if let Some(frame) = self.frame_stack.current_frame_opt_mut() {
-            frame.stack_height = self
-                .original_stack_height
-                .saturating_sub_idx(frame.base.stack);
-        }
-    }
-
-    #[inline]
     fn branch(&mut self, target: usize) {
         crate::vm_trace_branch!(self, "BR", target, true);
         self.frame_stack.branch(target);

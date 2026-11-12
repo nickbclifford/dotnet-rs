@@ -1244,7 +1244,9 @@ impl VmEffects {
     pub fn invocation(&self) -> NativeInvocation {
         self.invocation
     }
-    /// Request a full collection and resume only after the executor has serviced it.
+    /// Request a full collection and resume after one executor turn. If another thread holds
+    /// the collection coordinator the request stays pending, so the collection may not have run
+    /// when this returns.
     pub async fn collect(&mut self, operand_count: usize) -> NativeResult {
         {
             let mut vm = self.vm().await?;

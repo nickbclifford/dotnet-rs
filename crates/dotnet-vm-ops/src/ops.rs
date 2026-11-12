@@ -552,8 +552,6 @@ pub trait TypeLayoutOps {
 }
 
 pub trait VesInternals<'gc> {
-    /// Restore the instruction snapshot for a legacy static-initialization retry.
-    fn back_up_ip(&mut self);
     fn branch(&mut self, target: usize);
     fn conditional_branch(&mut self, condition: bool, target: usize) -> bool;
     fn increment_ip(&mut self);
