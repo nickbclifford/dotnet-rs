@@ -131,18 +131,34 @@ struct NativeInitializerClaim {
     claim: crate::statics::InitializerClaim,
 }
 
-struct ThreadCompletion(Option<crate::threading::workers::WorkerCompletion>);
+/// `Thread.Start` marks a thread started before it spawns the worker and publishes its
+/// completion, so a concurrent `Join` can arrive between the two. Resolve the completion
+/// again until it is published rather than capturing the absent value once. The key is an
+/// inert registry key, as in the worker registry itself; it is never dereferenced.
+struct ThreadCompletion {
+    shared: std::sync::Arc<crate::state::SharedGlobalState>,
+    thread: dotnet_value::object::ObjectPtr,
+    completion: std::cell::OnceCell<crate::threading::workers::WorkerCompletion>,
+}
+
+impl ThreadCompletion {
+    fn completion(&self) -> Option<&crate::threading::workers::WorkerCompletion> {
+        if let Some(completion) = self.completion.get() {
+            return Some(completion);
+        }
+        let completion = self.shared.workers.managed_completion(self.thread)?;
+        Some(self.completion.get_or_init(|| completion))
+    }
+}
 
 impl dotnet_vm_ops::effects::NativeThreadCompletion for ThreadCompletion {
     fn finished(&self) -> bool {
-        self.0
-            .as_ref()
+        self.completion()
             .is_some_and(|completion| completion.is_finished())
     }
     fn outcome(&self) -> Result<(), String> {
         match self
-            .0
-            .as_ref()
+            .completion()
             .and_then(|completion| completion.take_outcome())
         {
             None | Some(Ok(crate::ExecutorResult::Exited(_))) => Ok(()),
@@ -156,7 +172,7 @@ impl dotnet_vm_ops::effects::NativeThreadCompletion for ThreadCompletion {
         }
     }
     fn sleeper(&self) -> Box<dyn dotnet_vm_ops::effects::NativeInitSleeper> {
-        Box::new(ThreadCompletionSleeper(self.0.clone()))
+        Box::new(ThreadCompletionSleeper(self.completion().cloned()))
     }
 }
 struct ThreadCompletionSleeper(Option<crate::threading::workers::WorkerCompletion>);
@@ -165,7 +181,8 @@ impl dotnet_vm_ops::effects::NativeInitSleeper for ThreadCompletionSleeper {
         if let Some(completion) = &self.0 {
             completion.wait(duration);
         } else {
-            std::thread::sleep(duration);
+            // Not yet published: poll briefly so the next readiness check resolves it.
+            std::thread::sleep(duration.min(std::time::Duration::from_millis(1)));
         }
     }
 }
@@ -379,8 +396,16 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
         if completion.is_none() && !started {
             return Ok(dotnet_vm_ops::effects::NativeThreadJoin::Unstarted);
         }
+        let resolved = std::cell::OnceCell::new();
+        if let Some(completion) = completion {
+            let _ = resolved.set(completion);
+        }
         Ok(dotnet_vm_ops::effects::NativeThreadJoin::Waiting(Box::new(
-            ThreadCompletion(completion),
+            ThreadCompletion {
+                shared: std::sync::Arc::clone(self.context.shared),
+                thread: ptr,
+                completion: resolved,
+            },
         )))
     }
     fn active_scope_depth(&self) -> usize {

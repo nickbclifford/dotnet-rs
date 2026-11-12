@@ -22,7 +22,7 @@ state on the caller's frame:
 | `MulticastState` on `StackFrame` (+ `handle_multicast_step`, `dispatch/mod.rs`; `call_ops_impl.rs:1090`, `context.rs:464`) | multicast `Invoke` shapes that `try_start_multicast` (`native_effects.rs`) declines; a native multicast body (`multicast_body`) already serves the rest |
 | `FrameReturnAction::InvokeReturn` + `apply_frame_return_actions` + `reflection_pending` | reflection `Invoke`/`CreateInstance` fallbacks for shapes `invoke_select`/`activator_select` decline; `run_reflection_call` already serves the rest |
 | Reflection retry test seam | `reflection_retry_completed_collection_does_not_retry` drives a `GC.Collect` target through the legacy continuation |
-| `StackFrame::monitor_retry` + `monitor_retry_deadline`/`monitor_clear_retry` | timed byref `Monitor` fallbacks (Transient/Unmanaged `bool&`) and `Thread.Join(int)` |
+| `StackFrame::monitor_retry` + `monitor_retry_deadline`/`monitor_clear_retry` | timed byref `Monitor` fallbacks (Transient/Unmanaged `bool&`) and `Thread.Join(int)` (Join removed in slice 5) |
 | `NativeDispatchMode::Other` + `fallback =` registration | the residual callers in plan 13 |
 | `prepare_method_initialization`, `newobj` and `RunClassConstructor` initialization | legacy static-init triggers (README "Legacy static-initialization triggers") |
 
@@ -77,13 +77,13 @@ Checked against the code on `main`. "Reachable" means a valid guest program can 
 | `cpblk`/`initblk` instruction yields | **Fix, then decide** | These are instructions, not intrinsics, but share `chunked_copy_with_safe_point` and its restart-from-zero overlap hazard. At minimum keep progress across the yield; whether they become effects is decided with the `mem_helpers` family. |
 | Multicast `Invoke` (`MulticastState`) | **Keep for excluded shapes** | Ref-structs, byref returns, `TypedReference` and unsupported byref origins remain excluded; see "Kept". The `retrying_initializer` flag goes with the static-init slice. |
 | Reflection `InvokeReturn` / `reflection_pending` | **Removed (slice 3)** | Every remaining declined shape was byref-like, which the CLR refuses with `NotSupportedException` before the target runs; the body now raises that, and Activator's binding and default-value cases. Byref write-back after a throw and ambiguous-match "first best match" remain README deviations. |
-| Monitor byref `Transient` / `Unmanaged` fallback | **Kept (slice 5)** | Both unsupported origins retain the existing fallback; see "Kept". The CLR rejects the probed stack-value `ldflda` route. |
+| Monitor byref `Transient` / `Unmanaged` fallback | **Remove (slice 5b)** | Slice 5 kept both, but its own probe shows the only `Transient bool&` candidate (`ldflda` on a struct value on the evaluation stack) is invalid IL: ECMA-335 §III.4.11 allows only an object, managed pointer or unmanaged pointer as `ldflda`'s operand (unlike `ldfld`, not a value-type instance), and the CLR rejects it with `InvalidProgramException`. That leaves `Unmanaged`, which is cheap to admit as a byref origin (no new hazard; see slice 5b). |
 | `newobj` of an intrinsic constructor (formerly `execute_intrinsic_call`) | **Removed (slice 4)** | Completion (`complete_constructor_receiver`) can be the activation's completion action, as `Jump` is for inline calls. Intrinsic constructors **do** suspend: `String::.ctor(char[])`, `.ctor(char, int)`, `.ctor(ReadOnlySpan<char>)` and `.ctor(char*)` yield at safepoints (`constructors.rs`). `newobj` now dispatches intrinsic constructors in `NativeDispatchMode::Constructor`, so an async constructor body can suspend and the value-type receiver is completed only on success. The synchronous string constructors still return their safepoint `Yield` and re-allocate on retry until slice 6 converts them; that slice should add a managed-exception case showing the receiver is not published. |
 | `.cctor` dispatch, span equality slow path, `Expression.Compile` redirect | **Keep** | They dispatch managed bodies, never intrinsics; `Other` is correct for them. |
 | `ExecutionEngine::unified_dispatch`/`dispatch_method` public APIs (`ResolvedMethodDispatchMode::ExecutionEngineApi`) | **Removed (slice 4)** | Plan 13 kept them as a host entry contract, but no production code calls them: the only callers are `condition_wait_tests.rs` and `native_substring_tests.rs`. `ExecutionEngineApi` sends intrinsics straight to `intrinsic_call`, i.e. the sync handler, so every async-only intrinsic is unreachable through them. Delete both APIs, `dispatch_resolved_method_for_engine_api`, `unified_dispatch_for_engine_api` and the `ExecutionEngineApi` mode; port those tests to drive guest IL or the inline path. |
 | Legacy static-init (`newobj`, `prepare_method_initialization`, `RunClassConstructor`) | **Remove last** | Highest risk: three triggers with different operand contracts, `retrying_initializer`, `initializer_claim` on frames, legacy condvar `wait_for_init`, and the late wrapping that differs from the field path. Do it only after dispatch is inline everywhere, so one `ensure_initialized` effect can serve all callers. |
 | Substring valid-small fast path | **Keep** | Measured in plan 13. |
-| `monitor_retry` frame field | **Remove if** the Unmanaged/Transient decision leaves no timed byref fallback; otherwise it stays for exactly that. |
+| `monitor_retry` frame field | **Remove (slice 5b)** | Its only remaining users are the timed byref Monitor fallbacks. |
 
 ## Scope
 
@@ -270,6 +270,50 @@ exclusions. Slice 3 then removed the reflection continuation; the remaining orde
      Source search finds no `threading_join_managed_thread`, `intrinsic_thread_join`,
      `intrinsic_gc_collect`, or `intrinsic_monitor_try_enter_fast_path`; `monitor_enter_safe`
      remains only for the retained byref Monitor fallback.
+   - Review fix: `Start` marks a thread started before it publishes the worker completion, so a
+     `Join` in that window captured an absent completion and waited forever. The completion
+     handle now resolves the completion again until it is published
+     (`managed_join_resolves_completion_published_after_start`, which fails without the fix).
+   - Review notes for slice 8: `GC.Collect` was the only synchronous target that advanced the
+     caller's IP and then yielded, so the `completed_yield` handling in
+     `dispatch_pending_native_call` and the IP comparison in `handle_multicast_step` look dead;
+     confirm and remove. `VmEffects::collect` resumes after one yield even when another thread
+     holds the collection coordinator; the request stays pending, so fix the doc comment (or
+     loop) rather than claim the collection has run.
+5b. **Retire the byref Monitor fallbacks.** Admit `Unmanaged` as a byref origin and treat
+   `Transient` as an invalid program, then delete the fallbacks slice 5 kept.
+   - Admit `Unmanaged` as a byref **argument origin** in native transport (`stash` and its
+     reconstruction) and in the multicast byref check (`try_start_multicast`), under the same
+     target-type rule as the other origins (no managed pointers in the target type). The
+     address is not traced; rooting is a no-op and reconstruction yields the same address. This
+     is the same unchecked trust the legacy retry already places in the raw address
+     (`F10.RawMemoryAccessValid`); write that justification at the admission site. Do not admit
+     `Unmanaged` or `Transient` pointers stored in ref-struct fields: ref structs stay excluded
+     by type, so the scope-creep guard above still holds.
+   - `Transient` byref operands decline in the selectors before any operand is consumed and
+     raise `System.InvalidProgramException` ("Common Language Runtime detected an invalid
+     program."), matching the CLR's verdict on the only known producer. If a managed exception
+     cannot be raised before commitment, raise it from the body before any side effect and say
+     so in the slice notes. Before deleting anything, recheck every `PointerOrigin::Transient`
+     construction site for a producer reachable from valid IL; if one exists, stop and ask.
+   - Delete `fallback =` from the five byref registrations (`ReliableEnter`, `Enter(object,
+     bool&)`, `TryEnter(object, int, bool&)`, `ReliableEnterTimeout`,
+     `TryEnter_FastPath_WithTimeout`), the sync handlers `intrinsic_monitor_reliable_enter` and
+     `intrinsic_monitor_try_enter_timeout_ref`, `monitor_enter_safe` (and the timeout variant if
+     unused), `monitor_retry_deadline`, `monitor_clear_retry`, `MonitorRetry`,
+     `StackFrame::monitor_retry` and all its resets (`executor.rs`, `dispatch/mod.rs` x3,
+     `exception_ops_impl.rs` x2, `context.rs`, `stack.rs`), and any `MonitorHost` method left
+     unused. Update the `StackFrame` layout guard (`layout_sizes.rs`) and its comment.
+   - Tests: port `monitor_legacy_unmanaged_timeout_retains_deadline_across_stop` to the native
+     path (an `Unmanaged` flag, a timed enter that waits across a real collection, and the flag
+     written exactly once on success and left false on timeout); a native multicast `ref bool`
+     delegate over an unmanaged flag in ST and MT; a `Transient` selection test showing no
+     operand is consumed and `InvalidProgramException` is raised; flip the unmanaged-byref case
+     in `multicast_selection_precedes_operand_commitment` from excluded to admitted, keeping its
+     CLR differential fixture green; change `blocking_intrinsics_have_no_sync_fallback` so the
+     byref overloads must have no fallback. Existing monitor, `lock` and threading fixtures in
+     ST and `multithreading`.
+   - Benchmark: not required; no hot path changes. Confirm `StackFrame` shrinks.
 6. **Bulk intrinsics.** `mem_helpers`/`buffer` first (correctness), then string, then span
    equality, one family per commit, each gated on a benchmark comparison against the parent
    commit. `cpblk`/`initblk` keep progress across the yield even if they stay instructions.
@@ -302,7 +346,7 @@ exclusions. Slice 3 then removed the reflection continuation; the remaining orde
 | Item | Reason | Test that fails if the reason stops being true |
 |---|---|---|
 | `MulticastState`, its step/return/tail-call checks, and initializer retry | Ref-struct values or byref targets containing managed pointers, byref returns, `TypedReference`, and byrefs with origins other than non-null heap, frame home, static or MT cross-arena object cannot use native transport. Unresolvable or mismatched shapes also decline. | `multicast_selection_precedes_operand_commitment` checks the ref-struct value, byref target, byref return, `TypedReference` and unmanaged byref exclusions; their CLR differential fixtures check execution. Transient byrefs have no known guest producer (slice 5). |
-| Monitor byref fallbacks, `monitor_retry`, and their `MonitorHost` methods | `Transient` and `Unmanaged` pointers are not admitted by native transport; both retain the existing synchronous retry path. | `monitor_legacy_unmanaged_timeout_retains_deadline_across_stop` and the selection tests exercise the fallback; `monitor_transient_stack_value_il_is_rejected_by_clr` probes the stack-value candidate. |
+| Monitor byref fallbacks, `monitor_retry`, and their `MonitorHost` methods (until slice 5b) | `Transient` and `Unmanaged` pointers are not admitted by native transport; both retain the existing synchronous retry path. Slice 5b removes this row. | `monitor_legacy_unmanaged_timeout_retains_deadline_across_stop` and the selection tests exercise the fallback; `monitor_transient_stack_value_il_is_rejected_by_clr` probes the stack-value candidate. |
 
 ## Ask the maintainer only if
 

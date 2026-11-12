@@ -6344,6 +6344,77 @@ fn managed_join_returns_before_native_worker_exits() {
     );
 }
 
+/// `Thread.Start` marks the thread started before publishing its worker completion. A Join
+/// in that window must pick up the completion once it is published rather than wait forever.
+#[cfg(feature = "multithreading")]
+#[test]
+fn managed_join_resolves_completion_published_after_start() {
+    use dotnet_vm_ops::effects::{NativeDispatchMode, NativeIntrinsicHost};
+    use std::time::Duration;
+
+    let mut executor = executor();
+    let method = test_constructor_method(&executor);
+    boundary_start(&mut executor);
+    let shared = executor.shared.clone();
+    let metadata = |completion_index| crate::threading::workers::ManagedThreadMetadata {
+        id: 1,
+        delegate: None,
+        parameterized: false,
+        started: true,
+        background: false,
+        completion_index,
+        retained: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+    };
+    let (first, ptr) = executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: F1.GcHandleRooted — this engine is the live root throughout the mutation.
+                let gc = unsafe { test_gc_handle(gc, engine) };
+                let thread = ObjectRef::new(gc, HeapStorage::Str(CLRString::new(vec![])));
+                let ptr = thread.as_ptr().unwrap();
+                engine
+                    .stack
+                    .shared
+                    .workers
+                    .register_managed_thread(ptr, metadata(None));
+                let mut ctx = engine.ves_context(gc);
+                ctx.push(StackValue::ObjectRef(thread));
+                let result = ctx.start_native(
+                    method,
+                    NativeDispatchMode::InlineCall,
+                    &Default::default(),
+                    None,
+                    None,
+                    |fx| Box::pin(dotnet_intrinsics_threading::thread::thread_join(fx)),
+                );
+                (result, ptr)
+            })
+        })
+        .unwrap();
+    assert_eq!(
+        first,
+        StepResult::Yield,
+        "Join completed before the thread was published"
+    );
+    let completion = shared.workers.spawn_owner(|running| {
+        running.complete(ExecutorResult::Exited(0)).retire();
+    });
+    shared
+        .workers
+        .register_managed_thread(ptr, metadata(Some(completion.index())));
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !completion.is_finished() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "worker did not finish"
+        );
+        std::thread::yield_now();
+    }
+    assert_eq!(resume(&mut executor), StepResult::Continue);
+    drop(executor);
+    shared.shutdown_workers();
+}
+
 #[path = "native_return_tests.rs"]
 mod native_return_tests;
 
