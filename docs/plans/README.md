@@ -156,9 +156,6 @@ Evidence and IDs (p01…, R01…) are defined in the
   twice during full parallel `dotnet-cli` integration runs on 2026-11-11 (once single-threaded,
   once during plan 16 slice 4 validation) and passed every isolated and repeated run. The
   failure message was not captured; reproduce under load and record it before diagnosing.
-- **Reflection race witness:** `invoke_argument_race_42` uses bounded concurrent churn, so the
-  CLR can finish without observing the intended `ArgumentException` and its differential sanity
-  check can fail despite correct execution.
 - **Other missing or incorrect runtime behavior:**
   - Empty strings have no shared identity: `string.Empty` allocates on every load
     (`intrinsic_field_string_empty`), so `ReferenceEquals(string.Empty, string.Empty)` and
