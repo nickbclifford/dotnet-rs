@@ -1,6 +1,6 @@
 # Shared GC handles and a dedicated finalizer thread
 
-**Status:** In progress — slices 1–7 complete; final acceptance evidence pending
+**Status:** Complete — slices 1–7 and the Loom, Miri and single-threaded-cost acceptance evidence (below); two open findings recorded in the plans README
 **Outcome:** Under `multithreading`, finalizers run on one background finalizer thread with its own
 identity, GC handles are readable from any thread, and the process exits without waiting for
 finalizers; the GC fixtures listed under each slice match `dotnet` through the diff harness.
@@ -196,14 +196,61 @@ Fixed during review:
   (`heap.rs`, failing no-features clippy). The CI clippy matrix (`xtask matrix clippy-features`,
   plus release) and `scripts/check_doc_drift.sh` now pass.
 
-Still open before Complete (see "Done when"):
-- **Loom.** `finalizer_handoff_remains_rooted_while_worker_is_parked` models the handoff with a
-  generic mutex and channels; no model drives the production f-reachable queue or
-  `SharedGcHandles`.
-- **Miri.** No `miri-cross-arena` shard exercises the shared handle table or the finalizer queue.
-- **Single-threaded cost.** The slice 3a benchmark below does not exercise handle operations, so
-  the "measurable cost" trigger in "Ask the maintainer" is unanswered. Measure `GCHandle`
-  alloc/get/free and `ConditionalWeakTable` lookups before and after 03cb031d.
+Closed after the review (2026-11-13, evidence below): Loom, Miri and single-threaded cost.
+
+## Loom and Miri evidence (2026-11-13)
+
+**Loom.** `crates/dotnet-runtime-memory/tests/loom_shared_tables.rs` drives the production
+`SharedGcHandles` and `Finalizers` (compiled verbatim from `dotnet-vm/src/finalizers.rs` with
+`#[path]`, because `dotnet-vm` itself does not compile under `cfg(loom)` with `multithreading`;
+`dotnet-runtime-memory` does). Run by the `loom` CI job:
+
+```bash
+RUSTFLAGS="--cfg loom" cargo nextest run -p dotnet-runtime-memory --test loom_shared_tables --features multithreading
+```
+
+- `shared_handles_publish_and_clear_by_owner_partition`: two arenas on two loom threads allocate,
+  retarget, free and re-allocate slots concurrently, one thread publishes a weak handle to the
+  other's object, then each owner marks and runs `clear_dead`. Dead weak targets are cleared,
+  strong-handle targets survive, and a non-owner never clears a foreign live target.
+- `finalizer_queue_roots_claimed_and_pending_objects_while_worker_is_parked`: the finalizer thread
+  claims and parks mid-call at a safepoint while the owner requests stop-the-world and collects;
+  every entry not yet completed (queued and `active`) is asserted not dead. Removing `active` from
+  `Finalizers::trace` makes it fail.
+- Preemption bound 3 (about 14 s). Limits: loom does not track gc-arena mark colors, so reads of a
+  foreign arena's colors are not detected as races (disabling the owner filter in `clear_dead`
+  is not caught); the stop-the-world handshake itself is still modeled in `loom_stw.rs`.
+- Loom needed two `cfg(loom)` changes in `dotnet_utils::sync`: loom threads share one OS thread,
+  so `MANAGED_THREAD_ID` is loom thread-local, and the loom `RwLock::data_ptr` is lock-free (it
+  used to take a write lock, which invented a deadlock between `owner_id()` reads and tracing).
+
+**Miri** (`nightly-2026-05-27`, `-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks`,
+multithreading, `--exact --test-threads=1`). The existing `vm-collection` and foreign-source shards
+already exercise the handle table as a survival witness; they never touch dependent handles or
+the shared f-reachable queue (the queue is used only after `finalizer_started`). Three new
+`vm-native` shards, all passing:
+
+| Shard | Selector | Test time |
+|---|---|---|
+| `foreign-weak-handle` | `executor::native_substring_tests::foreign_short_weak_handle_clears_before_the_owner_finalizes` | 35 s |
+| `dependent-handles` | `executor::executor_collection_tests::dependent_handle_chain_survives_and_clears` | 37 s |
+| `finalizer-thread` | `executor::native_substring_tests::condition_wait_tests::dedicated_finalizer_thread_claims_runs_and_completes_collected_finalizer` | 36 s |
+
+The last test is new: no existing `dotnet-vm` unit test started the finalizer thread, so
+`Finalizers::claim`/`complete` ran only in the CLI fixtures. It enqueues through a real collection,
+the worker claims in its own arena, runs `Finalize` and completes.
+
+**Open finding (not fixed, outside this slice).** A collection requested immediately after
+`Executor::start_finalizer_thread` hangs in about half of runs (8 of 15 in a loop) until the worker
+thread has registered with the thread manager; with a registration wait, 25 of 25 runs pass. The
+new test waits for `thread_count() >= 2`. `run_entrypoint` has the same ordering, so an
+allocation-triggered collection at the start of an entry point may be exposed. Needs a startup
+handshake or a coordinator that tolerates an unregistered worker; this changes thread-start
+semantics, so it is left to the maintainer.
+
+**Open finding (pre-existing, not plan 20).** Adding a ninth entry to a `ConditionalWeakTable`
+(`Keys = 9` in the benchmark fixture) crashes the VM with SIGSEGV, in debug and optimized builds,
+single-threaded and multithreaded, at 03cb031d and at HEAD. Eight entries work.
 
 ## Slice 3a benchmark
 
@@ -212,3 +259,28 @@ shared-table change (10 samples, one-second warmup and measurement). The stack b
 measured 18.21 ns before and 17.46 ns after; vector tracing measured 1.6605 ns before and
 1.6618 ns after. Neither benchmark exercises GC-handle operations directly, so these numbers
 do not establish their cost.
+
+## Single-threaded cost of the shared table (2026-11-13)
+
+Fixtures `crates/dotnet-benchmarks/fixtures/gc_handles/` (`gc_handle_ops`: 20,000 x
+`GCHandle.Alloc`, two `Target` reads, one `Target` set, `Free`; `weak_reference_get`: 20,000
+`WeakReference.Target` reads; `conditional_weak_table_ops`: 8 `Add`s and 20,000 `TryGetValue`s),
+registered in `dotnet-benchmarks` as `end_to_end` cases. Baseline: a git worktree at 03cb031d with
+the same fixtures and bench registration applied; HEAD is the working tree at 6d5cb548 plus this
+change. Commands, pinned to cores 12-15, run alternately twice per side:
+
+```bash
+CARGO_TARGET_DIR=<dir> taskset -c 12-15 cargo bench --profile bench-thin -p dotnet-benchmarks \
+  --no-default-features --bench end_to_end -- 'gc_handle_ops|weak_reference_get|conditional_weak_table_ops' \
+  --sample-size 30 --warm-up-time 2 --measurement-time 5
+```
+
+| Case | 03cb031d run 1 / run 2 | HEAD run 1 / run 2 |
+|---|---|---|
+| `gc_handle_ops` | 462.6 / 466.0 ms | 460.7 / 464.3 ms |
+| `weak_reference_get` | 81.3 / 80.8 ms | 80.1 / 81.0 ms |
+| `conditional_weak_table_ops` | 752.8 / 749.8 ms | 744.1 / 740.0 ms |
+
+HEAD is not slower: it is 0.4-1.3 percent faster, inside run-to-run spread. The "Ask the
+maintainer" trigger on single-threaded cost is not met. Per handle operation the cost is about
+23 microseconds per loop iteration, dominated by interpretation, not the table lock.

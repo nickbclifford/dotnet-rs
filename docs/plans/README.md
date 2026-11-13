@@ -12,7 +12,7 @@ In priority order. Each plan's own `Status:` line is the only record of its stat
 |---|---|---|
 | 18 | [Managed API gaps against the CLR](18-managed-api-clr-gaps.md) | Complete; Newtonsoft and EF host rungs match `dotnet` |
 | 19 | [Reflection invocation matches the CLR](19-reflection-invoke-clr-parity.md) | Complete; wrapping, byref returns, success-only copy-back and ambiguity match the CLR |
-| 20 | [Shared GC handles and a dedicated finalizer thread](20-gc-handles-and-finalizer-thread.md) | Shared handles, cross-arena resurrection and finalizer scheduling |
+| 20 | [Shared GC handles and a dedicated finalizer thread](20-gc-handles-and-finalizer-thread.md) | Complete; shared handle table, cross-arena resurrection and the dedicated finalizer thread |
 | 17 | [Inspection-driven code quality refactor](17-inspection-quality-refactor.md) | Ordered semantic, readability and dependency slices with an inspection ledger |
 | 16 | [Retire legacy continuations and move suspending intrinsics to effects](16-retire-legacy-continuations.md) | Complete (slices 1–8); the multicast continuation for excluded shapes is deliberately kept |
 | 15 | [CoreLib `Task` and the thread pool](15-corelib-task-and-thread-pool.md) | CoreLib tasks/resources, capped background pool workers, unnamed events and managed timers are active |
@@ -112,6 +112,11 @@ Evidence and IDs (p01…, R01…) are defined in the
   legacy continuation (reflection return, monitor retry, static-init retry, yield-retry
   intrinsics, `VmContinuation::RetryInstruction`). Substring retains
   its measured valid-small fast path ([plan 13](13-async-intrinsic-api.md#substring-fast-path-measurement)).
+- **Finalizer thread start race:** a collection requested before the dedicated finalizer thread
+  has registered with the thread manager hangs in about half of runs (see plan 20, "Loom and Miri
+  evidence"). `run_entrypoint` starts the thread without a registration handshake.
+- **`ConditionalWeakTable` growth crash:** adding a ninth entry crashes the VM with SIGSEGV in
+  every configuration (plan 20, "Loom and Miri evidence"); the benchmark fixture stays at eight.
 - **Single-threaded finalizer identity:** without `multithreading`, finalizers run on the
   interrupted managed context and share its thread identity, including monitor and initializer ownership.
 - **Negative and wide managed-pointer offsets:** `ManagedPtr` stores a compact unsigned offset,
@@ -170,6 +175,10 @@ Evidence and IDs (p01…, R01…) are defined in the
     error`) is needed first.
 - **Loom model coverage:** the hand-written `loom_stw.rs` model does not compile the production
   `WorkerRegistry` and does not cover every stop-the-world, retirement or shutdown interleaving.
+  `dotnet-vm` does not compile under `cfg(loom)` with `multithreading`, so only
+  `dotnet-runtime-memory/tests/loom_shared_tables.rs` drives production types (`SharedGcHandles`,
+  `Finalizers`). It does not model the owner-partition color reads as data races: loom does not
+  track gc-arena's mark colors.
 
 ## Writing a plan
 
