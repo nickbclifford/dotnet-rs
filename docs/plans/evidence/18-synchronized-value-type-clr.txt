@@ -1,0 +1,25 @@
+CLR probe: .NET SDK 10.0.114, Microsoft.NETCore.App 10.0 (Linux)
+
+A net10.0 console project with the following Program.cs was run with dotnet run.
+NoInlining keeps the exception catchable outside the method that loads each type.
+
+using System;
+using System.Runtime.CompilerServices;
+using System.Threading;
+struct InstanceProbe { [MethodImpl(MethodImplOptions.Synchronized)] public void Run() {} }
+struct StaticProbe { [MethodImpl(MethodImplOptions.Synchronized)] public static bool Held() => Monitor.IsEntered(typeof(StaticProbe)); }
+class Program {
+    [MethodImpl(MethodImplOptions.NoInlining)] static void Instance() { var p = new InstanceProbe(); p.Run(); }
+    [MethodImpl(MethodImplOptions.NoInlining)] static void Static() { Console.WriteLine("static held: " + StaticProbe.Held()); }
+    [MethodImpl(MethodImplOptions.NoInlining)] static void Load() { Console.WriteLine(typeof(InstanceProbe)); }
+    static void Main() {
+        try { Load(); } catch (Exception e) { Console.WriteLine("load: " + e.GetType().Name + ": " + e.Message); }
+        try { Instance(); } catch (Exception e) { Console.WriteLine("instance: " + e.GetType().Name + ": " + e.Message); }
+        try { Static(); } catch (Exception e) { Console.WriteLine("static: " + e.GetType().Name + ": " + e.Message); }
+    }
+}
+
+Output:
+load: TypeLoadException: Synchronized Method in Value Type.
+instance: TypeLoadException: Synchronized Method in Value Type.
+static: TypeLoadException: Synchronized Method in Value Type.

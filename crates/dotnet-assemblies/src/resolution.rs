@@ -302,6 +302,26 @@ impl AssemblyLoader {
             UserType::Reference(r) => self.locate_type_ref(resolution, r)?,
         };
 
+        // The CLR rejects the type itself, even when the synchronized method is static or
+        // never called. Value types and enums directly extend these two CoreLib types.
+        if result
+            .definition()
+            .methods
+            .iter()
+            .any(|method| method.synchronized)
+            && result.definition().extends.as_ref().is_some_and(|base| {
+                let parent = match base {
+                    TypeSource::User(parent) | TypeSource::Generic { base: parent, .. } => parent,
+                };
+                matches!(
+                    parent.type_name(result.resolution.definition()).as_str(),
+                    "System.ValueType" | "System.Enum"
+                )
+            })
+        {
+            return Err(TypeResolutionError::SynchronizedValueType);
+        }
+
         self.type_cache.insert(key, result.clone());
         Ok(result)
     }

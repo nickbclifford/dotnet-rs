@@ -1,6 +1,6 @@
 # Managed API gaps against the CLR
 
-**Status:** Slices 1 and 2 implemented; Newtonsoft exposes a subsequent runtime-type gap (see `evidence/18-array-casts-host-rungs.txt`).
+**Status:** Slices 1–3 implemented; Newtonsoft exposes a subsequent runtime-type gap (see `evidence/18-array-casts-host-rungs.txt`).
 **Outcome:** The Newtonsoft host rung matches `dotnet` again, and new diff fixtures for array
 casts, delegate invocation lists, `Synchronized` value-type methods, `Type`/`Object.ToString` and
 `Type.IsByRefLike` match `dotnet` in ST and MT.
@@ -25,9 +25,8 @@ casts, delegate invocation lists, `Synchronized` value-type methods, `Type`/`Obj
   only `MulticastDelegate` does. `delegate is MulticastDelegate` may be false for CoreLib
   delegates (`Func<>`, `Action`) because `comparer.is_subclass_of` walks the real CoreLib parent
   without the stub remap that `ancestors()` applies; `dbf34e7e` may already have fixed this.
-- **`Synchronized` on value types.** `enter_synchronized_method`
-  (`crates/dotnet-vm/src/stack/synchronized.rs`) runs a value-type instance method unlocked
-  because its receiver is a managed pointer. The CLR's behavior is not yet confirmed.
+- **`Synchronized` on value types.** The CLR rejects value types with synchronized methods at
+  type load, including static methods (see `evidence/18-synchronized-value-type-clr.txt`).
 - **`ToString`.** The `RuntimeType` stub (`support/RuntimeType.cs`) has no `ToString` override,
   so CoreLib's `Type.ToString` returns `"Type: " + Name`; `ValueType.ToString` inherits this.
   `FullName` omits generic arguments and nested `+`. `Object.ToString`

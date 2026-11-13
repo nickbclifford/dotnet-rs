@@ -452,6 +452,27 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
         generic_inst: GenericLookup,
     ) -> Result<(), TypeResolutionError> {
         let _gc = self.gc;
+        // The CLR resolves type tokens while preparing a method, before its body and handlers
+        // run. Validate them before modifying the caller's stack or installing the new frame.
+        let resolution_context = ResolutionContext {
+            generics: &generic_inst,
+            state: self.shared.resolution_shared(),
+            resolution: method.source.resolution(),
+            type_owner: None,
+            method_owner: None,
+        };
+        for instruction in method.instructions {
+            if let Instruction::LoadTokenType(ty) = instruction
+                && let Ok(concrete) = resolution_context.make_concrete(ty)
+                && matches!(concrete.get(), BaseType::Type { .. })
+                && matches!(
+                    self.loader().find_concrete_type(concrete),
+                    Err(TypeResolutionError::SynchronizedValueType)
+                )
+            {
+                return Err(TypeResolutionError::SynchronizedValueType);
+            }
+        }
         self.trace_method_entry_for_call_frame(&method);
 
         let num_args = method.signature.instance as usize + method.signature.parameters.len();

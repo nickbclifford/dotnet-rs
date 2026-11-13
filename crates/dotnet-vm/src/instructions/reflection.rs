@@ -59,6 +59,12 @@ pub fn ldvirtftn<'gc, T: VesOps<'gc>>(
 
 #[dotnet_instruction(LoadTokenType(param0))]
 pub fn ldtoken_type<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResult {
+    // Resolve before constructing the runtime type: its infallible fallback otherwise loses
+    // type-load errors.
+    let concrete = dotnet_vm_ops::vm_try!(ctx.current_context().make_concrete(param0));
+    if matches!(concrete.get(), BaseType::Type { .. }) {
+        dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(concrete));
+    }
     let runtime_type = {
         let res_ctx = ctx.current_context();
         ctx.make_runtime_type(&res_ctx, param0)

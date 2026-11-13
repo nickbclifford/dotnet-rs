@@ -1206,6 +1206,17 @@ impl<'a, 'gc> VesOps<'gc> for VesContext<'a, 'gc> {
                         let i = &self.state().info_handle.instructions[ip];
 
                         last_res = crate::dispatch::InstructionRegistry::dispatch(self, i);
+                        if matches!(
+                            last_res,
+                            StepResult::Error(dotnet_types::error::VmError::TypeResolution(
+                                dotnet_types::error::TypeResolutionError::SynchronizedValueType
+                            ))
+                        ) {
+                            last_res = self.throw_by_name_with_message(
+                                "System.TypeLoadException",
+                                "Synchronized Method in Value Type.",
+                            );
+                        }
 
                         match last_res {
                             StepResult::Continue => {

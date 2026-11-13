@@ -22,6 +22,8 @@ pub enum TypeResolutionError {
     MassiveAllocation(Box<str>),
     #[error("Invalid layout: {0}")]
     InvalidLayout(Box<str>),
+    #[error("Synchronized Method in Value Type.")]
+    SynchronizedValueType,
     #[error("Generic index {index} out of bounds (length {length})")]
     GenericIndexOutOfBounds { index: usize, length: usize },
     #[error("Generic constraint violation: {0}")]

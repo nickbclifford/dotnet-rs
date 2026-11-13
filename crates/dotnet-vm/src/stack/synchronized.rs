@@ -89,8 +89,8 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             let lock = if frame.state.info_handle.signature.instance {
                 match self.get_argument(ArgumentIndex::new(0)) {
                     StackValue::ObjectRef(object) => object,
-                    // A value-type receiver is a managed pointer with no object identity to
-                    // lock; the method runs unsynchronized.
+                    // Value types with synchronized methods are rejected during type resolution.
+                    // Other invalid receiver shapes have no object identity to lock.
                     _ => return StepResult::Continue,
                 }
             } else {

@@ -321,6 +321,19 @@ impl<'gc> ExecutionEngine<'gc> {
     /// Run the engine until it needs to yield, returns from the entry point, or throws an unhandled exception.
     pub fn run(&mut self, gc: GCHandle<'gc>) -> StepResult {
         let result = self.run_inner(gc);
+        let result = if matches!(
+            result,
+            StepResult::Error(dotnet_types::error::VmError::TypeResolution(
+                dotnet_types::error::TypeResolutionError::SynchronizedValueType
+            ))
+        ) {
+            self.ves_context(gc).throw_by_name_with_message(
+                "System.TypeLoadException",
+                "Synchronized Method in Value Type.",
+            )
+        } else {
+            result
+        };
         self.finish_finalizer_segment(result)
     }
 
