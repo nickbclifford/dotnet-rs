@@ -116,7 +116,7 @@ pub struct CallStack<'gc> {
 // SAFETY: F5.TracesEveryGcRef — `trace` visits every field that can hold a `Gc` handle of
 // this arena: `execution` and `parked_finalizer_caller` (frames and evaluation stack), `heap_managed_ptr_decode_cache`
 // (its cached handles stay live until `GCArena::finish_cycle` invalidates the cache),
-// `local`, `shared.statics` and the shared reflection object table. The remaining fields hold no `Gc`
+// `local`, `shared.statics`, shared GC handles and the shared reflection object table. The remaining fields hold no `Gc`
 // handles: `thread_id`, `arena_identity` and `arena` are plain identifiers and registry
 // handles, and the other `SharedGlobalState` fields hold `'static` metadata, caches and
 // runtime services.
@@ -130,6 +130,7 @@ unsafe impl<'gc> Collect<'gc> for CallStack<'gc> {
         self.heap_managed_ptr_decode_cache.trace(cc);
         self.local.trace(cc);
         self.shared.statics.trace(cc);
+        self.shared.gc_handles.trace(cc);
         #[cfg(feature = "multithreading")]
         self.shared.reflection_registry.trace(cc);
     }
@@ -490,7 +491,7 @@ impl<'gc: 'gc> CallStack<'gc> {
             self.local.heap.finalization_queue.borrow().len(),
             self.local.heap.pending_finalization.borrow().len(),
             self.local.heap.pinned_objects.borrow().len(),
-            self.local.heap.gchandles.borrow().len(),
+            self.shared.gc_handles.len(),
             self.local.heap.live_object_count(),
         );
     }

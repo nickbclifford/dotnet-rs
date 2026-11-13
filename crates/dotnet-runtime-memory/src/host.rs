@@ -6,5 +6,6 @@ pub trait MemoryOrderingHost {
 /// Host hook used by memory services to emit finalization tracing without
 /// depending on VM-global state types.
 pub trait MemorySharedStateHost: MemoryOrderingHost {
+    fn gc_handles(&self) -> &crate::handles::SharedGcHandles;
     fn trace_gc_resurrection(&self, indent: usize, obj_type_name: &str, addr: usize);
 }

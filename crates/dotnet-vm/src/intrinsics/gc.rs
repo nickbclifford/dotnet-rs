@@ -277,18 +277,11 @@ pub fn intrinsic_gchandle_internal_alloc<
     let obj = ctx.pop_obj();
 
     let handle_type = GCHandleType::from(handle_type);
-    let index = {
-        let mut handles = ctx.heap().gchandles.borrow_mut();
-        alloc_or_reuse_slot(&mut handles, (obj, handle_type))
-    };
+    let index = ctx.gc_handles().alloc(obj, handle_type);
 
-    if handle_type == GCHandleType::Pinned {
-        ctx.heap().pin_object(obj);
-
-        if ctx.tracer_enabled() {
-            let addr = obj.0.map(|p| gc_arena::Gc::as_ptr(p).addr()).unwrap_or(0);
-            ctx.tracer().trace_gc_pin(ctx.indent(), "PINNED", addr);
-        }
+    if handle_type == GCHandleType::Pinned && ctx.tracer_enabled() {
+        let addr = obj.0.map(|p| gc_arena::Gc::as_ptr(p).addr()).unwrap_or(0);
+        ctx.tracer().trace_gc_pin(ctx.indent(), "PINNED", addr);
     }
 
     if ctx.tracer_enabled() {
@@ -330,29 +323,18 @@ pub fn intrinsic_gchandle_internal_free<
 ) -> StepResult {
     let handle = ctx.pop_isize();
     if let Some(index) = decode_gc_handle(handle) {
-        let mut handles = ctx.heap().gchandles.borrow_mut();
-        if index < handles.len() {
-            if let Some((obj, handle_type)) = handles[index]
-                && handle_type == GCHandleType::Pinned
-            {
-                ctx.heap().unpin_object(obj);
-
-                if ctx.tracer_enabled() {
-                    let addr = obj.0.map(|p| gc_arena::Gc::as_ptr(p).addr()).unwrap_or(0);
-                    ctx.tracer().trace_gc_pin(ctx.indent(), "UNPINNED", addr);
-                }
+        // SAFETY: this intrinsic runs inside an active arena mutation until it returns.
+        if let Some((obj, kind)) = unsafe { ctx.gc_handles().get(index) }
+            && ctx.tracer_enabled()
+        {
+            let addr = obj.0.map(|p| gc_arena::Gc::as_ptr(p).addr()).unwrap_or(0);
+            if kind == GCHandleType::Pinned {
+                ctx.tracer().trace_gc_pin(ctx.indent(), "UNPINNED", addr);
             }
-
-            if let Some((obj, handle_type)) = handles[index]
-                && ctx.tracer_enabled()
-            {
-                let handle_type_str = format!("{:?}", handle_type);
-                let addr = obj.0.map(|p| gc_arena::Gc::as_ptr(p).addr()).unwrap_or(0);
-                ctx.tracer()
-                    .trace_gc_handle(ctx.indent(), "FREE", &handle_type_str, addr);
-            }
-            handles[index] = None;
+            ctx.tracer()
+                .trace_gc_handle(ctx.indent(), "FREE", &format!("{:?}", kind), addr);
         }
+        ctx.gc_handles().free(index);
     }
     StepResult::Continue
 }
@@ -367,15 +349,10 @@ pub fn intrinsic_gchandle_internal_get<
     _generics: &GenericLookup,
 ) -> StepResult {
     let handle = ctx.pop_isize();
-    let result = if let Some(index) = decode_gc_handle(handle) {
-        let handles = ctx.heap().gchandles.borrow();
-        match handles.get(index) {
-            Some(Some((obj, _))) => *obj,
-            _ => ObjectRef(None),
-        }
-    } else {
-        ObjectRef(None)
-    };
+    // SAFETY: the arena remains active until the result is pushed onto the traced stack.
+    let result = decode_gc_handle(handle)
+        .and_then(|index| unsafe { ctx.gc_handles().get(index) })
+        .map_or(ObjectRef(None), |(obj, _)| obj);
     ctx.push_obj(result);
     StepResult::Continue
 }
@@ -391,16 +368,7 @@ pub fn intrinsic_gchandle_internal_set<'gc, T: TypedStackOps<'gc> + MemoryOps<'g
     let obj = ctx.pop_obj();
     let handle = ctx.pop_isize();
     if let Some(index) = decode_gc_handle(handle) {
-        let mut handles = ctx.heap().gchandles.borrow_mut();
-        if index < handles.len()
-            && let Some(entry) = &mut handles[index]
-        {
-            if entry.1 == GCHandleType::Pinned {
-                ctx.heap().unpin_object(entry.0);
-                ctx.heap().pin_object(obj);
-            }
-            entry.0 = obj;
-        }
+        ctx.gc_handles().set(index, obj);
     }
     StepResult::Continue
 }
@@ -417,16 +385,25 @@ pub fn intrinsic_gchandle_internal_addr_of_pinned_object<
     _generics: &GenericLookup,
 ) -> StepResult {
     let handle = ctx.pop_isize();
-    let addr = if let Some(index) = decode_gc_handle(handle) {
-        let handles = ctx.heap().gchandles.borrow();
-        if index < handles.len()
-            && let Some(entry) = &handles[index]
-            && entry.1 == GCHandleType::Pinned
-            && let Some(ptr) = entry.0.0
-        {
+    // SAFETY: the mutator remains active through this intrinsic and the pinned
+    // slot roots the target while its address is obtained.
+    let entry = decode_gc_handle(handle).and_then(|index| unsafe { ctx.gc_handles().get(index) });
+    let addr = if let Some((obj, GCHandleType::Pinned)) = entry {
+        if let Some(ptr) = obj.0 {
+            #[cfg(feature = "multithreading")]
+            let _lease = {
+                let owner = obj.as_ptr().unwrap().owner_id();
+                if owner != dotnet_utils::sync::get_current_thread_id() {
+                    Some(
+                        dotnet_utils::gc::try_acquire_lease(owner)
+                            .expect("pinned object owner must remain registered"),
+                    )
+                } else {
+                    None
+                }
+            };
             match &ptr.borrow().storage {
-                // SAFETY: F10.BorrowedStorageStable — The validated pinned GCHandle keeps `ptr` and its object lock alive;
-                // this branch only exposes that stable address for AddrOfPinnedObject.
+                // SAFETY: the pinned slot keeps this storage live and stable.
                 HeapStorage::Obj(_) => unsafe { ptr.as_ptr() }.expose_provenance() as isize,
                 HeapStorage::Vec(v) => v.get().as_ptr().expose_provenance() as isize,
                 HeapStorage::Str(s) => s.as_ptr().expose_provenance() as isize,

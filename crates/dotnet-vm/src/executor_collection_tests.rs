@@ -1,7 +1,7 @@
 //! Multi-arena collection through real `Executor` arenas.
 //!
 //! Two actual `Executor` arenas are created: arena B allocates an object that has no root in B,
-//! and arena A roots a cross-arena reference to it through its heap GC handles. The collection
+//! and arena A publishes a normal shared GC handle to it. The collection
 //! is driven by the production `GCCoordinator` (`begin_collection`, stop-the-world,
 //! `collect_all_arenas`: MarkAll -> fixed-point MarkObjects -> Finalize -> Sweep) and the
 //! production `THREAD_ARENA`/`execute_gc_command_for_current_thread` command path.
@@ -34,10 +34,10 @@ fn shared() -> Arc<SharedGlobalState> {
 }
 
 /// Allocates the payload string in the executor's arena without rooting it and returns its
-/// object pointer. A production *weak* GC handle (slot 0 of the arena's heap handle table) is
-/// the survival witness: `HeapManager::finalize_check` zeroes it when the object is swept, so
+/// object pointer and shared weak-handle slot. The slot is the survival witness: the owner
+/// clears it before sweeping the object, so
 /// a missed publication is observed as a cleared handle and never as a dangling read.
-fn allocate_unrooted(executor: &mut Executor) -> dotnet_value::object::ObjectPtr {
+fn allocate_unrooted(executor: &mut Executor) -> (dotnet_value::object::ObjectPtr, usize) {
     executor
         .with_arena(|arena| {
             arena.mutate_root(|gc, engine| {
@@ -45,22 +45,26 @@ fn allocate_unrooted(executor: &mut Executor) -> dotnet_value::object::ObjectPtr
                 // stays within this mutation.
                 let handle = unsafe { crate::test_utils::test_gc_handle(gc, engine) };
                 let obj = ObjectRef::new(handle, HeapStorage::Str(CLRString::from(PAYLOAD)));
-                let mut handles = engine.stack.local.heap.gchandles.borrow_mut();
-                assert!(handles.is_empty(), "witness must be handle slot 0");
-                handles.push(Some((obj, dotnet_utils::gc::GCHandleType::Weak)));
-                obj.as_ptr().expect("non-null object")
+                let index = engine
+                    .stack
+                    .shared
+                    .gc_handles
+                    .alloc(obj, dotnet_utils::gc::GCHandleType::Weak);
+                (obj.as_ptr().expect("non-null object"), index)
             })
         })
         .unwrap()
 }
 
 /// Reads the payload through the weak-handle witness; `None` means the object was swept.
-fn probe(executor: &mut Executor) -> Option<String> {
+fn probe(executor: &mut Executor, index: usize) -> Option<String> {
     executor
         .with_arena(|arena| {
             arena.mutate(|_, engine| {
-                let handles = engine.stack.local.heap.gchandles.borrow();
-                let (obj, _) = handles[0].as_ref().expect("witness slot");
+                // SAFETY: the active arena mutation roots the result before any safepoint.
+                let (obj, _) =
+                    // SAFETY: the active arena mutation confines the witness to this operation.
+                    unsafe { engine.stack.shared.gc_handles.get(index) }.expect("witness slot");
                 obj.0.map(|h| match &h.borrow().storage {
                     HeapStorage::Str(s) => s.as_string(),
                     _ => panic!("unexpected storage"),
@@ -75,27 +79,26 @@ fn probe(executor: &mut Executor) -> Option<String> {
 fn arena_lifetime_vm_collection() {
     // Single-arena no-features control: forced collections keep a GC-handle-rooted object.
     let mut executor = Executor::new(shared());
-    allocate_unrooted(&mut executor);
+    let (_, witness) = allocate_unrooted(&mut executor);
     executor
         .with_arena(|arena| {
             arena.mutate_root(|_gc, engine| {
-                let obj = engine.stack.local.heap.gchandles.borrow()[0]
-                    .as_ref()
+                // SAFETY: this mutation is active until the object is installed as a root.
+                // SAFETY: the active arena mutation confines the witness to this operation.
+                let obj = unsafe { engine.stack.shared.gc_handles.get(witness) }
                     .unwrap()
                     .0;
                 engine
                     .stack
-                    .local
-                    .heap
-                    .gchandles
-                    .borrow_mut()
-                    .push(Some((obj, dotnet_utils::gc::GCHandleType::Normal)));
+                    .shared
+                    .gc_handles
+                    .alloc(obj, dotnet_utils::gc::GCHandleType::Normal);
             });
             arena.finish_cycle();
             arena.finish_cycle();
         })
         .unwrap();
-    assert_eq!(probe(&mut executor).as_deref(), Some(PAYLOAD));
+    assert_eq!(probe(&mut executor, witness).as_deref(), Some(PAYLOAD));
 }
 
 #[cfg(feature = "multithreading")]
@@ -115,13 +118,14 @@ fn run_vm_collection(root_in_a: bool) -> Vec<Option<String>> {
     let owner_b = thread::spawn(move || {
         let mut b = Executor::new(Arc::clone(&b_state));
         let id = b.thread_id;
-        allocate_unrooted(&mut b);
+        let (_, witness) = allocate_unrooted(&mut b);
         let storage = b
             .with_arena(|arena| {
                 arena.mutate(|_, engine| {
                     encode_reference(
-                        engine.stack.local.heap.gchandles.borrow()[0]
-                            .as_ref()
+                        // SAFETY: the owner is in an active arena mutation.
+                        // SAFETY: the active arena mutation confines the witness to this operation.
+                        unsafe { engine.stack.shared.gc_handles.get(witness) }
                             .unwrap()
                             .0,
                     )
@@ -136,7 +140,7 @@ fn run_vm_collection(root_in_a: bool) -> Vec<Option<String>> {
                 .thread_manager
                 .safe_point(id, &b_state.gc_coordinator);
             match collected_rx.recv_timeout(Duration::from_millis(1)) {
-                Ok(()) => probe_tx.send(probe(&mut b)).unwrap(),
+                Ok(()) => probe_tx.send(probe(&mut b, witness)).unwrap(),
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
@@ -155,11 +159,9 @@ fn run_vm_collection(root_in_a: bool) -> Vec<Option<String>> {
                 let obj = decode_reference(storage, handle);
                 engine
                     .stack
-                    .local
-                    .heap
-                    .gchandles
-                    .borrow_mut()
-                    .push(Some((obj, GCHandleType::Normal)));
+                    .shared
+                    .gc_handles
+                    .alloc(obj, GCHandleType::Normal);
             });
         })
         .unwrap();
@@ -184,7 +186,7 @@ fn run_vm_collection(root_in_a: bool) -> Vec<Option<String>> {
             // and stop; a second trace would read freed memory.
             a.with_arena(|arena| {
                 arena.mutate(|_, engine| {
-                    engine.stack.local.heap.gchandles.borrow_mut().clear();
+                    engine.stack.shared.gc_handles.free(1);
                 })
             })
             .unwrap();
@@ -223,9 +225,9 @@ fn arena_lifetime_vm_collection_unrooted_negative_control() {
 /// The complete real-VM collection contract: three actual `Executor` arenas on three threads, driven through the
 /// production coordinator and `THREAD_ARENA` command path.
 ///
-/// * arena A holds the only root: a normal GC handle to vector X owned by arena B;
+/// * a normal shared GC handle roots vector X owned by arena B;
 /// * X's serialized element is the only reference to string Y owned by arena C, so Y is
-///   reachable only through the *fixed-point* cross edge A -> B (round 1) -> C (round 2);
+///   reachable through the cross-arena edge B -> C;
 /// * both objects must survive two collections, Y's payload must be readable and writable by
 ///   its owner afterwards, and a third collection must keep the written payload;
 /// * once A drops its handle, both objects must be reclaimed within a bounded number of
@@ -257,7 +259,7 @@ fn arena_lifetime_vm_collection_fixed_point_payload_and_reclamation() {
     }
 
     /// Allocates an unrooted vector with one null `ObjectRef` element and a weak witness.
-    fn allocate_unrooted_vector(executor: &mut Executor) -> ObjectPtr {
+    fn allocate_unrooted_vector(executor: &mut Executor) -> (ObjectPtr, usize) {
         executor
             .with_arena(|arena| {
                 arena.mutate_root(|gc, engine| {
@@ -274,22 +276,26 @@ fn arena_lifetime_vm_collection_fixed_point_payload_and_reclamation() {
                         vec![1, 1],
                     );
                     let obj = ObjectRef::new(handle, HeapStorage::Vec(Box::new(vector)));
-                    let mut handles = engine.stack.local.heap.gchandles.borrow_mut();
-                    assert!(handles.is_empty(), "witness must be handle slot 0");
-                    handles.push(Some((obj, GCHandleType::Weak)));
-                    obj.as_ptr().expect("non-null object")
+                    let index = engine
+                        .stack
+                        .shared
+                        .gc_handles
+                        .alloc(obj, GCHandleType::Weak);
+                    (obj.as_ptr().expect("non-null object"), index)
                 })
             })
             .unwrap()
     }
 
     /// Weak-witness read: payload string, `<vector>` marker, or `None` once swept.
-    fn probe_any(executor: &mut Executor) -> Option<String> {
+    fn probe_any(executor: &mut Executor, index: usize) -> Option<String> {
         executor
             .with_arena(|arena| {
                 arena.mutate(|_, engine| {
-                    let handles = engine.stack.local.heap.gchandles.borrow();
-                    let (obj, _) = handles[0].as_ref().expect("witness slot");
+                    // SAFETY: the owner is in an active arena mutation.
+                    let (obj, _) =
+                        // SAFETY: the active arena mutation confines the witness to this operation.
+                        unsafe { engine.stack.shared.gc_handles.get(index) }.expect("witness slot");
                     obj.0.map(|h| match &h.borrow().storage {
                         HeapStorage::Str(s) => s.as_string(),
                         HeapStorage::Vec(_) => VECTOR_MARK.to_string(),
@@ -315,7 +321,7 @@ fn arena_lifetime_vm_collection_fixed_point_payload_and_reclamation() {
         let join = thread::spawn(move || {
             let mut owner = Executor::new(Arc::clone(&owner_state));
             let id = owner.thread_id;
-            if vector {
+            let (_, witness) = if vector {
                 allocate_unrooted_vector(&mut owner)
             } else {
                 allocate_unrooted(&mut owner)
@@ -324,8 +330,9 @@ fn arena_lifetime_vm_collection_fixed_point_payload_and_reclamation() {
                 .with_arena(|arena| {
                     arena.mutate(|_, engine| {
                         encode_reference(
-                            engine.stack.local.heap.gchandles.borrow()[0]
-                                .as_ref()
+                            // SAFETY: the owner is in an active arena mutation.
+                            // SAFETY: the active arena mutation confines the witness to this operation.
+                            unsafe { engine.stack.shared.gc_handles.get(witness) }
                                 .unwrap()
                                 .0,
                         )
@@ -340,13 +347,16 @@ fn arena_lifetime_vm_collection_fixed_point_payload_and_reclamation() {
                     .thread_manager
                     .safe_point(id, &owner_state.gc_coordinator);
                 match cmd_rx.recv_timeout(Duration::from_millis(1)) {
-                    Ok(Cmd::Probe) => reply_tx.send(probe_any(&mut owner)).unwrap(),
+                    Ok(Cmd::Probe) => reply_tx.send(probe_any(&mut owner, witness)).unwrap(),
                     Ok(Cmd::Write(text)) => {
                         owner
                             .with_arena(|arena| {
                                 arena.mutate_root(|gc, engine| {
-                                    let handles = engine.stack.local.heap.gchandles.borrow();
-                                    let (obj, _) = handles[0].as_ref().expect("witness slot");
+                                    // SAFETY: the owner is in an active arena mutation.
+                                    let (obj, _) =
+                                        // SAFETY: the active arena mutation confines the witness to this operation.
+                                        unsafe { engine.stack.shared.gc_handles.get(witness) }
+                                            .expect("witness slot");
                                     let h = obj.0.expect("payload must still be live to write");
                                     dotnet_utils::gc::ThreadSafeLock::borrow_mut(h, gc).storage =
                                         HeapStorage::Str(CLRString::from(text));
@@ -363,8 +373,11 @@ fn arena_lifetime_vm_collection_fixed_point_payload_and_reclamation() {
                                     let handle =
                                         unsafe { crate::test_utils::test_gc_handle(gc, engine) };
                                     let target = decode_reference(target, handle);
-                                    let handles = engine.stack.local.heap.gchandles.borrow();
-                                    let (obj, _) = handles[0].as_ref().expect("witness slot");
+                                    // SAFETY: the owner is in an active arena mutation.
+                                    let (obj, _) =
+                                        // SAFETY: the active arena mutation confines the witness to this operation.
+                                        unsafe { engine.stack.shared.gc_handles.get(witness) }
+                                            .expect("witness slot");
                                     assert!(obj.0.is_some(), "vector must still be live to link");
                                     // SAFETY: F1.GcHandleRooted — engine is the live arena root
                                     // and the handle stays within this mutation.
@@ -403,11 +416,9 @@ fn arena_lifetime_vm_collection_fixed_point_payload_and_reclamation() {
             let obj = decode_reference(x_storage, handle);
             engine
                 .stack
-                .local
-                .heap
-                .gchandles
-                .borrow_mut()
-                .push(Some((obj, GCHandleType::Normal)));
+                .shared
+                .gc_handles
+                .alloc(obj, GCHandleType::Normal);
         });
     })
     .unwrap();
@@ -430,10 +441,8 @@ fn arena_lifetime_vm_collection_fixed_point_payload_and_reclamation() {
     // Missed publication leaves A's slot dangling: drop it (Gc is Copy, no deref) before
     // any further trace and fail with the observed witnesses.
     let clear_a = |a: &mut Executor| {
-        a.with_arena(|arena| {
-            arena.mutate(|_, engine| engine.stack.local.heap.gchandles.borrow_mut().clear())
-        })
-        .unwrap();
+        a.with_arena(|arena| arena.mutate(|_, engine| engine.stack.shared.gc_handles.free(2)))
+            .unwrap();
     };
 
     let alive = (Some(VECTOR_MARK.to_string()), Some(PAYLOAD.to_string()));
@@ -485,7 +494,7 @@ fn arena_lifetime_vm_collection_fixed_point_payload_and_reclamation() {
         seen,
         vec![alive.clone(), alive],
         "(vector X in B, payload Y in C) both reachable only through A's handle and the \
-         fixed-point cross edge must survive two collections"
+         cross-arena edge must survive two collections"
     );
     assert_eq!(
         written,
@@ -514,7 +523,7 @@ fn arena_lifetime_mark_command_rejects_stale_registration() {
     let state = shared();
     let mut executor = Executor::new(Arc::clone(&state));
     let id = executor.thread_id;
-    let ptr = allocate_unrooted(&mut executor);
+    let (ptr, _) = allocate_unrooted(&mut executor);
     let old_identity = try_acquire_lease(id).unwrap().identity();
     // SAFETY: F1.ArenaGenerationMatch — the object was allocated in this
     // Executor's still-live arena, under the original registration above.
@@ -683,12 +692,22 @@ fn dependent_handle_chain_survives_and_clears() {
                 let middle = ObjectRef::new(handle, HeapStorage::Str(CLRString::from("middle")));
                 let tail = ObjectRef::new(handle, HeapStorage::Str(CLRString::from("tail")));
                 let heap = &engine.stack.local.heap;
-                heap.gchandles
-                    .borrow_mut()
-                    .push(Some((key, GCHandleType::Normal)));
-                heap.gchandles
-                    .borrow_mut()
-                    .push(Some((tail, GCHandleType::Weak)));
+                assert_eq!(
+                    engine
+                        .stack
+                        .shared
+                        .gc_handles
+                        .alloc(key, GCHandleType::Normal),
+                    0
+                );
+                assert_eq!(
+                    engine
+                        .stack
+                        .shared
+                        .gc_handles
+                        .alloc(tail, GCHandleType::Weak),
+                    1
+                );
                 // Reverse order requires another mark round after the first dependent activates.
                 heap.dependent_handles
                     .borrow_mut()
@@ -707,9 +726,16 @@ fn dependent_handle_chain_survives_and_clears() {
     executor
         .with_arena(|arena| {
             arena.mutate_root(|_, engine| {
-                let heap = &engine.stack.local.heap;
-                assert!(heap.gchandles.borrow()[1].as_ref().unwrap().0.0.is_some());
-                heap.gchandles.borrow_mut()[0] = None;
+                // SAFETY: this mutation is active while the witness is inspected.
+                assert!(
+                    // SAFETY: the active arena mutation confines the witness to this operation.
+                    unsafe { engine.stack.shared.gc_handles.get(1) }
+                        .unwrap()
+                        .0
+                        .0
+                        .is_some()
+                );
+                engine.stack.shared.gc_handles.free(0);
             })
         })
         .unwrap();
@@ -718,7 +744,15 @@ fn dependent_handle_chain_survives_and_clears() {
         .with_arena(|arena| {
             arena.mutate(|_, engine| {
                 let heap = &engine.stack.local.heap;
-                assert!(heap.gchandles.borrow()[1].as_ref().unwrap().0.0.is_none());
+                // SAFETY: this mutation is active while the witness is inspected.
+                assert!(
+                    // SAFETY: the active arena mutation confines the witness to this operation.
+                    unsafe { engine.stack.shared.gc_handles.get(1) }
+                        .unwrap()
+                        .0
+                        .0
+                        .is_none()
+                );
                 for (key, value) in heap.dependent_handles.borrow().iter().flatten() {
                     assert!(key.0.is_none() && value.0.is_none());
                 }

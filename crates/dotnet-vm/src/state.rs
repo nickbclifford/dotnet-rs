@@ -390,6 +390,7 @@ pub struct SharedGlobalState {
     /// Grouped caches for type resolution and layout computation
     pub caches: Arc<GlobalCaches>,
     pub statics: Arc<StaticStorageManager>,
+    pub gc_handles: dotnet_runtime_memory::handles::SharedGcHandles,
     pub last_instructions: Arc<Mutex<InstructionRingBuffer>>,
     abort_requested: Arc<AtomicBool>,
     pub gc_coordinator: Arc<GCCoordinator>,
@@ -484,6 +485,7 @@ impl SharedGlobalState {
             empty_generics: GenericLookup::default(),
             caches,
             statics,
+            gc_handles: Default::default(),
             last_instructions,
             abort_requested: Arc::new(AtomicBool::new(false)),
             gc_coordinator: Arc::new(GCCoordinator::new(stw_in_progress.clone())),
@@ -654,6 +656,10 @@ impl dotnet_runtime_memory::MemoryOrderingHost for SharedGlobalState {
 }
 
 impl dotnet_runtime_memory::MemorySharedStateHost for SharedGlobalState {
+    fn gc_handles(&self) -> &dotnet_runtime_memory::handles::SharedGcHandles {
+        &self.gc_handles
+    }
+
     fn trace_gc_resurrection(&self, indent: usize, obj_type_name: &str, addr: usize) {
         self.tracer
             .trace_gc_resurrection(indent, obj_type_name, addr);

@@ -20,6 +20,7 @@
 //! reference graph. See `docs/GC_AND_MEMORY_SAFETY.md` for the end-to-end design.
 
 pub mod access;
+pub mod handles;
 pub mod heap;
 pub mod host;
 pub mod ops;

@@ -8,5 +8,6 @@ pub use dotnet_vm_ops::ops::MemoryOps as BaseMemoryOps;
 
 pub trait MemoryOps<'gc>: BaseMemoryOps<'gc> {
     fn heap(&self) -> &HeapManager<'gc>;
+    fn gc_handles(&self) -> &crate::handles::SharedGcHandles;
     fn has_global_pending_finalizers(&self) -> bool;
 }

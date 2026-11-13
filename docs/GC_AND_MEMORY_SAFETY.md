@@ -590,6 +590,17 @@ are accepted operational risks rather than type-level guarantees.
 - **Limitations:** This contract relies on the coordinated protocol and caller lifetime obligations, not type-level detection. The real-VM cross-arena collection tests obtain foreign references through production field-storage encoding and decoding, covering survival, a sweep control, fixed-point payload access and bounded reclamation. This does not establish all concurrent schedules or remove the codec’s live-original-allocation contract ([evidence](pointer-provenance/INVENTORY.md#finding-to-work-map)).
 - **Scope:** Multithreading only; the single-threaded configuration has no `cross_arena_roots`.
 
+### Shared GC handle roots
+
+`SharedGcHandles` retains provenance-preserving object pointers in VM-wide slots. During a
+collection, each owner traces its own normal and pinned targets; its short weak targets are
+cleared after marking and before any arena finalizes. Long weak targets are cleared by their
+owner after its finalization check. Dependent handles remain arena-local until plan 20 slice 3b.
+The MarkAll root barrier runs after mutators park, so publications made during an earlier
+incremental mark are retraced, as with the shared reflection registry. Retired owners continue
+to participate in collections. A mutator retrieving a slot must root its result before its
+next safepoint; the slot lock alone is not an arena lease or a lasting root after removal.
+
 ### Shared reflection roots
 
 Under `multithreading`, `SharedReflectionRegistry` publishes canonical type, method, field,

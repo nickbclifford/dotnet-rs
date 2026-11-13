@@ -1,6 +1,6 @@
 # Shared GC handles and a dedicated finalizer thread
 
-**Status:** In progress — slices 1–2 complete; slice 3 revised into 3a/3b
+**Status:** In progress — slices 1–2 and 3a complete; slice 3b pending
 **Outcome:** Under `multithreading`, finalizers run on one background finalizer thread with its own
 identity, GC handles are readable from any thread, and the process exits without waiting for
 finalizers; the GC fixtures listed under each slice match `dotnet` through the diff harness.
@@ -181,3 +181,11 @@ With non-inlined allocation helpers and the real CoreLib `GCHandle`, `gc_resurre
 `gc_resurrection_0`, and `weak_handle_42` match .NET 10 in the multithreaded host diff
 harness: exit codes 42, 0, and 42 respectively, with empty stdout on both runtimes. These
 cases do not test finalizer-thread identity or cross-arena handles.
+
+## Slice 3a benchmark
+
+The no-default-features `runtime_primitives` benchmark was run against 03cb031d and the
+shared-table change (10 samples, one-second warmup and measurement). The stack benchmark
+measured 18.21 ns before and 17.46 ns after; vector tracing measured 1.6605 ns before and
+1.6618 ns after. Neither benchmark exercises GC-handle operations directly, so these numbers
+do not establish their cost.

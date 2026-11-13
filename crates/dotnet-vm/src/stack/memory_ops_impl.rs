@@ -7,6 +7,10 @@ impl<'a, 'gc> MemoryOps<'gc> for VesContext<'a, 'gc> {
         &self.local.heap
     }
 
+    fn gc_handles(&self) -> &dotnet_runtime_memory::handles::SharedGcHandles {
+        &self.shared.gc_handles
+    }
+
     fn has_global_pending_finalizers(&self) -> bool {
         self.shared.has_pending_finalizers()
     }

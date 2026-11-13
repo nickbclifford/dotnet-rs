@@ -30,7 +30,6 @@ pub struct HeapManager<'gc> {
     pub finalization_queue: RefCell<FinalizationQueue<'gc>>,
     pub pending_finalization: RefCell<FinalizationQueue<'gc>>,
     pub pinned_objects: RefCell<PinnedObjects<'gc>>,
-    pub gchandles: RefCell<Vec<Option<(ObjectRef<'gc>, GCHandleType)>>>,
     pub dependent_handles: RefCell<Vec<Option<(ObjectRef<'gc>, ObjectRef<'gc>)>>>,
     /// Slots activated during the current mark cycle; their values are traced as roots.
     pub active_dependents: RefCell<HashSet<usize>>,
@@ -55,7 +54,6 @@ impl<'gc> HeapManager<'gc> {
             finalization_queue: RefCell::new(SmallVec::new()),
             pending_finalization: RefCell::new(SmallVec::new()),
             pinned_objects: RefCell::new(SmallVec::new()),
-            gchandles: RefCell::new(Vec::new()),
             dependent_handles: RefCell::new(Vec::new()),
             active_dependents: RefCell::new(HashSet::new()),
             processing_finalizer: Cell::new(false),
@@ -175,24 +173,10 @@ impl<'gc> HeapManager<'gc> {
         }
     }
 
-    /// Zero short weak handles whose targets are unreachable.
-    ///
-    /// Read-only with respect to object colors, so every arena can run it concurrently. In a
-    /// multi-arena collection it must finish on all arenas before any `finalize_check`, because
-    /// a handle can target an object owned by another arena and that arena's finalization
-    /// resurrects (recolors) it.
+    /// Clear arena-local dependent handles before finalization.
     #[cfg(feature = "multithreading")]
-    pub fn clear_dead_weak_handles(&self, fc: &'gc gc_arena::Finalization<'gc>) {
+    pub fn clear_dead_dependent_handles(&self, fc: &'gc gc_arena::Finalization<'gc>) {
         self.clear_dead_dependents(fc);
-        let mut handles = self.gchandles.borrow_mut();
-        for (obj_ref, handle_type) in handles.iter_mut().flatten() {
-            if *handle_type == GCHandleType::Weak
-                && let ObjectRef(Some(ptr)) = obj_ref
-                && Gc::is_dead(fc, *ptr)
-            {
-                *obj_ref = ObjectRef(None);
-            }
-        }
     }
 
     pub fn finalize_check(
@@ -204,24 +188,7 @@ impl<'gc> HeapManager<'gc> {
         #[cfg(not(feature = "multithreading"))]
         self.clear_dead_dependents(fc);
         let mut queue = self.finalization_queue.borrow_mut();
-        let mut handles = self.gchandles.borrow_mut();
         let mut resurrected = HashSet::new();
-
-        let mut zero_out_handles = |for_type: GCHandleType, resurrected: &HashSet<usize>| {
-            for (obj_ref, handle_type) in handles.iter_mut().flatten() {
-                if *handle_type == for_type
-                    && let ObjectRef(Some(ptr)) = obj_ref
-                    && Gc::is_dead(fc, *ptr)
-                {
-                    if for_type == GCHandleType::WeakTrackResurrection
-                        && resurrected.contains(&(Gc::as_ptr(*ptr).addr()))
-                    {
-                        continue;
-                    }
-                    *obj_ref = ObjectRef(None);
-                }
-            }
-        };
 
         let mut to_finalize = Vec::new();
         if !queue.is_empty() {
@@ -286,7 +253,12 @@ impl<'gc> HeapManager<'gc> {
         // 1. Zero out Weak handles for dead objects.
         // This MUST be done before resurrection because "short" weak handles
         // are cleared as soon as the object is no longer strongly reachable.
-        zero_out_handles(GCHandleType::Weak, &resurrected);
+        // SAFETY: finalization runs in the owner arena at the fully marked point.
+        unsafe {
+            shared
+                .gc_handles()
+                .clear_dead(fc, GCHandleType::Weak, &resurrected)
+        };
 
         if !to_finalize.is_empty() {
             let mut pending = self.pending_finalization.borrow_mut();
@@ -315,7 +287,12 @@ impl<'gc> HeapManager<'gc> {
 
         // 2. Zero out WeakTrackResurrection handles
         // These are only cleared if the object was NOT resurrected.
-        zero_out_handles(GCHandleType::WeakTrackResurrection, &resurrected);
+        // SAFETY: finalization runs in the owner arena before any sweep.
+        unsafe {
+            shared
+                .gc_handles()
+                .clear_dead(fc, GCHandleType::WeakTrackResurrection, &resurrected)
+        };
 
         // 3. Prune dead objects from the debugging harness
         #[cfg(feature = "heap-diagnostics")]
@@ -462,25 +439,11 @@ fn bucket_range(start: usize, size: usize) -> std::ops::RangeInclusive<usize> {
     (start >> REGISTRY_BUCKET_SHIFT)..=(end >> REGISTRY_BUCKET_SHIFT)
 }
 
-// SAFETY: F5.TracesEveryGcRef — `HeapManager::trace` correctly traces GC-managed object references based on their
-// handle type. Normal and Pinned handles trace their objects to keep them alive. Weak handles
-// do not trace to allow collection. Activated dependent values, pending finalizers and
-// cross-arena roots are also traced. All other fields are non-GC metadata or control state that does not need tracing.
+// SAFETY: F5.TracesEveryGcRef — active dependent values, pinned objects, pending
+// finalizers and cross-arena roots are traced. Finalization queues and inactive dependent
+// handles are weak; all remaining fields are non-GC metadata.
 unsafe impl<'gc> Collect<'gc> for HeapManager<'gc> {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
-        // Normal and Pinned handles keep objects alive.
-        // Weak handles DO NOT trace.
-        for entry in self.gchandles.borrow().iter().flatten() {
-            match entry.1 {
-                GCHandleType::Normal | GCHandleType::Pinned => {
-                    entry.0.trace(cc);
-                }
-                GCHandleType::Weak | GCHandleType::WeakTrackResurrection => {
-                    // Weak handles don't trace
-                }
-            }
-        }
-
         let handles = self.dependent_handles.borrow();
         for index in self.active_dependents.borrow().iter() {
             if let Some(Some((_, value))) = handles.get(*index) {

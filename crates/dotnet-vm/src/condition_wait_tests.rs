@@ -450,11 +450,9 @@ fn start_condition_monitor(
                 let source = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("monitor")));
                 engine
                     .stack
-                    .local
-                    .heap
-                    .gchandles
-                    .borrow_mut()
-                    .push(Some((source, GCHandleType::Weak)));
+                    .shared
+                    .gc_handles
+                    .alloc(source, GCHandleType::Weak);
                 let mut ctx = engine.ves_context(gc);
                 let block = ctx.monitor_get_or_create_sync_block_for_object(source, gc);
                 assert!(block.try_enter(ArenaId::new(9999)));
@@ -788,8 +786,8 @@ fn condition_wait_deadline_survives_real_collection() {
         .with_arena(|arena| {
             arena.mutate(|_, engine| {
                 assert!(
-                    engine.stack.local.heap.gchandles.borrow()[0]
-                        .as_ref()
+                    // SAFETY: the active arena mutation confines the witness to this operation.
+                    unsafe { engine.stack.shared.gc_handles.get(0) }
                         .unwrap()
                         .0
                         .0
@@ -910,11 +908,9 @@ fn condition_wait_foreign_monitor_owner_survives_collection() {
                         );
                         engine
                             .stack
-                            .local
-                            .heap
-                            .gchandles
-                            .borrow_mut()
-                            .push(Some((source, GCHandleType::Weak)));
+                            .shared
+                            .gc_handles
+                            .alloc(source, GCHandleType::Weak);
                         encode_reference(source)
                     })
                 })
@@ -929,8 +925,8 @@ fn condition_wait_foreign_monitor_owner_survives_collection() {
                         let alive = owner
                             .with_arena(|arena| {
                                 arena.mutate(|_, engine| {
-                                    engine.stack.local.heap.gchandles.borrow()[0]
-                                        .as_ref()
+                                    // SAFETY: the active arena mutation confines the witness to this operation.
+                                    unsafe { engine.stack.shared.gc_handles.get(0) }
                                         .unwrap()
                                         .0
                                         .0
@@ -1727,7 +1723,7 @@ fn monitor_timed_byref_alias_writes_once_for_timeout_and_acquisition() {
                 _ => unreachable!(),
             });
             let pointer = ManagedPtr::new(address, TypeDescription::NULL, Some(flag), false, Some(ByteOffset::new(0)));
-            engine.stack.local.heap.gchandles.borrow_mut().push(Some((flag, GCHandleType::Weak)));
+            engine.stack.shared.gc_handles.alloc(flag, GCHandleType::Weak);
             let object = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("monitor")));
             let mut ctx = engine.ves_context(gc);
             let block = ctx.monitor_get_or_create_sync_block_for_object(object, gc);
@@ -1780,8 +1776,8 @@ fn monitor_timed_byref_alias_writes_once_for_timeout_and_acquisition() {
                 arena.mutate_root(|gc, engine| {
                     // SAFETY: F1.GcHandleRooted — the engine is the live arena root for this mutation.
                     let gc = unsafe { test_gc_handle(gc, engine) };
-                    let flag = engine.stack.local.heap.gchandles.borrow()[index]
-                        .as_ref()
+                    // SAFETY: the active arena mutation confines the witness to this operation.
+                    let flag = unsafe { engine.stack.shared.gc_handles.get(index) }
                         .unwrap()
                         .0;
                     let mut ctx = engine.ves_context(gc);
@@ -1905,11 +1901,9 @@ fn monitor_heap_byref_survives_collection_and_writes_owner() {
                 );
                 engine
                     .stack
-                    .local
-                    .heap
-                    .gchandles
-                    .borrow_mut()
-                    .push(Some((flag, GCHandleType::Weak)));
+                    .shared
+                    .gc_handles
+                    .alloc(flag, GCHandleType::Weak);
                 let object = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("monitor")));
                 let mut ctx = engine.ves_context(gc);
                 let block = ctx.monitor_get_or_create_sync_block_for_object(object, gc);
@@ -1928,8 +1922,9 @@ fn monitor_heap_byref_survives_collection_and_writes_owner() {
     executor
         .with_arena(|arena| {
             arena.mutate(|_, engine| {
-                let handles = engine.stack.local.heap.gchandles.borrow();
-                assert!(handles[0].as_ref().unwrap().0.0.is_some());
+                let handles = &engine.stack.shared.gc_handles;
+                // SAFETY: the active arena mutation confines the witness to this operation.
+                assert!(unsafe { handles.get(0) }.unwrap().0.0.is_some());
             })
         })
         .unwrap();
@@ -1938,8 +1933,9 @@ fn monitor_heap_byref_survives_collection_and_writes_owner() {
     executor
         .with_arena(|arena| {
             arena.mutate(|_, engine| {
-                let handles = engine.stack.local.heap.gchandles.borrow();
-                let flag = handles[0].as_ref().unwrap().0;
+                let handles = &engine.stack.shared.gc_handles;
+                // SAFETY: the active arena mutation confines the witness to this operation.
+                let flag = unsafe { handles.get(0) }.unwrap().0;
                 assert_eq!(
                     flag.as_heap_storage(|storage| match storage {
                         HeapStorage::Obj(obj) => obj.instance_storage.with_data(|data| data[0]),
@@ -1955,8 +1951,9 @@ fn monitor_heap_byref_survives_collection_and_writes_owner() {
     executor
         .with_arena(|arena| {
             arena.mutate(|_, engine| {
-                let handles = engine.stack.local.heap.gchandles.borrow();
-                assert!(handles[0].as_ref().unwrap().0.0.is_none());
+                let handles = &engine.stack.shared.gc_handles;
+                // SAFETY: the active arena mutation confines the witness to this operation.
+                assert!(unsafe { handles.get(0) }.unwrap().0.0.is_none());
             })
         })
         .unwrap();
@@ -2062,11 +2059,9 @@ fn monitor_heap_byref_survives_stop_before_dispatch() {
                 );
                 engine
                     .stack
-                    .local
-                    .heap
-                    .gchandles
-                    .borrow_mut()
-                    .push(Some((flag, GCHandleType::Weak)));
+                    .shared
+                    .gc_handles
+                    .alloc(flag, GCHandleType::Weak);
                 let object = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("monitor")));
                 engine.stack.local.heap.needs_full_collect.set(true);
                 let mut ctx = engine.ves_context(gc);
@@ -2086,8 +2081,9 @@ fn monitor_heap_byref_survives_stop_before_dispatch() {
     executor
         .with_arena(|arena| {
             arena.mutate(|_, engine| {
-                let handles = engine.stack.local.heap.gchandles.borrow();
-                let flag = handles[0].as_ref().unwrap().0;
+                let handles = &engine.stack.shared.gc_handles;
+                // SAFETY: the active arena mutation confines the witness to this operation.
+                let flag = unsafe { handles.get(0) }.unwrap().0;
                 assert_eq!(
                     flag.as_heap_storage(|storage| match storage {
                         HeapStorage::Obj(obj) => obj.instance_storage.with_data(|data| data[0]),
