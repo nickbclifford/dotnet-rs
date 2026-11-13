@@ -71,6 +71,8 @@ pub(crate) struct NativeActivation<'gc> {
     pub resume: Option<super::native_effects::InitializerResume>,
     pub id: dotnet_vm_data::NativeId,
     pub method: crate::CollectableMethodDescription,
+    #[collect(require_static)]
+    pub generics: dotnet_types::generics::GenericLookup,
     pub parent_destination: Option<dotnet_vm_data::NativeReturnDestination>,
     pub caller_depth: usize,
     pub caller_ip: usize,

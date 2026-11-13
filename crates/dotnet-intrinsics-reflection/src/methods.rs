@@ -23,8 +23,8 @@ use dotnet_value::{
 use dotnet_vm_data::StepResult;
 use dotnet_vm_ops::SupportSlotOps;
 use dotnet_vm_ops::effects::{
-    NativeInvocation, NativeOperandView, NativeReflectionStep, NativeResult, NativeSelection,
-    NativeValue, VmEffects,
+    NativeFailure, NativeInvocation, NativeOperandView, NativeReflectionStep, NativeResult,
+    NativeSelection, NativeValue, VmEffects,
 };
 use dotnet_vm_ops::intrinsic_args::type_mismatch;
 use dotnetdll::prelude::ParameterType;
@@ -110,15 +110,31 @@ pub async fn run_reflection_call(mut fx: VmEffects) -> NativeResult {
         let mut vm = fx.vm().await?;
         vm.prepare_reflection()?
     };
-    let (call, constructor_result) = match step {
-        NativeReflectionStep::Call(call, constructor_result) => (call, constructor_result),
+    let (call, constructor_result, do_not_wrap) = match step {
+        NativeReflectionStep::Call(call, constructor_result, do_not_wrap) => {
+            (call, constructor_result, do_not_wrap)
+        }
         NativeReflectionStep::Value(value) => {
             return fx.vm().await?.push_value(NativeValue::Value(value));
         }
     };
     let method = call.method.clone();
     let generics = call.generics.clone();
-    let result = fx.call(call).await?;
+    let result = if do_not_wrap {
+        fx.call(call).await?
+    } else {
+        match fx.try_call(call).await {
+            Ok(result) => result,
+            Err(NativeFailure::Managed(inner)) => {
+                let wrapper = fx
+                    .vm()
+                    .await?
+                    .with(|region| region.wrap_reflection_failure(&inner))??;
+                return Err(NativeFailure::Managed(wrapper));
+            }
+            Err(error) => return Err(error),
+        }
+    };
     let mut vm = fx.vm().await?;
     let value = match constructor_result {
         Some(instance) => {

@@ -1,9 +1,7 @@
 use crate::ReflectionIntrinsicHost;
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
-    error::{ExecutionError, VmError},
-    generics::{ConcreteType, GenericLookup},
-    members::MethodDescription,
+    error::ExecutionError, generics::GenericLookup, members::MethodDescription,
     runtime::RuntimeType,
 };
 use dotnet_value::{
@@ -15,7 +13,6 @@ use dotnet_vm_ops::effects::{
     NativeInvocation, NativeOperandView, NativeResult, NativeSelection, VmEffects,
 };
 use dotnet_vm_ops::ops::TypedStackOps;
-use dotnetdll::prelude::{MethodMemberIndex, TypeSource};
 
 #[dotnet_intrinsic(
     "static void System.Runtime.CompilerServices.RuntimeHelpers::RunClassConstructor(System.RuntimeTypeHandle)"
@@ -65,52 +62,25 @@ pub fn intrinsic_array_create_instance<'gc, T: ReflectionIntrinsicHost<'gc>>(
     StepResult::Continue
 }
 
-#[dotnet_intrinsic("static object System.Activator::CreateInstance()")]
-pub fn intrinsic_activator_create_instance<'gc, T: ReflectionIntrinsicHost<'gc>>(
-    ctx: &mut T,
-    _method: MethodDescription,
-    generics: &GenericLookup,
-) -> StepResult {
-    let target_ct = dotnet_vm_ops::vm_try!(generics.cloned_method_arg(0));
-    let target_td = ctx
-        .loader()
-        .find_concrete_type(target_ct.clone())
-        .expect("Type must exist for Activator.CreateInstance");
+pub fn activator_default_select<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    _ctx: &T,
+    _operands: NativeOperandView<'_, 'gc>,
+    method: &MethodDescription,
+    _generics: &GenericLookup,
+) -> NativeSelection {
+    tracing::debug!(reflection_invoke_path = "async");
+    NativeSelection::Async(NativeInvocation {
+        start: 0,
+        length: 0,
+        parameter_count: method.signature().parameters.len(),
+    })
+}
 
-    let empty_lookup = ctx.reflection_empty_generics();
-    if dotnet_vm_ops::vm_try!(
-        ctx.reflection_is_value_type_with_lookup(target_td.clone(), &empty_lookup)
-    ) {
-        let instance = dotnet_vm_ops::vm_try!(ctx.new_object(target_td));
-        ctx.push_value_type(instance);
-        StepResult::Continue
-    } else {
-        let instance = dotnet_vm_ops::vm_try!(ctx.new_object(target_td.clone()));
-        let mut new_lookup = GenericLookup::default();
-        if let dotnetdll::prelude::BaseType::Type {
-            source: TypeSource::Generic { parameters, .. },
-            ..
-        } = target_ct.get()
-        {
-            new_lookup.set_type_generics(parameters.clone().into());
-        }
-
-        if let Some(desc) = crate::common::find_parameterless_ctor(&target_td, &new_lookup) {
-            let info = dotnet_vm_ops::vm_try!(ctx.reflection_method_info(desc, &new_lookup));
-            dotnet_vm_ops::vm_try!(ctx.reflection_constructor_frame(instance, info, new_lookup));
-            return StepResult::FramePushed;
-        }
-
-        // Keep this as a recoverable host error: metadata/program input can legitimately request
-        // activation of a type without an accessible parameterless constructor.
-        StepResult::Error(VmError::Execution(ExecutionError::InternalError(
-            format!(
-                "could not find a parameterless constructor in {:?}",
-                target_td
-            )
-            .into(),
-        )))
-    }
+#[dotnet_intrinsic("static object System.Activator::CreateInstance()", select = activator_default_select)]
+#[dotnet_intrinsic("object System.RuntimeType::CreateInstanceDefaultCtor(bool, bool)", select = activator_default_select)]
+#[dotnet_intrinsic("object DotnetRs.RuntimeType::CreateInstanceDefaultCtor(bool, bool)", select = activator_default_select)]
+pub async fn activator_default_async(fx: VmEffects) -> NativeResult {
+    crate::methods::run_reflection_call(fx).await
 }
 
 /// What `Activator.CreateInstance(Type, object[])` creates once its operands are validated.
@@ -255,7 +225,10 @@ pub fn activator_select<'gc, T: ReflectionIntrinsicHost<'gc>>(
 ) -> NativeSelection {
     if !matches!(
         (operands.peek_at(1), operands.peek_at(0)),
-        (StackValue::ObjectRef(_), StackValue::ObjectRef(_))
+        (
+            StackValue::ObjectRef(_),
+            StackValue::ObjectRef(_) | StackValue::Int32(_)
+        )
     ) {
         return NativeSelection::Reject(
             ExecutionError::InternalError(
@@ -273,6 +246,7 @@ pub fn activator_select<'gc, T: ReflectionIntrinsicHost<'gc>>(
 }
 
 #[dotnet_intrinsic("static object System.Activator::CreateInstance(System.Type, object[])", select = activator_select)]
+#[dotnet_intrinsic("static object System.Activator::CreateInstance(System.Type, bool)", select = activator_select)]
 pub async fn activator_async(fx: VmEffects) -> NativeResult {
     crate::methods::run_reflection_call(fx).await
 }
@@ -384,70 +358,4 @@ pub fn handle_make_array_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
     let rt_obj = crate::common::get_runtime_type(ctx, array_rt);
     ctx.push_obj(rt_obj);
     StepResult::Continue
-}
-
-pub fn handle_create_instance_default_ctor<'gc, T: ReflectionIntrinsicHost<'gc>>(
-    ctx: &mut T,
-    _generics: &GenericLookup,
-) -> StepResult {
-    let _ = ctx.pop();
-    let _ = ctx.pop();
-    let target_obj = ctx.pop_obj();
-
-    if ctx.check_gc_safe_point() {
-        return StepResult::Yield;
-    }
-
-    let target_rt = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, target_obj));
-
-    let (td, type_generics) = match target_rt {
-        RuntimeType::Type(td) => (td, vec![]),
-        RuntimeType::Generic(td, args) => (td, args.clone()),
-        _ => {
-            // Keep this recoverable: the reflected runtime type can come from user code and may
-            // denote an uninstantiable shape (pointer/byref/etc.), which is not a VM invariant.
-            return StepResult::Error(VmError::Execution(ExecutionError::InternalError(
-                format!("cannot create instance of {:?}", target_rt).into(),
-            )));
-        }
-    };
-
-    let type_generics_concrete: Vec<ConcreteType> = type_generics
-        .iter()
-        .map(|a| a.to_concrete(ctx.loader().as_ref()))
-        .collect();
-    let new_lookup = GenericLookup::new(type_generics_concrete);
-
-    let instance =
-        dotnet_vm_ops::vm_try!(ctx.reflection_new_object_with_lookup(td.clone(), &new_lookup));
-
-    if let Some(desc) = td
-        .definition()
-        .methods
-        .iter()
-        .enumerate()
-        .find_map(|(i, m)| {
-            if !m.runtime_special_name || m.name != ".ctor" {
-                return None;
-            }
-            let d = MethodDescription::new(
-                td.clone(),
-                new_lookup.clone(),
-                td.resolution.clone(),
-                MethodMemberIndex::Method(i),
-            );
-            let sig = d.signature();
-            (sig.instance && sig.parameters.is_empty()).then_some(d)
-        })
-    {
-        let info = dotnet_vm_ops::vm_try!(ctx.reflection_method_info(desc, &new_lookup));
-        dotnet_vm_ops::vm_try!(ctx.reflection_constructor_frame(instance, info, new_lookup));
-        return StepResult::FramePushed;
-    }
-
-    // Keep this as a recoverable host error: `Activator.CreateInstance(Type)` may target a type
-    // that does not expose a parameterless constructor.
-    StepResult::Error(VmError::Execution(ExecutionError::InternalError(
-        format!("could not find a parameterless constructor in {:?}", td).into(),
-    )))
 }

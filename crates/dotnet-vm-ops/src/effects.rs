@@ -360,6 +360,12 @@ pub trait NativeBackend<'gc> {
     ) -> Result<ObjectRef<'gc>, VmError> {
         Err(internal("native initialization unavailable"))
     }
+    fn wrap_reflection_failure(
+        &mut self,
+        _inner: ObjectRef<'gc>,
+    ) -> Result<ObjectRef<'gc>, VmError> {
+        Err(internal("native reflection wrapping unavailable"))
+    }
     /// Allocate an exception without invoking a managed constructor.
     fn exception(
         &mut self,
@@ -477,7 +483,7 @@ pub enum NativeReflectionPlan<'gc> {
 
 /// A prepared reflection invocation whose values are rooted for the activation.
 pub enum NativeReflectionStep {
-    Call(NativeCall, Option<RootedValue>),
+    Call(NativeCall, Option<RootedValue>, bool),
     Value(RootedValue),
 }
 
@@ -487,6 +493,7 @@ pub struct NativePreparedCall<'gc> {
     pub generics: dotnet_types::generics::GenericLookup,
     pub arguments: Vec<StackValue<'gc>>,
     pub constructor_result: Option<StackValue<'gc>>,
+    pub do_not_wrap: bool,
 }
 
 /// Failure while preparing a native call, before its operands are committed.
@@ -624,6 +631,7 @@ impl<'gc, 'a> NativeRegion<'gc, 'a> {
                 arguments,
             },
             constructor_result,
+            prepared.do_not_wrap,
         ))
     }
     fn probe_initializer(
@@ -664,6 +672,14 @@ impl<'gc, 'a> NativeRegion<'gc, 'a> {
             claim.fail(exception);
         }
         Ok(root)
+    }
+
+    pub fn wrap_reflection_failure(&mut self, inner: &RootedValue) -> Result<RootedValue, VmError> {
+        let StackValue::ObjectRef(inner) = self.fetch(inner)? else {
+            return Err(internal("reflection failure is not an exception"));
+        };
+        let exception = self.backend.wrap_reflection_failure(inner)?;
+        self.root(StackValue::ObjectRef(exception))
     }
 
     /// Transform a successful reflected return while its value is rooted.

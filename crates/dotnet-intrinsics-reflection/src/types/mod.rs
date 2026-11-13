@@ -215,7 +215,6 @@ pub fn runtime_type_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
         ("MakeGenericType", 1) => handle_make_generic_type(ctx, generics),
         ("MakeByRefType", 0) => handle_make_by_ref_type(ctx, generics),
         ("MakeArrayType", 0) => handle_make_array_type(ctx, generics),
-        ("CreateInstanceDefaultCtor", 2) => handle_create_instance_default_ctor(ctx, generics),
         ("GetFields", 1) => handle_get_fields(ctx, generics),
         ("GetField", 2) => handle_get_field(ctx, generics),
         ("GetProperties", 1) => handle_get_properties(ctx, generics),

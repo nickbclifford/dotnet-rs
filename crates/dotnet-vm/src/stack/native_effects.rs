@@ -253,6 +253,7 @@ struct Adapter<'a, 'b, 'gc> {
     context: &'a mut VesContext<'b, 'gc>,
     operands: &'a mut Vec<StackValue<'gc>>,
     outputs: &'a mut Vec<StackValue<'gc>>,
+    entry_generics: &'a GenericLookup,
 }
 
 fn event_method(
@@ -541,6 +542,29 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
             .into()),
         }
     }
+    fn wrap_reflection_failure(
+        &mut self,
+        inner: ObjectRef<'gc>,
+    ) -> Result<ObjectRef<'gc>, VmError> {
+        let previous = *self.context.exception_mode;
+        let result = self.context.throw_by_name_with_inner(
+            "System.Reflection.TargetInvocationException",
+            "Exception has been thrown by the target of an invocation.",
+            inner,
+        );
+        let current = *self.context.exception_mode;
+        *self.context.exception_mode = previous;
+        match (result, current) {
+            (StepResult::Exception, dotnet_vm_data::ExceptionState::Throwing(exception, _)) => {
+                Ok(exception)
+            }
+            (StepResult::Error(error), _) => Err(error),
+            _ => Err(dotnet_types::error::ExecutionError::InternalError(
+                "failed to create reflection exception".into(),
+            )
+            .into()),
+        }
+    }
     fn exception(
         &mut self,
         name: &str,
@@ -764,7 +788,69 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
     fn reflection_call(
         &mut self,
     ) -> Result<dotnet_vm_ops::effects::NativeReflectionPlan<'gc>, NativePrepareError<'gc>> {
+        let do_not_wrap = match self.operands.as_slice() {
+            [_, _, StackValue::Int32(flags), _, _, _] | [_, StackValue::Int32(flags), _, _, _] => {
+                flags & 0x02000000 != 0
+            }
+            _ => false,
+        };
         let (mut method, mut generics, receiver, parameters) = match self.operands.as_slice() {
+            [] => {
+                let target = self.entry_generics.cloned_method_arg(0)?;
+                let td = self
+                    .context
+                    .shared
+                    .loader
+                    .find_concrete_type(target.clone())?;
+                let mut lookup = GenericLookup::default();
+                if let BaseType::Type {
+                    source: dotnetdll::prelude::TypeSource::Generic { parameters, .. },
+                    ..
+                } = target.get()
+                {
+                    lookup.set_type_generics(parameters.clone().into());
+                }
+                if td.is_value_type(&self.context.current_context())? {
+                    let value = dotnet_intrinsics_reflection::ResolutionContextHost::reflection_new_object_with_lookup(self.context, td, &lookup)?;
+                    return Ok(dotnet_vm_ops::effects::NativeReflectionPlan::Value(
+                        StackValue::ValueType(value),
+                    ));
+                }
+                let method =
+                    dotnet_intrinsics_reflection::common::find_parameterless_ctor(&td, &lookup)
+                        .ok_or_else(|| {
+                            dotnet_types::error::ExecutionError::InternalError(
+                                format!("could not find a parameterless constructor in {:?}", td)
+                                    .into(),
+                            )
+                        })?;
+                (method, lookup, None, ObjectRef(None))
+            }
+            [StackValue::ObjectRef(target), StackValue::Int32(_)]
+            | [
+                StackValue::ObjectRef(target),
+                StackValue::Int32(_),
+                StackValue::Int32(_),
+            ] => {
+                match dotnet_intrinsics_reflection::types::activator_target(
+                    self.context,
+                    *target,
+                    ObjectRef(None),
+                )
+                .map_err(|step| reflection_prepare_error(self.context, step))?
+                {
+                    dotnet_intrinsics_reflection::types::ActivatorTarget::Constructor(
+                        method,
+                        generics,
+                    ) => (method, generics, None, ObjectRef(None)),
+                    dotnet_intrinsics_reflection::types::ActivatorTarget::Default(value) => {
+                        return Ok(dotnet_vm_ops::effects::NativeReflectionPlan::Value(
+                            StackValue::ObjectRef(value),
+                        ));
+                    }
+                }
+            }
+
             [
                 StackValue::ObjectRef(target),
                 StackValue::ObjectRef(parameters),
@@ -933,6 +1019,7 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
                 generics,
                 arguments,
                 constructor_result,
+                do_not_wrap,
             },
         ))
     }
@@ -1437,6 +1524,7 @@ impl<'gc> VesContext<'_, 'gc> {
             ),
             parent_destination,
             method: crate::CollectableMethodDescription(method.clone()),
+            generics: generics.clone(),
             operands,
             outputs: Vec::new(),
             instruction,
@@ -1914,6 +2002,7 @@ impl<'gc> VesContext<'_, 'gc> {
                 context: self,
                 operands: &mut work.operands,
                 outputs: &mut work.outputs,
+                entry_generics: &work.generics,
             };
             let mut region = NativeRegion::new(gc.mutation(), work.roots, &mut adapter);
             if new_turn {
@@ -1979,6 +2068,7 @@ impl<'gc> VesContext<'_, 'gc> {
                             context: self,
                             operands: &mut work.operands,
                             outputs: &mut work.outputs,
+                            entry_generics: &work.generics,
                         };
                         let region = NativeRegion::new(gc.mutation(), work.roots, &mut adapter);
                         match region.fetch(&object) {
@@ -2133,6 +2223,7 @@ impl<'gc> VesContext<'_, 'gc> {
                             context: self,
                             operands: &mut work.operands,
                             outputs: &mut work.outputs,
+                            entry_generics: &work.generics,
                         };
                         let region = NativeRegion::new(gc.mutation(), work.roots, &mut adapter);
                         match output.map(|value| region.root(value)).transpose() {
@@ -2145,6 +2236,7 @@ impl<'gc> VesContext<'_, 'gc> {
                             context: self,
                             operands: &mut work.operands,
                             outputs: &mut work.outputs,
+                            entry_generics: &work.generics,
                         };
                         let region = NativeRegion::new(gc.mutation(), work.roots, &mut adapter);
                         match rooted.as_ref().map(|value| region.fetch(value)).transpose() {
@@ -2183,6 +2275,7 @@ impl<'gc> VesContext<'_, 'gc> {
                         context: self,
                         operands: &mut work.operands,
                         outputs: &mut work.outputs,
+                        entry_generics: &work.generics,
                     };
                     NativeRegion::new(gc.mutation(), work.roots, &mut adapter).fetch(&exception)
                 };
@@ -2215,6 +2308,7 @@ impl<'gc> VesContext<'_, 'gc> {
                     context: self,
                     operands: &mut work.operands,
                     outputs: &mut work.outputs,
+                    entry_generics: &work.generics,
                 };
                 let region = NativeRegion::new(gc.mutation(), work.roots, &mut adapter);
                 pending
@@ -2362,6 +2456,7 @@ impl<'gc> VesContext<'_, 'gc> {
                 context: self,
                 operands: &mut work.operands,
                 outputs: &mut work.outputs,
+                entry_generics: &work.generics,
             };
             NativeRegion::new(gc.mutation(), work.roots, &mut adapter)
                 .root(StackValue::ObjectRef(exception))?
@@ -2405,6 +2500,7 @@ impl<'gc> VesContext<'_, 'gc> {
                 context: self,
                 operands: &mut work.operands,
                 outputs: &mut work.outputs,
+                entry_generics: &work.generics,
             };
             let region = NativeRegion::new(gc.mutation(), work.roots, &mut adapter);
             value.map(|value| region.root(value)).transpose()?

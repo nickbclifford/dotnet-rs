@@ -226,18 +226,18 @@ fn reflection_path_selection() {
         ("tests/fixtures/reflection/invoke_results_42.cs", (3, 0, 0)),
         // These fixtures print on the successful path, which requires P/Invoke.
         #[cfg(not(feature = "fuzzing"))]
-        ("tests/fixtures/reflection/invoke_collect_42.cs", (3, 0, 0)),
+        ("tests/fixtures/reflection/invoke_collect_42.cs", (4, 0, 0)),
         (
             "tests/fixtures/reflection/invoke_constructors_42.cs",
             (7, 0, 0),
         ),
         ("tests/fixtures/reflection/invoke_fallback_42.cs", (5, 0, 0)),
         #[cfg(not(feature = "fuzzing"))]
-        ("tests/fixtures/reflection/invoke_values_42.cs", (6, 0, 0)),
+        ("tests/fixtures/reflection/invoke_values_42.cs", (7, 0, 0)),
         #[cfg(not(feature = "fuzzing"))]
         (
             "tests/fixtures/reflection/invoke_byref_like_42.cs",
-            (27, 0, 0),
+            (28, 0, 0),
         ),
         (
             "tests/fixtures/reflection/invoke_target_validation_42.cs",

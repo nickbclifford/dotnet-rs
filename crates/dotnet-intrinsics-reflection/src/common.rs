@@ -20,7 +20,7 @@ use dotnetdll::{
     },
 };
 
-pub(crate) fn find_parameterless_ctor(
+pub fn find_parameterless_ctor(
     td: &TypeDescription,
     lookup: &GenericLookup,
 ) -> Option<MethodDescription> {

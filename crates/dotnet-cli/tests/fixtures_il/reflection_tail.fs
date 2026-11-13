@@ -55,7 +55,7 @@ let main _ =
     let caught = try invoke (ty.GetMethod("Throw")) null null |> ignore; false with _ -> true
     if not caught then 5 else
     let substring = typeof<string>.GetMethod("Substring", [| typeof<int> |])
-    let caughtIntrinsic = try invoke substring (box "hello") [| box 20 |] |> ignore; false with _ -> true
+    let caughtIntrinsic = try invoke substring (box "hello") [| box 20 |] |> ignore; false with :? TargetInvocationException as ex -> ex.InnerException :? ArgumentOutOfRangeException
     if not caughtIntrinsic then 9 else
     if unbox<int> (invoke mi null [| box -42 |]) <> 42 then 10 else
     let native = typeof<NativeMethods>.GetMethod("NativeAbs", BindingFlags.Static ||| BindingFlags.Public ||| BindingFlags.NonPublic)

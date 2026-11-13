@@ -320,6 +320,10 @@ diff_test!(
     "tests/fixtures/reflection/invoke_constructors_42.cs"
 );
 diff_test!(
+    reflection_invoke_wrapping_42_matches_dotnet,
+    "tests/fixtures/reflection/invoke_wrapping_42.cs"
+);
+diff_test!(
     reflection_invoke_results_42_matches_dotnet,
     "tests/fixtures/reflection/invoke_results_42.cs"
 );
