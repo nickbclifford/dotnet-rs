@@ -1,6 +1,6 @@
 # Shared GC handles and a dedicated finalizer thread
 
-**Status:** Complete — slices 1–8 and the Loom, Miri and single-threaded-cost acceptance evidence (below); the `ConditionalWeakTable` growth crash is recorded in the plans README
+**Status:** Complete — slices 1–8 and the Loom, Miri and single-threaded-cost acceptance evidence (below); the pre-existing `ConditionalWeakTable` growth crash is fixed (see "Fixed finding" below)
 **Outcome:** Under `multithreading`, finalizers run on one background finalizer thread with its own
 identity, GC handles are readable from any thread, and the process exits without waiting for
 finalizers; the GC fixtures listed under each slice match `dotnet` through the diff harness.
@@ -256,9 +256,14 @@ the worker claims in its own arena, runs `Finalize` and completes.
 thread had registered with the thread manager. It also timed out
 `monitor_wait_parks_outside_mutation_during_collection` once in a full `dotnet-vm` run.
 
-**Open finding (pre-existing, not plan 20).** Adding a ninth entry to a `ConditionalWeakTable`
-(`Keys = 9` in the benchmark fixture) crashes the VM with SIGSEGV, in debug and optimized builds,
-single-threaded and multithreaded, at 03cb031d and at HEAD. Eight entries work.
+**Fixed finding (pre-existing, not plan 20).** Adding a ninth entry to a `ConditionalWeakTable`
+crashed the VM with SIGSEGV, in debug and optimized builds, single-threaded and multithreaded, at
+03cb031d and at HEAD. The cause was a missing intrinsic: `DependentHandle.InternalGetTarget(IntPtr)`
+had no registration, so its CoreLib body (`ldarg.0; ldind.ref`) ran against the VM's 1-based handle
+id and dereferenced address 1. Only the resize path (`Container.Resize` copying live entries through
+`UnsafeGetTarget`) called it, which is why eight entries worked. The fix adds the intrinsic in
+`crates/dotnet-vm/src/intrinsics/gc.rs`; `conditional_weak_table_growth_42.cs` is a differential
+fixture, and the benchmark fixture now uses more than eight keys.
 
 ## Slice 3a benchmark
 

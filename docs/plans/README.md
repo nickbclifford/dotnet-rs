@@ -112,8 +112,6 @@ Evidence and IDs (p01…, R01…) are defined in the
   legacy continuation (reflection return, monitor retry, static-init retry, yield-retry
   intrinsics, `VmContinuation::RetryInstruction`). Substring retains
   its measured valid-small fast path ([plan 13](13-async-intrinsic-api.md#substring-fast-path-measurement)).
-- **`ConditionalWeakTable` growth crash:** adding a ninth entry crashes the VM with SIGSEGV in
-  every configuration (plan 20, "Loom and Miri evidence"); the benchmark fixture stays at eight.
 - **Single-threaded finalizer identity:** without `multithreading`, finalizers run on the
   interrupted managed context and share its thread identity, including monitor and initializer ownership.
 - **Negative and wide managed-pointer offsets:** `ManagedPtr` stores a compact unsigned offset,

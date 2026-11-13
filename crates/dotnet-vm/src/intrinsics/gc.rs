@@ -404,6 +404,28 @@ pub fn intrinsic_dependent_handle_internal_alloc<'gc, T: TypedStackOps<'gc> + Me
     StepResult::Continue
 }
 
+#[dotnet_intrinsic("static object System.Runtime.DependentHandle::InternalGetTarget(IntPtr)")]
+pub fn intrinsic_dependent_handle_internal_get_target<
+    'gc,
+    T: TypedStackOps<'gc> + MemoryOps<'gc>,
+>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let handle = ctx.pop_isize();
+    let target = if handle == 0 {
+        ObjectRef(None)
+    } else {
+        let index = (handle - 1) as usize;
+        // SAFETY: F1.GcHandleRooted — the active mutation keeps both objects allocated until pushed.
+        unsafe { ctx.gc_handles().get_dependent(index) }
+            .map_or(ObjectRef(None), |(target, _)| target)
+    };
+    ctx.push_obj(target);
+    StepResult::Continue
+}
+
 #[dotnet_intrinsic("static object System.Runtime.DependentHandle::InternalGetDependent(IntPtr)")]
 pub fn intrinsic_dependent_handle_internal_get_dependent<
     'gc,

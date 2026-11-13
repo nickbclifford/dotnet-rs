@@ -1,10 +1,8 @@
 using System;
 using System.Runtime.CompilerServices;
 
-// Keep Keys <= 8: adding a ninth entry to a ConditionalWeakTable crashes the VM with SIGSEGV
-// (reproduced at 03cb031d and at HEAD, single-threaded and multithreaded; see plan 20).
 public class Program {
-    private const int Keys = 8;
+    private const int Keys = 32;
     private const int Rounds = 2500;
 
     public static int Main() {

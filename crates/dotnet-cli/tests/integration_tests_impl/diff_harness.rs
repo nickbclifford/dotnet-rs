@@ -1111,3 +1111,8 @@ diff_test!(
     finalizer_wait_producer_matches_dotnet,
     "tests/fixtures/gc/finalizer_wait_producer_42.cs"
 );
+
+diff_test!(
+    conditional_weak_table_growth_matches_dotnet,
+    "tests/fixtures/gc/conditional_weak_table_growth_42.cs"
+);
