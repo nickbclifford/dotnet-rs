@@ -37,7 +37,6 @@ tracing = { workspace = true }
 tracing-subscriber = "0.3"
 dotnet-types = { workspace = true }
 dotnet-utils = { workspace = true }
-dotnet-value = { workspace = true }
 dotnet-assemblies = { workspace = true }
 dotnet-vm = { workspace = true }
 

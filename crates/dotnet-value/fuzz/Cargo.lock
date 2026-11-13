@@ -181,7 +181,6 @@ dependencies = [
  "dotnetdll",
  "gc-arena",
  "hashbrown 0.17.1",
- "lru",
  "smallvec",
  "thiserror",
 ]

@@ -37,6 +37,14 @@ Known problems without a plan. Write a plan for one only when it is chosen as th
 Evidence and IDs (p01…, R01…) are defined in the
 [pointer-provenance inventory](../pointer-provenance/INVENTORY.md).
 
+- **Dependency major-version migrations:** defer the 12 exported notices without upgrading
+  APIs: `gc-arena` in the workspace and both standalone fuzz manifests (3); workspace
+  `parking_lot` and `lru` (2); benchmark `criterion` (1); `syn` in dotnet-macros,
+  dotnet-macros-core, dotnet-vm build-dependencies and xtask (4); and `phf` plus `phf_codegen`
+  in dotnet-vm (2). The upstream changelog, release and crates.io evidence and compatibility
+  rationale are recorded in [REVIEW.md F-DEP-002](../../REVIEW.md#F-DEP-002). Resolve each
+  family as deliberate API/safety/measurement work; MSRV compatibility alone is not evidence
+  that an upgrade is safe.
 - **Async build-script probe API drift:** `scripts/tests/async_dispatch_probe.rs` calls
   `VesContext::unified_dispatch_for_engine_api` and
   `VesContext::dispatch_resolved_method_for_engine_api`, which are absent from the current
@@ -44,9 +52,6 @@ Evidence and IDs (p01…, R01…) are defined in the
   `VesContext::dispatch_method_inline`. `./check.sh --full` fails probe 4 at its temporary
   nextest selector with E0599 before reaching the shared feature matrix. Align this independent
   probe with the supported API before relying on the full build-script lane.
-- **VM fuzz lockfile drift:** `crates/dotnet-vm/fuzz/Cargo.lock` lacks the VM's direct
-  `dotnet-simd` dependency. A `cargo check --locked` of that manifest fails; reconcile the
-  standalone fuzz lockfile with the workspace dependencies.
 - **Heap byte-read overflow:** `RawMemoryAccess::read_bytes` adds the owner-relative offset
   and destination length without checked arithmetic. A `VesContext::read_bytes` heap-origin
   call with `usize::MAX` and a one-byte destination panics instead of returning `BoundsCheck`;

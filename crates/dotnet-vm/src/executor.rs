@@ -20,7 +20,7 @@ use dotnet_utils::{
 use dotnet_value::StackValue;
 #[cfg(feature = "multithreading")]
 use dotnet_value::object::ObjectPtr;
-#[cfg(not(feature = "fuzzing"))]
+#[cfg(any(not(feature = "fuzzing"), feature = "multithreading"))]
 use dotnet_value::object::ObjectRef;
 #[cfg(not(feature = "fuzzing"))]
 use dotnet_value::{object::HeapStorage, string::CLRString};

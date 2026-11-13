@@ -391,8 +391,6 @@ dependencies = [
  "gc-arena",
  "hashbrown 0.17.1",
  "serde_json",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -408,7 +406,6 @@ dependencies = [
  "dotnet-build-tools",
  "dotnet-types",
  "dotnet-utils",
- "dotnet-value",
  "dotnet-vm",
  "dotnetdll",
  "rayon",
@@ -649,7 +646,6 @@ dependencies = [
  "dotnetdll",
  "gc-arena",
  "hashbrown 0.17.1",
- "lru",
  "smallvec",
  "static_assertions",
  "thiserror",

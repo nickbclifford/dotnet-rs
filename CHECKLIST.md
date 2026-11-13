@@ -26,7 +26,7 @@ Ordered, enabled slices; detailed rationale and per-entry dispositions are in RE
 
 ## Phase 3: Dependency edges and closure
 
-- [ ] 3.1 Remove unused direct dependency edges without upgrading APIs [effort: default] — refs REVIEW.md#F-DEP-001, REVIEW.md#F-DEP-002
+- [x] 3.1 Remove unused direct dependency edges without upgrading APIs [effort: default] — refs REVIEW.md#F-DEP-001, REVIEW.md#F-DEP-002
   Remove the four unused direct edges in dotnet-benchmarks (tracing, tracing-subscriber), dotnet-value (lru), and dotnet-cli (dotnet-value), including feature-forwarding references that exist only to propagate an otherwise unused edge; preserve real dependency feature propagation through actual consumers. Check all targets, build scripts, macro expansion and standalone fuzz manifests. Do not upgrade any dependency. Acceptance: cargo tree -e features confirms surviving feature routes, all affected targets build across shared and optional feature guards, CLI/benchmark smoke and crate tests pass, full matrix clippy/nextest and fmt pass; record all twelve major-version notices as scoped follow-ups in docs/plans/README.md Not yet planned with upstream evidence.
 
 - [ ] 3.2 Close the inspection ledger and durable plan with reproducible checks [effort: default] — refs REVIEW.md#F-INFRA-001, REVIEW.md#F-CI-001, REVIEW.md#F-DUP-005

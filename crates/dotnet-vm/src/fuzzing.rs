@@ -568,9 +568,12 @@ pub fn execute_cil_program(program: FuzzProgram) {
     execute_cil_program_with_loader(program, get_loader());
 }
 
-#[expect(
-    clippy::arc_with_non_send_sync,
-    reason = "fuzz execution is confined to the invoking corpus thread; VM APIs require Arc"
+#[cfg_attr(
+    not(feature = "multithreading"),
+    expect(
+        clippy::arc_with_non_send_sync,
+        reason = "fuzz execution is confined to the invoking corpus thread; VM APIs require Arc"
+    )
 )]
 pub fn execute_cil_program_with_loader(program: FuzzProgram, loader: Arc<AssemblyLoader>) {
     let shared = Arc::new(SharedGlobalState::new(loader.clone()));

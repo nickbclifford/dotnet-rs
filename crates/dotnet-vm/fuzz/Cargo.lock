@@ -413,7 +413,6 @@ dependencies = [
  "dotnetdll",
  "gc-arena",
  "hashbrown 0.17.1",
- "lru",
  "smallvec",
  "thiserror",
 ]
@@ -440,6 +439,7 @@ dependencies = [
  "dotnet-pinvoke",
  "dotnet-runtime-memory",
  "dotnet-runtime-resolver",
+ "dotnet-simd",
  "dotnet-tracer",
  "dotnet-types",
  "dotnet-utils",

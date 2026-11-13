@@ -42,7 +42,7 @@ The generated table below partitions each problem into **fix / refute / keep / d
 | Inspection | Count | Crates/areas (count) | Fix / refute / keep / defer | Findings |
 |---|---:|---|---|---|
 | Annotator | 5 | dotnet-assemblies (2), dotnet-vm (3) | 0 / 5 / 0 / 0 | F-INFRA-001 |
-| CargoUnusedDependency | 4 | dotnet-benchmarks (2), dotnet-cli (1), dotnet-value (1) | 4 / 0 / 0 / 0 | F-DEP-001 |
+| CargoUnusedDependency | 4 | dotnet-benchmarks (2), dotnet-cli (1), dotnet-value (1) | 4 (4 resolved) / 0 / 0 / 0 | F-DEP-001 |
 | DuplicatedCode | 70 | dotnet-intrinsics-core (2), dotnet-intrinsics-reflection (3), dotnet-intrinsics-span (8), dotnet-intrinsics-string (4), dotnet-simd (2), dotnet-utils (2), dotnet-value (1), dotnet-vm (48) | 29 (29 resolved) / 0 / 41 / 0 | F-DUP-001 / F-DUP-002 / F-DUP-003 / F-DUP-004 / F-DUP-005 |
 | NewCrateVersionAvailable | 12 | Cargo.toml (3), dotnet-benchmarks (1), dotnet-macros (1), dotnet-macros-core (1), dotnet-value (1), dotnet-vm (4), xtask (1) | 0 / 0 / 0 / 12 | F-DEP-002 |
 | RsAssertEqual | 19 | dotnet-value (17), dotnet-vm (2) | 19 (19 resolved) / 0 / 0 / 0 | F-IDIOM-002 |
@@ -166,9 +166,9 @@ The other standard production atomics remain separate from this method rename; c
 <a id="F-DEP-001"></a>
 #### F-DEP-001 — Remove unused direct dependency edges, preserve feature routes
 
-**Low; default effort.** Searches show no tracing/tracing-subscriber uses in benchmark source/benches, no lru use in value, and no dotnet_value use in CLI source/tests/build script. Real LruCache consumers are types::generics and vm::cache. Remove four unused direct edges after checking macro expansions and forwarding lists. Never remove workspace tracing/lru with real consumers, or add fake uses to pacify the IDE.
+**Low; default effort; resolved.** Removed the unused benchmark `tracing` and `tracing-subscriber` dev-dependencies, the value crate's direct `lru` dependency, and CLI's `dotnet-value` dev-dependency. Searches across all targets and build scripts found no corresponding direct uses; macro expansion has no dependency on these paths. `dotnet-value` remains a benchmark dev-dependency because benchmark targets import it, and its `multithreading` feature route remains enabled there. The CLI still reaches `dotnet-value` through VM and runtime consumers. Real `LruCache` consumers remain in `dotnet-types::generics` and `dotnet-vm::cache`, so the workspace `lru` edge and those routes remain. CLI integration tests use `tracing` and `tracing-subscriber`, so their CLI dev-dependencies are retained.
 
-Compare cargo tree -e features before/after: CLI feature propagation must continue through VM/actual consumers, including validation/fuzzing. Verification: shared matrix all-target builds/clippy/tests, optional flags, benches, standalone fuzz closure and feature trees. CLI tests require prebuilt fixtures. udeps/machete if available supplement, not replace, cfg inspection. Risk: workspace feature unification can mask missing direct dependencies.
+`cargo tree -e features` confirms CLI feature propagation continues through VM and its actual consumers, while benchmark multithreading still reaches its directly used value crate and VM. `lru` remains enabled through types and VM consumers. Full matrix, optional-guard, benchmark-target, standalone-fuzz and CLI fixture checks are recorded in AGENT_MEMORY.md. Workspace feature unification can mask missing direct dependencies, so the manifest, source, expansion and standalone-fuzz audits remain part of the evidence.
 
 <a id="F-DEP-002"></a>
 #### F-DEP-002 — Major dependency migrations are scoped follow-ups
@@ -473,10 +473,10 @@ Each row is one exported problem, identified by inspection and one-based XML ord
 
 | Entry | Snapshot site and nearby symbol | Decision | Reason / finding |
 |---|---|---|---|
-| 1 | `crates/dotnet-benchmarks/Cargo.toml:44` — `(module context)` | fix | F-DEP-001; `tracing = "0.1"` |
-| 2 | `crates/dotnet-benchmarks/Cargo.toml:45` — `(module context)` | fix | F-DEP-001; `tracing-subscriber = "0.3"` |
-| 3 | `crates/dotnet-cli/Cargo.toml:40` — `(module context)` | fix | F-DEP-001; `dotnet-value = { workspace = true }` |
-| 4 | `crates/dotnet-value/Cargo.toml:14` — `(module context)` | fix | F-DEP-001; `lru = { workspace = true }` |
+| 1 | `crates/dotnet-benchmarks/Cargo.toml:44` — `(module context)` | fix (resolved) | F-DEP-001; `tracing = "0.1"` |
+| 2 | `crates/dotnet-benchmarks/Cargo.toml:45` — `(module context)` | fix (resolved) | F-DEP-001; `tracing-subscriber = "0.3"` |
+| 3 | `crates/dotnet-cli/Cargo.toml:40` — `(module context)` | fix (resolved) | F-DEP-001; `dotnet-value = { workspace = true }` |
+| 4 | `crates/dotnet-value/Cargo.toml:14` — `(module context)` | fix (resolved) | F-DEP-001; `lru = { workspace = true }` |
 
 ### DuplicatedCode — 70 entries
 
