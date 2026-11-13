@@ -32,7 +32,9 @@ origins. The remaining declined shapes are:
 
 - Byref arguments require `Heap`, `FrameHome`, `Static`, `Unmanaged` or MT cross-arena origins, and a target
   type without managed pointers.
-- Byref returns and `TypedReference` are declined in both.
+- At this plan's start, byref returns and `TypedReference` were declined in both.
+  [Plan 19](19-reflection-invoke-clr-parity.md) subsequently admitted reflection byref returns;
+  multicast still declines them.
 - Ref-struct arguments (`Span<T>`, `SpanAction`) carry `ManagedPtr` fields whose origins may be
   `Transient` or `Unmanaged`; ref-struct values are excluded by type, regardless of origin.
 
@@ -65,7 +67,7 @@ Checked against the code on `main`. "Reachable" means a valid guest program can 
 | Bulk string/mem/span/buffer loops | **Remove, measured** | Plan 04 measured a large-call cost for native activations. Each family needs a before/after on its benchmark (`substring`, `end_to_end`, `runtime_primitives`); small-input paths keep an inline fast path as Substring does. A fast path registered as a sync `fallback` is also what any remaining `Other` dispatch receives, so it must either handle every input size or `Other` must have no producer for that intrinsic. Overlapping memmove (above) is a correctness reason, not only a cleanup. |
 | `cpblk`/`initblk` instruction yields | **Fix, then decide** | These are instructions, not intrinsics, but share `chunked_copy_with_safe_point` and its restart-from-zero overlap hazard. At minimum keep progress across the yield; whether they become effects is decided with the `mem_helpers` family. |
 | Multicast `Invoke` (`MulticastState`) | **Keep for excluded shapes** | Ref-structs, byref returns, `TypedReference` and unsupported byref origins remain excluded; see "Kept". `MulticastState::retrying_initializer` stays, now meaning "retry this step after the type-initializer activation completes" (slice 7); it goes with `MulticastState`. |
-| Reflection `InvokeReturn` / `reflection_pending` | **Removed (slice 3)** | Every remaining declined shape was byref-like, which the CLR refuses with `NotSupportedException` before the target runs; the body now raises that, and Activator's binding and default-value cases. Byref write-back after a throw and ambiguous-match "first best match" remain README deviations. |
+| Reflection `InvokeReturn` / `reflection_pending` | **Removed (slice 3)** | Every remaining declined shape was byref-like, which the CLR refuses with `NotSupportedException` before the target runs; the body now raises that, and Activator's binding and default-value cases. The then-remaining write-back and ambiguity deviations were addressed by [plan 19](19-reflection-invoke-clr-parity.md). |
 | Monitor byref `Transient` / `Unmanaged` fallback | **Removed (slice 5b)** | Slice 5 kept both, but its own probe shows the only `Transient bool&` candidate (`ldflda` on a struct value on the evaluation stack) is invalid IL: ECMA-335 §III.4.11 allows only an object, managed pointer or unmanaged pointer as `ldflda`'s operand (unlike `ldfld`, not a value-type instance), and the CLR rejects it with `InvalidProgramException`. That leaves `Unmanaged`, which is cheap to admit as a byref origin (no new hazard; see slice 5b). |
 | `newobj` of an intrinsic constructor (formerly `execute_intrinsic_call`) | **Removed (slice 4)** | Completion (`complete_constructor_receiver`) can be the activation's completion action, as `Jump` is for inline calls. Intrinsic constructors **do** suspend: `String::.ctor(char[])`, `.ctor(char, int)`, `.ctor(ReadOnlySpan<char>)` and `.ctor(char*)` yield at safepoints (`constructors.rs`). `newobj` now dispatches intrinsic constructors in `NativeDispatchMode::Constructor`, so an async constructor body can suspend and the value-type receiver is completed only on success. The synchronous string constructors still return their safepoint `Yield` and re-allocate on retry until slice 6 converts them; that slice should add a managed-exception case showing the receiver is not published. |
 | `.cctor` dispatch, span equality slow path, `Expression.Compile` redirect | **Keep** | They dispatch managed bodies, never intrinsics; `Other` is correct for them. |
@@ -145,9 +147,10 @@ exclusions. Slice 3 then removed the reflection continuation; the remaining orde
      native body for transportable signatures. Retained reflection dispatch and retry call
      targets inline, including async-only intrinsics; a retry must not enqueue a native target
      again when its activation suspends. The collection fixture asserts all three calls select
-     the native path. Exceptional byref write-back is still the documented CLR deviation: the
-     body passes pointers into the original box or argument array, so writes are immediate even
-     on a throw. Changing that requires a separate copy-in/copy-out design and tests for aliasing.
+     the native path. At the time, exceptional byref write-back was a CLR deviation: the
+     body passed pointers into the original box or argument array, so writes were immediate even
+     on a throw. [Plan 19](19-reflection-invoke-clr-parity.md) supersedes this behavior with
+     success-only copy-back.
    - Excluded shapes: every value the native transport cannot root is byref-like (a `ref struct`,
      `Span<T>`, `TypedReference`). A CLR probe showed it refuses all of them before running the
      target: `NotSupportedException("Cannot create boxed ByRef-like values.")` for a parameter
@@ -163,9 +166,10 @@ exclusions. Slice 3 then removed the reflection continuation; the remaining orde
      message) as the CLR does. With no arguments, a value type without a matching constructor
      (including primitives, which previously threw `Arg_MustBeType`) returns its boxed default
      through a new no-call preparation result (`NativeReflectionPlan::Value`). Arrays no longer
-     construct a `DotnetRs.Array`, and `List<>` no longer constructs an instance. `string` keeps
+     construct a `DotnetRs.Array`, and `List<>` no longer constructs an instance. At the time, `string` kept
      `ArgumentException("Arg_MustBeType")`: constructing one needs the intrinsic-constructor
-     protocol, recorded in the README.
+     protocol. [Plan 19](19-reflection-invoke-clr-parity.md) subsequently uses that protocol
+     for reflection string construction.
    - Deleted: both selectors' `Fallback` outcomes, the `Invoke` arms of
      `runtime_method_info_intrinsic_call`, `intrinsic_activator_create_instance_type_args`,
      `FrameReturnAction`/`InvokeReturn`, `StackFrame::frame_continuation` and
@@ -483,4 +487,5 @@ exclusions. Slice 3 then removed the reflection continuation; the remaining orde
 - A bulk family regresses more than a few percent on its benchmark.
 - Multicast needs a CLR deviation (for example exception behaviour inside an invocation list).
 - Reflection ambiguity handling (`AmbiguousMatchException` versus first-best-match) must change
-  to delete a fallback.
+  to delete a fallback. This question was resolved by [plan 19](19-reflection-invoke-clr-parity.md),
+  which reports ambiguous matches.

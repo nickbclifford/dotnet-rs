@@ -45,7 +45,7 @@ Out:
   routes them inline. Tail calls and `jmp` inside a managed child are handled in slice 2.
 - New reflection exception semantics. Calls stay transparent and no
   `TargetInvocationException` wrapping is added (maintainer decision; revisit only for an
-  observed compatibility failure).
+  observed compatibility failure). Superseded by [plan 19](19-reflection-invoke-clr-parity.md).
 
 ## Decisions already made
 
@@ -55,7 +55,8 @@ Out:
 - **MT waits on plan 06**, not on a foreign-source fallback.
 - **Finalizers.** Slice 2 added isolated managed segments, so finalizers can run while a native
   activation is parked without resuming or overwriting its caller, filter or handler context.
-- **Reflection** uses transparent calls (slice 3).
+- **Reflection** originally used transparent calls (slice 3); this decision was reversed by
+  [plan 19](19-reflection-invoke-clr-parity.md), which wraps target exceptions by default.
 - **Multicast fallback (2026-11-06).** Preserve the existing continuation for invocation shapes
   that effects cannot safely transport, including static-field byrefs. Route supported shapes
   through transparent calls. The fallback is an explicit exception to deleting the multicast
@@ -71,7 +72,8 @@ Out:
   invocations. Its only producers are the fallback for `MethodInfo.Invoke` and both
   `ConstructorInfo.Invoke` overloads in `runtime_method_info_intrinsic_call`, and the fallback
   for `Activator.CreateInstance(Type, object[])` in `intrinsic_activator_create_instance_type_args`.
-  The existing early rejection of unsupported declared byref returns remains.
+  The early rejection of declared byref returns was reversed by
+  [plan 19](19-reflection-invoke-clr-parity.md).
 - **Monitor timeout fallback (2026-11-07; removed by plan 16 slice 5b).** For timed monitor calls excluded from effects,
   use a frame-associated retry deadline rather than the shared host-thread-local deadline.
   Admitted calls retain activation-owned deadlines. The slice 5 note specifies the record's
@@ -298,7 +300,8 @@ origin resolved by type and generics on every raw access. Committed static opera
 descriptors carry no cached address and need no tracing. Each category is enabled together with its consumer and tests:
 conversion from the actual `PointerOrigin` variant, tracing where needed, reconstruction, and
 invalidation when the owning frame retires. The selector rejects unsupported categories before
-commitment, and checks declared byref returns before any side effect.
+commitment. The original reflection byref-return rejection was superseded by
+[plan 19](19-reflection-invoke-clr-parity.md); multicast still excludes byref returns.
 
 ## Slices
 
@@ -324,6 +327,8 @@ commitment, and checks declared byref returns before any side effect.
    - heap and frame-home byref descriptors for admitted multicast arguments.
 3. **Reflection `Invoke` through transparent `call`.** Reuses the byref descriptors and adds
    boxing and write-through. Retains corrected return handling only for the scoped fallback.
+   [Plan 19](19-reflection-invoke-clr-parity.md) supersedes the transparent-call and
+   write-through behavior with exception wrapping and success-only copy-back.
 4. **`ldsfld` through `ensure_initialized`.** Adds the instruction completion action and the
    MT wait-graph handoff.
 5. **`WaitForPendingFinalizers`, then `Monitor.Enter`,** through one condition-wait protocol.

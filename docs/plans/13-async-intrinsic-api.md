@@ -25,7 +25,7 @@ fallback was a second full implementation:
 | `Monitor.Wait` | Throws `SynchronizationLockException` when the lock isn't owned. Non-inline dispatch, using `monitor_wait_legacy` and `LegacyWait`. |
 | `GC.WaitForPendingFinalizers` | Returns immediately inside a finalizer. Non-inline dispatch, using a legacy `Yield` loop. |
 | `String.Substring` | Fast path for strings of at most one chunk, plus argument throws. |
-| Reflection `Invoke` (3), `Activator.CreateInstance` | Argument and transport shapes the activation does not admit (see the reflection entries in the [plans README](README.md#not-yet-planned)). |
+| Reflection `Invoke` (3), `Activator.CreateInstance` | Argument and transport shapes the activation did not admit; plan 16 removed this fallback and [plan 19](19-reflection-invoke-clr-parity.md) updated reflection semantics. |
 
 Two gaps cause most of this duplication:
 
@@ -80,7 +80,8 @@ need three functions. This plan settles the API first.
   `Unmanaged` and rejected `Transient`.) The monitor byref variants kept
   their fallback and the frame retry deadline for those two shapes only at plan time. `Static` origins are
   in scope (see below).
-- Reflection argument validation and transport shapes. Reflection keeps its fallback.
+- Reflection argument validation and transport shapes. Reflection kept its fallback under this
+  plan; plan 16 removed it and [plan 19](19-reflection-invoke-clr-parity.md) updated its behavior.
 - Migrating any further intrinsics. They wait for this plan.
 
 ## Design
@@ -271,14 +272,16 @@ crates under CPU 0 affinity before each measured invocation; both sides followed
 
 - An async intrinsic with no `fallback` compiles and dispatches, and the scanner accepts it.
 - No migrated threading or Substring selector returns `Fallback` for an argument error;
-  reflection's excluded validation shapes remain out of scope. Every moved argument check on
+  reflection's excluded validation shapes remained out of scope here; plans 16 and
+  [19](19-reflection-invoke-clr-parity.md) subsequently addressed them. Every moved argument check on
   the threading and GC intrinsics is in a body and has a test that fails without it.
 - The five IL call-site paths dispatch intrinsics inline. `NativeDispatchMode::Other` comes
   only from the residual callers listed in Scope, and its doc comment names them.
 - Fallbacks remain only on the monitor byref variants (and their selectors return `Fallback`
   only for `Transient` and `Unmanaged` flags), on reflection `Invoke`/`Activator` and on
-  `Substring` as measured above. `monitor_wait_legacy`, `LegacyWait` and
-  `monitor_wait_retry` are gone.
+  `Substring` as measured above. Plan 16 subsequently removed the monitor and reflection
+  fallbacks; [plan 19](19-reflection-invoke-clr-parity.md) updated reflection semantics.
+  `monitor_wait_legacy`, `LegacyWait` and `monitor_wait_retry` are gone.
 - A static `bool&` flag reaches the async body, and `F6.NativePointerDescriptor` names the
   static origin.
 - `cargo test -p dotnet-vm --lib` and the full integration binary pass in both configurations.

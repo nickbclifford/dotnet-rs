@@ -58,7 +58,8 @@ static-field addresses (p12). Do not widen into a redesign of the effect driver.
 
 Also out, because they belong to other subsystems or need a new mechanism (logged under "Not yet
 planned"):
-- reflection argument validation and byref write-back after a throw;
+- reflection argument validation and byref write-back after a throw (subsequently addressed by
+  [plan 19](19-reflection-invoke-clr-parity.md));
 - finalizers running with the interrupted mutator's thread identity;
 - exceptions escaping a filter;
 - `try/finally` nested in a `finally`;

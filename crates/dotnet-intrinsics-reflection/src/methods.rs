@@ -94,6 +94,8 @@ pub async fn invoke_async(fx: VmEffects) -> NativeResult {
     run_reflection_call(fx).await
 }
 
+/// Capture target exceptions for CLR wrapping unless `DoNotWrapExceptions` is set.
+/// Copy byref arguments back only after the target succeeds.
 pub async fn run_reflection_call(mut fx: VmEffects) -> NativeResult {
     let step = {
         let mut vm = fx.vm().await?;

@@ -1,6 +1,6 @@
 # Reflection invocation matches the CLR
 
-**Status:** Not started
+**Status:** In progress
 **Outcome:** Every reflection-invoke fixture, including those now excluded from CLR diffing
 (`invoke_byref_exception`, `invoke_nullable`, `invoke_byref`, `invoke_byref_writethrough`,
 `activator_create_instance_args`, `get_constructor_types`, `reflection_invoke`), matches `dotnet`
@@ -110,7 +110,7 @@ are unchanged. The CLR rejects a boxed `int` for `ref long` and for `long?` with
    `ConstructorInfo.Invoke` using the existing intrinsic-constructor path. Extend
    `activator_create_instance_args_42.cs` and `get_constructor_types_42.cs` with ambiguous and
    string cases and add both, plus `reflection_invoke_42.cs`, to the diff harness.
-5. **Docs.** Remove the two README "Not yet planned" reflection entries. Mark the reversed
+5. **Docs (complete).** Remove the two README "Not yet planned" reflection entries. Mark the reversed
    decisions in plan 08 (out-of-scope list, transparent-call text, reflection fallback paragraph),
    plan 08 slice 3, plan 10, plan 13 (stale fallback text) and plan 16 (byref returns,
    write-back, `Arg_MustBeType`, ambiguity) as superseded by this plan. Update

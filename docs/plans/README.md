@@ -103,19 +103,6 @@ Evidence and IDs (p01…, R01…) are defined in the
   former EF gap backlog and userland roadmap were deleted. Pick the next application rung
   (for example EF Core SQLite, which [COMPATIBILITY.md](../COMPATIBILITY.md) lists as
   unvalidated) and record its failures here before planning fixes.
-- **Reflection compatibility and validation:** reflection calls remain transparent (guest
-  exceptions are not wrapped in `TargetInvocationException`) and declared byref returns are
-  rejected, both deliberate CLR deviations in the
-  [plan 08 reflection contract](08-async-effects.md#decisions-already-made). Argument binding
-  follows the CLR for counts, targets, widening, `null` and `Nullable<T>`, with these gaps:
-  array-typed arguments and receivers are accepted without a type check, a byref argument must
-  match its parameter exactly (the CLR widens and writes back), `Nullable<T>` accepts only a
-  boxed `T` (no widening), and `Activator.CreateInstance(Type, object[])` and
-  `GetConstructor(Type[])` return the first best match rather than throwing
-  `AmbiguousMatchException`. `Activator.CreateInstance(typeof(string), args)` throws
-  `ArgumentException("Arg_MustBeType")`; the CLR runs the string constructor, which the VM
-  implements only through the intrinsic-constructor `newobj` protocol.
-- **Reflection byref write-back after throws:** byref arguments are written back when the invoked guest method throws, unlike the CLR.
 - **Fallback continuations for excluded shapes:** `MulticastState` remains for ref-struct
   values and byref targets containing managed pointers, byref returns and `TypedReference`.
   Non-null heap, frame-home, static, unmanaged and MT cross-arena byref arguments with

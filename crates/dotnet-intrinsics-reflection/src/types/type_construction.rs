@@ -87,7 +87,7 @@ pub async fn activator_default_async(fx: VmEffects) -> NativeResult {
 
 /// What `Activator.CreateInstance(Type, object[])` creates once its operands are validated.
 pub enum ActivatorTarget<'gc> {
-    /// Allocate an instance of the declaring type and run this constructor on it.
+    /// Run the constructor using the regular or intrinsic-constructor allocation path.
     Constructor(MethodDescription, GenericLookup),
     /// A value type with no matching constructor and no arguments: its boxed default value.
     Default(ObjectRef<'gc>),
