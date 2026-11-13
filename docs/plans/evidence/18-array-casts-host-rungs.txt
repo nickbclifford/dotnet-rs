@@ -1,0 +1,20 @@
+Plan 18 slice 1 — 2026-11-13
+
+The jagged_interface_cast_42 differential fixture passed with no features,
+multithreading, validation-all, and multithreading plus validation-all. It
+includes CLR probes for reduced element types through generic interfaces.
+
+For each configuration the CLI was rebuilt with the matching features and
+scripts/diff_run.sh --host was run for each project. EF was copied to /tmp
+without its existing bin/obj directories to avoid duplicate generated sources.
+
+                         ST       MT
+EF InMemory              PASS     PASS
+Newtonsoft roundtrip     FAIL     FAIL
+
+EF matched exit code and stdout. Newtonsoft progressed beyond SZArrayHelper
+CopyTo, but both VM runs exited 1 with no stdout: AccessViolationException at
+System.RuntimeType.GetNativeTypeHandle, called by get_IsActualInterface during
+DynamicMethod.Init and Newtonsoft's DynamicReflectionDelegateFactory. The CLR
+exited 42 and printed {"name":"test","value":42}. This is a separate gap
+from the array-cast failure and requires the maintainer decision in the plan.

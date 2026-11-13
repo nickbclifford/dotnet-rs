@@ -919,3 +919,8 @@ fn monitor_transient_stack_value_il_is_rejected_by_clr() {
     assert_eq!(output.status.code(), Some(42));
     assert_eq!(output.stdout, b"rejected\n");
 }
+
+diff_test!(
+    jagged_interface_cast_matches_dotnet,
+    "tests/fixtures/arrays/jagged_interface_cast_42.cs"
+);

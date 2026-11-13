@@ -1,4 +1,4 @@
-use super::helpers::{heap_runtime_concrete_type, vector_matches_generic_array_interfaces};
+use super::helpers::check_object_assignability;
 use crate::{
     StepResult,
     instructions::NULL_REF_MSG,
@@ -225,31 +225,12 @@ pub fn unbox_any<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepR
             return ctx
                 .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
         };
-        if let ObjectRef(Some(o)) = target_obj {
-            let array_interface_match =
-                dotnet_vm_ops::vm_try!(target_obj.try_as_heap_storage(|storage| match storage {
-                    HeapStorage::Vec(v) => vector_matches_generic_array_interfaces(
-                        ctx.loader().as_ref(),
-                        &v.element,
-                        &target_ct,
-                    ),
-                    _ => false,
-                },));
-
-            if array_interface_match {
-                ctx.push(StackValue::ObjectRef(target_obj));
-                return StepResult::Continue;
-            }
-
-            let source_ct = if let Some(source_ct) = dotnet_vm_ops::vm_try!(
-                target_obj.try_as_heap_storage(|storage| heap_runtime_concrete_type(storage),)
-            ) {
-                source_ct
-            } else {
-                dotnet_vm_ops::vm_try!(res_ctx.get_heap_description(o)).into()
+        if let ObjectRef(Some(_)) = target_obj {
+            let assignable = match check_object_assignability(ctx, target_obj, param0) {
+                Ok(assignable) => assignable,
+                Err(result) => return result,
             };
-
-            if dotnet_vm_ops::vm_try!(res_ctx.is_a(source_ct, target_ct)) {
+            if assignable {
                 ctx.push(StackValue::ObjectRef(target_obj));
             } else {
                 return ctx
