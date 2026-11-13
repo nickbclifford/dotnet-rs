@@ -62,8 +62,8 @@ pub fn vector_matches_generic_array_interfaces(
         } = target.get()
         && parameters.len() == 1
         && !comparer.concrete_types_equal(element, &parameters[0])
-        && !reduced_type(loader, element)
-            .is_some_and(|r| Some(r) == reduced_type(loader, &parameters[0]))
+        && reduced_type(loader, element)
+            .is_none_or(|r| Some(r) != reduced_type(loader, &parameters[0]))
     {
         return false;
     }

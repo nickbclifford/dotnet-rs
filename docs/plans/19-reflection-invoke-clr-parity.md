@@ -1,6 +1,6 @@
 # Reflection invocation matches the CLR
 
-**Status:** In progress
+**Status:** Complete
 **Outcome:** Every reflection-invoke fixture, including those now excluded from CLR diffing
 (`invoke_byref_exception`, `invoke_nullable`, `invoke_byref`, `invoke_byref_writethrough`,
 `activator_create_instance_args`, `get_constructor_types`, `reflection_invoke`), matches `dotnet`
@@ -17,7 +17,8 @@ continuation. [Plan 16](16-retire-legacy-continuations.md) slice 3 deleted that 
 `types/type_construction.rs`), both through `run_reflection_call`. The maintainer reversed both
 decisions on 2026-11-13 in favor of matching the CLR.
 
-Current deviations:
+Deviations before this plan (all resolved by the slices below, except the two widening cases
+the slice 3 probe showed the CLR also rejects):
 
 - **No `TargetInvocationException`.** `run_reflection_call` uses `fx.call`, so a guest throw
   crosses the boundary unchanged. The `invokeAttr` operand is ignored, so
@@ -116,6 +117,19 @@ are unchanged. The CLR rejects a boxed `int` for `ref long` and for `long?` with
    write-back, `Arg_MustBeType`, ambiguity) as superseded by this plan. Update
    `EXCEPTION_HANDLING.md` (reflection is a second `try_call` consumer) and the code comments in
    `type_construction.rs` and `methods.rs`.
+
+## Verification
+
+- Reflection, Activator and `cctor_filter_reflection` integration tests pass with no features,
+  `multithreading`, and each with `validation-all` (67/67 and 71/71 tests).
+- All 26 reflection `_42` fixtures are diff tests. The 15 pre-existing non-invoke fixtures
+  (`reflection_custom_attr` … `reflection_smoke`) matched `dotnet` unchanged and were registered
+  at plan close. `reflection_stress_0.cs` exits 0, which `diff_test!` cannot express.
+- At plan close, the slice commits failed CI lints: an uncited `SAFETY` comment on the byref-return
+  read, a copy-back `unsafe` block with no `SAFETY` comment, two `large_enum_variant` warnings and
+  one `nonminimal_bool` warning. These were fixed (`NativeReflectionStep::Call` now boxes a named
+  `NativeReflectionCall`), and `cargo clippy -D warnings` (debug and release) and
+  `scripts/check_doc_drift.sh` pass.
 
 ## Done when
 

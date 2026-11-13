@@ -484,20 +484,27 @@ pub struct NativeTarget<'gc> {
 /// What a reflection invocation does once its operands are validated.
 pub enum NativeReflectionPlan<'gc> {
     /// Call the target with marshalled arguments.
-    Call(NativePreparedCall<'gc>),
+    Call(Box<NativePreparedCall<'gc>>),
     /// Return this value without calling anything (`Activator` creating a default struct).
     Value(StackValue<'gc>),
 }
 
 /// A prepared reflection invocation whose values are rooted for the activation.
 pub enum NativeReflectionStep {
-    Call(
-        NativeCall,
-        Option<RootedValue>,
-        bool,
-        Option<(RootedValue, RootedValue, Vec<usize>)>,
-    ),
+    Call(Box<NativeReflectionCall>),
     Value(RootedValue),
+}
+
+/// A rooted reflection call and what to do once the target returns.
+pub struct NativeReflectionCall {
+    pub call: NativeCall,
+    /// The allocated instance a constructor call returns instead of its void result.
+    pub constructor_result: Option<RootedValue>,
+    /// `BindingFlags.DoNotWrapExceptions`: propagate target exceptions unwrapped.
+    pub do_not_wrap: bool,
+    /// Caller's argument array, the scratch array the call used, and the byref slots to copy
+    /// back after the target succeeds.
+    pub copyback: Option<(RootedValue, RootedValue, Vec<usize>)>,
 }
 
 /// Arguments produced during one synchronous reflection marshalling operation.
@@ -648,16 +655,16 @@ impl<'gc, 'a> NativeRegion<'gc, 'a> {
             .map(|value| self.root(value))
             .collect::<Result<Vec<_>, _>>()?;
         self.backend.operands().clear();
-        Ok(NativeReflectionStep::Call(
-            NativeCall {
+        Ok(NativeReflectionStep::Call(Box::new(NativeReflectionCall {
+            call: NativeCall {
                 method: prepared.method,
                 generics: prepared.generics,
                 arguments,
             },
             constructor_result,
-            prepared.do_not_wrap,
+            do_not_wrap: prepared.do_not_wrap,
             copyback,
-        ))
+        })))
     }
     fn probe_initializer(
         &mut self,

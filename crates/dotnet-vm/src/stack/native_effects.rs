@@ -1048,14 +1048,14 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
             );
         }
         Ok(dotnet_vm_ops::effects::NativeReflectionPlan::Call(
-            dotnet_vm_ops::effects::NativePreparedCall {
+            Box::new(dotnet_vm_ops::effects::NativePreparedCall {
                 method,
                 generics,
                 arguments,
                 constructor_result,
                 do_not_wrap,
                 copyback,
-            },
+            }),
         ))
     }
     fn reflection_copyback(
@@ -1084,8 +1084,9 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
             unreachable!()
         };
         for &index in indices {
-            // The validated index identifies a reference slot; the memory layer checks bounds
-            // and records cross-arena stores.
+            // SAFETY: F10.RawMemoryAccessValid — `original` roots the caller's argument array,
+            // each validated index identifies one of its reference slots, and `write_unaligned`
+            // checks bounds and applies the owner and cross-arena store barriers.
             unsafe {
                 self.context.write_unaligned(
                     pointer.origin().clone(),
@@ -1151,7 +1152,9 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
                 .current_context()
                 .resolver()
                 .type_layout_cached_with_lookup(concrete.clone(), method.resolution(), generics)?;
-            // SAFETY: the returned managed pointer is rooted and its pointee has the declared layout.
+            // SAFETY: F10.RawMemoryAccessValid — the non-null returned managed pointer is rooted by
+            // the activation, `read_unaligned` resolves and bounds-checks its origin and offset, and
+            // `layout` is the declared return pointee's instantiated layout.
             unsafe {
                 self.context.read_unaligned(
                     pointer.origin().clone(),

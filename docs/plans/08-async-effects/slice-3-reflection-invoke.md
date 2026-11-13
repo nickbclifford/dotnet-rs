@@ -10,6 +10,13 @@ synchronous fallbacks and `InvokeReturn`; every reflection call now takes the na
 "Consumers and current path" and "Scoped reflection fallback" sections below describe the design
 as this slice left it.
 
+**Superseded:** [plan 19](../19-reflection-invoke-clr-parity.md) reversed this slice's
+reflection semantics. Target exceptions are wrapped in `TargetInvocationException` unless
+`BindingFlags.DoNotWrapExceptions` is set; declared byref returns are supported; and byref
+arguments use copy-in/copy-out, written back only when the target succeeds, instead of
+write-through. Text below that describes transparent exceptions, byref-return rejection or
+write-through records this slice as it shipped.
+
 ## Consumers and current path
 
 `runtime_method_info_intrinsic_call` handles `MethodInfo.Invoke` and both

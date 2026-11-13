@@ -995,3 +995,63 @@ diff_test!(
     reflection_invoke_matches_dotnet,
     "tests/fixtures/reflection/reflection_invoke_42.cs"
 );
+diff_test!(
+    reflection_custom_attr_matches_dotnet,
+    "tests/fixtures/reflection/reflection_custom_attr_42.cs"
+);
+diff_test!(
+    reflection_enum_values_underlying_linq_matches_dotnet,
+    "tests/fixtures/reflection/reflection_enum_values_underlying_linq_42.cs"
+);
+diff_test!(
+    reflection_field_getvalue_instance_matches_dotnet,
+    "tests/fixtures/reflection/reflection_field_getvalue_instance_42.cs"
+);
+diff_test!(
+    reflection_field_setvalue_instance_matches_dotnet,
+    "tests/fixtures/reflection/reflection_field_setvalue_instance_42.cs"
+);
+diff_test!(
+    reflection_getmember_matches_dotnet,
+    "tests/fixtures/reflection/reflection_getmember_42.cs"
+);
+diff_test!(
+    reflection_getmethod_byref_param_matches_dotnet,
+    "tests/fixtures/reflection/reflection_getmethod_byref_param_42.cs"
+);
+diff_test!(
+    reflection_getmethod_generic_arity_matches_dotnet,
+    "tests/fixtures/reflection/reflection_getmethod_generic_arity_42.cs"
+);
+diff_test!(
+    reflection_getruntime_method_object_matches_dotnet,
+    "tests/fixtures/reflection/reflection_getruntime_method_object_42.cs"
+);
+diff_test!(
+    reflection_index_wrappers_matches_dotnet,
+    "tests/fixtures/reflection/reflection_index_wrappers_42.cs"
+);
+diff_test!(
+    reflection_makearray_matches_dotnet,
+    "tests/fixtures/reflection/reflection_makearray_42.cs"
+);
+diff_test!(
+    reflection_makebyref_matches_dotnet,
+    "tests/fixtures/reflection/reflection_makebyref_42.cs"
+);
+diff_test!(
+    reflection_method_via_attr_matches_dotnet,
+    "tests/fixtures/reflection/reflection_method_via_attr_42.cs"
+);
+diff_test!(
+    reflection_queryable_first_method_identity_matches_dotnet,
+    "tests/fixtures/reflection/reflection_queryable_first_method_identity_42.cs"
+);
+diff_test!(
+    reflection_runtimehelpers_getuninitializedobject_matches_dotnet,
+    "tests/fixtures/reflection/reflection_runtimehelpers_getuninitializedobject_42.cs"
+);
+diff_test!(
+    reflection_smoke_matches_dotnet,
+    "tests/fixtures/reflection/reflection_smoke_42.cs"
+);

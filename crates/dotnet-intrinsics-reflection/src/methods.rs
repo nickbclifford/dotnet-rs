@@ -23,8 +23,8 @@ use dotnet_value::{
 use dotnet_vm_data::StepResult;
 use dotnet_vm_ops::SupportSlotOps;
 use dotnet_vm_ops::effects::{
-    NativeFailure, NativeInvocation, NativeOperandView, NativeReflectionStep, NativeResult,
-    NativeSelection, NativeValue, VmEffects,
+    NativeFailure, NativeInvocation, NativeOperandView, NativeReflectionCall, NativeReflectionStep,
+    NativeResult, NativeSelection, NativeValue, VmEffects,
 };
 use dotnet_vm_ops::intrinsic_args::type_mismatch;
 use dotnetdll::prelude::ParameterType;
@@ -102,7 +102,13 @@ pub async fn run_reflection_call(mut fx: VmEffects) -> NativeResult {
         vm.prepare_reflection()?
     };
     let (call, constructor_result, do_not_wrap, copyback) = match step {
-        NativeReflectionStep::Call(call, constructor_result, do_not_wrap, copyback) => {
+        NativeReflectionStep::Call(step) => {
+            let NativeReflectionCall {
+                call,
+                constructor_result,
+                do_not_wrap,
+                copyback,
+            } = *step;
             (call, constructor_result, do_not_wrap, copyback)
         }
         NativeReflectionStep::Value(value) => {
