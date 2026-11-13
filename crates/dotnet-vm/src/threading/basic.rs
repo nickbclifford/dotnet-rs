@@ -812,7 +812,7 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                     {
                         let mut changed = false;
                         marked.finalize(|fc, c| {
-                            // SAFETY: STW has parked all mutators; this arena owns the keys checked.
+                            // SAFETY: F1.StwParked — STW has parked all mutators; this arena owns the keys checked.
                             changed = unsafe { c.stack.shared.gc_handles.activate_dependents(fc) };
                         });
                         if changed {

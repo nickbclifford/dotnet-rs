@@ -182,6 +182,29 @@ With non-inlined allocation helpers and the real CoreLib `GCHandle`, `gc_resurre
 harness: exit codes 42, 0, and 42 respectively, with empty stdout on both runtimes. These
 cases do not test finalizer-thread identity or cross-arena handles.
 
+## Review at slice 7 (2026-11-13)
+
+Fixed during review:
+- **Multithreaded exit regression.** Slices 5–6 stopped finalizers at exit through the VM-wide
+  abort: `wait_for_foreground_workers` requested it whenever finalizers were pending, and
+  `shutdown_workers` now requests it unconditionally. The multi-arena test harness ran several
+  entry executors over one VM and called `shutdown_workers` after each, so the first to finish
+  aborted the rest (12 integration tests failed with `Aborted("Requested by user/timeout")`).
+  The extra abort in `wait_for_foreground_workers` is removed (`shutdown_workers` already stops the
+  finalizer thread), and the harness now shuts down once, after its last executor.
+- **CI lints.** 58 `SAFETY` comments lacked registry citations and one `unsafe` block had none
+  (`heap.rs`, failing no-features clippy). The CI clippy matrix (`xtask matrix clippy-features`,
+  plus release) and `scripts/check_doc_drift.sh` now pass.
+
+Still open before Complete (see "Done when"):
+- **Loom.** `finalizer_handoff_remains_rooted_while_worker_is_parked` models the handoff with a
+  generic mutex and channels; no model drives the production f-reachable queue or
+  `SharedGcHandles`.
+- **Miri.** No `miri-cross-arena` shard exercises the shared handle table or the finalizer queue.
+- **Single-threaded cost.** The slice 3a benchmark below does not exercise handle operations, so
+  the "measurable cost" trigger in "Ask the maintainer" is unanswered. Measure `GCHandle`
+  alloc/get/free and `ConditionalWeakTable` lookups before and after 03cb031d.
+
 ## Slice 3a benchmark
 
 The no-default-features `runtime_primitives` benchmark was run against 03cb031d and the

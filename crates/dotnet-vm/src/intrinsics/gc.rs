@@ -293,7 +293,7 @@ pub fn intrinsic_gchandle_internal_free<
 ) -> StepResult {
     let handle = ctx.pop_isize();
     if let Some(index) = decode_gc_handle(handle) {
-        // SAFETY: this intrinsic runs inside an active arena mutation until it returns.
+        // SAFETY: F1.GcHandleRooted — this intrinsic runs inside an active arena mutation until it returns.
         if let Some((obj, kind)) = unsafe { ctx.gc_handles().get(index) }
             && ctx.tracer_enabled()
         {
@@ -319,7 +319,7 @@ pub fn intrinsic_gchandle_internal_get<
     _generics: &GenericLookup,
 ) -> StepResult {
     let handle = ctx.pop_isize();
-    // SAFETY: the arena remains active until the result is pushed onto the traced stack.
+    // SAFETY: F1.GcHandleRooted — the arena remains active until the result is pushed onto the traced stack.
     let result = decode_gc_handle(handle)
         .and_then(|index| unsafe { ctx.gc_handles().get(index) })
         .map_or(ObjectRef(None), |(obj, _)| obj);
@@ -355,7 +355,7 @@ pub fn intrinsic_gchandle_internal_addr_of_pinned_object<
     _generics: &GenericLookup,
 ) -> StepResult {
     let handle = ctx.pop_isize();
-    // SAFETY: the mutator remains active through this intrinsic and the pinned
+    // SAFETY: F1.GcHandleRooted — the mutator remains active through this intrinsic and the pinned
     // slot roots the target while its address is obtained.
     let entry = decode_gc_handle(handle).and_then(|index| unsafe { ctx.gc_handles().get(index) });
     let addr = if let Some((obj, GCHandleType::Pinned)) = entry {
@@ -373,7 +373,7 @@ pub fn intrinsic_gchandle_internal_addr_of_pinned_object<
                 }
             };
             match &ptr.borrow().storage {
-                // SAFETY: the pinned slot keeps this storage live and stable.
+                // SAFETY: F1.GcHandleRooted — the pinned slot keeps this storage live and stable.
                 HeapStorage::Obj(_) => unsafe { ptr.as_ptr() }.expose_provenance() as isize,
                 HeapStorage::Vec(v) => v.get().as_ptr().expose_provenance() as isize,
                 HeapStorage::Str(s) => s.as_ptr().expose_provenance() as isize,
@@ -418,7 +418,7 @@ pub fn intrinsic_dependent_handle_internal_get_dependent<
         ObjectRef(None)
     } else {
         let index = (handle - 1) as usize;
-        // SAFETY: the active mutation keeps both objects allocated until pushed.
+        // SAFETY: F1.GcHandleRooted — the active mutation keeps both objects allocated until pushed.
         unsafe { ctx.gc_handles().get_dependent(index) }.map_or(ObjectRef(None), |(_, value)| value)
     };
     ctx.push_obj(dependent);
@@ -443,7 +443,7 @@ pub fn intrinsic_dependent_handle_internal_get_target_and_dependent<
         (ObjectRef(None), ObjectRef(None))
     } else {
         let index = (handle - 1) as usize;
-        // SAFETY: the active mutation keeps both objects allocated until rooted.
+        // SAFETY: F1.GcHandleRooted — the active mutation keeps both objects allocated until rooted.
         unsafe { ctx.gc_handles().get_dependent(index) }
             .unwrap_or((ObjectRef(None), ObjectRef(None)))
     };

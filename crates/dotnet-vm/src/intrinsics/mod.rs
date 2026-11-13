@@ -543,6 +543,8 @@ mod async_registry_tests {
                             | "System.Threading.EventWaitHandle"
                             | "DotnetRs.MethodInfo"
                             | "DotnetRs.ConstructorInfo"
+                            | "DotnetRs.RuntimeType"
+                            | "System.RuntimeType"
                     ),
                     "unsupported receiver {receiver} in {name}"
                 );

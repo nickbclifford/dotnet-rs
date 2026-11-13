@@ -220,7 +220,7 @@ fn rooted_progress_survives_real_collections_and_completes_once() {
             arena.mutate(|_, engine| {
                 let handles = &engine.stack.shared.gc_handles;
                 assert!(
-                    // SAFETY: the active arena mutation confines the witness to this operation.
+                    // SAFETY: F1.GcHandleRooted — the active arena mutation confines the witness to this operation.
                     unsafe { handles.get(0) }.unwrap().0.0.is_none(),
                     "source should no longer be rooted"
                 );
@@ -318,7 +318,7 @@ fn abort_clears_parked_activation_without_more_copying() {
             arena.finish_cycle();
             arena.mutate(|_, engine| {
                 assert!(
-                    // SAFETY: the active arena mutation confines the witness to this operation.
+                    // SAFETY: F1.GcHandleRooted — the active arena mutation confines the witness to this operation.
                     unsafe { engine.stack.shared.gc_handles.get(0) }
                         .unwrap()
                         .0
@@ -354,7 +354,7 @@ fn exhausted_budget_clears_parked_activation() {
         .with_arena(|arena| {
             arena.mutate(|_, engine| {
                 assert!(
-                    // SAFETY: the active arena mutation confines the witness to this operation.
+                    // SAFETY: F1.GcHandleRooted — the active arena mutation confines the witness to this operation.
                     unsafe { engine.stack.shared.gc_handles.get(0) }
                         .unwrap()
                         .0
@@ -951,7 +951,7 @@ fn foreign_source_survives_coordinated_collections_between_chunks() {
                     let alive = owner
                         .with_arena(|arena| {
                             arena.mutate(|_, engine| {
-                                // SAFETY: the active arena mutation confines the witness to this operation.
+                                // SAFETY: F1.GcHandleRooted — the active arena mutation confines the witness to this operation.
                                 unsafe { engine.stack.shared.gc_handles.get(0) }
                                     .unwrap()
                                     .0
@@ -1137,7 +1137,7 @@ fn foreign_byref_owner_survives_collection_and_child_call(cross_origin: bool) {
                     let alive = owner
                         .with_arena(|arena| {
                             arena.mutate(|_, engine| {
-                                // SAFETY: the active arena mutation confines the witness to this operation.
+                                // SAFETY: F1.GcHandleRooted — the active arena mutation confines the witness to this operation.
                                 unsafe { engine.stack.shared.gc_handles.get(0) }
                                     .unwrap()
                                     .0
@@ -1878,7 +1878,7 @@ fn assert_native_source_released(executor: &mut Executor) {
         .with_arena(|arena| {
             arena.mutate(|_, engine| {
                 assert!(
-                    // SAFETY: the active arena mutation confines the witness to this operation.
+                    // SAFETY: F1.GcHandleRooted — the active arena mutation confines the witness to this operation.
                     unsafe { engine.stack.shared.gc_handles.get(0) }
                         .unwrap()
                         .0
@@ -3095,7 +3095,7 @@ fn native_activation_foreign_child_return_survives_collection() {
                     let alive = owner
                         .with_arena(|arena| {
                             arena.mutate(|_, engine| {
-                                // SAFETY: the active arena mutation confines the witness to this operation.
+                                // SAFETY: F1.GcHandleRooted — the active arena mutation confines the witness to this operation.
                                 unsafe { engine.stack.shared.gc_handles.get(0) }
                                     .unwrap()
                                     .0
@@ -3689,7 +3689,7 @@ fn native_capture_filters_and_child_cleanup_precede_outer_search() {
                     ExceptionState::Filtering(_)
                 ));
                 assert_eq!(engine.stack.execution.frame_stack.len(), 1);
-                // SAFETY: the active arena mutation confines the witness to this operation.
+                // SAFETY: F1.GcHandleRooted — the active arena mutation confines the witness to this operation.
                 let original = unsafe { engine.stack.shared.gc_handles.get(0) }.unwrap().0;
                 assert!(original.0.is_some(), "captured exception was collected");
                 assert_eq!(
@@ -3827,7 +3827,7 @@ fn static_store_operand_collection(complete: bool) {
         .with_arena(|arena| {
             arena.mutate(|_, engine| {
                 assert!(
-                    // SAFETY: the active arena mutation confines the witness to this operation.
+                    // SAFETY: F1.GcHandleRooted — the active arena mutation confines the witness to this operation.
                     unsafe { engine.stack.shared.gc_handles.get(0) }
                         .unwrap()
                         .0
@@ -3860,7 +3860,7 @@ fn static_store_operand_collection(complete: bool) {
             .with_arena(|arena| {
                 arena.mutate(|_, engine| {
                     assert!(
-                        // SAFETY: the active arena mutation confines the witness to this operation.
+                        // SAFETY: F1.GcHandleRooted — the active arena mutation confines the witness to this operation.
                         unsafe { engine.stack.shared.gc_handles.get(0) }
                             .unwrap()
                             .0
@@ -3901,7 +3901,7 @@ fn static_store_operand_collection(complete: bool) {
         .with_arena(|arena| {
             arena.mutate(|_, engine| {
                 assert!(
-                    // SAFETY: the active arena mutation confines the witness to this operation.
+                    // SAFETY: F1.GcHandleRooted — the active arena mutation confines the witness to this operation.
                     unsafe { engine.stack.shared.gc_handles.get(0) }
                         .unwrap()
                         .0
@@ -3954,7 +3954,7 @@ fn native_initializer_failure_is_published_with_original_inner() {
                         .unwrap()
                         .read()
                 });
-                // SAFETY: the active arena mutation confines the witness to this operation.
+                // SAFETY: F1.GcHandleRooted — the active arena mutation confines the witness to this operation.
                 let original = unsafe { engine.stack.shared.gc_handles.get(0) }.unwrap().0;
                 assert!(original.0.is_some());
                 assert_eq!(inner, original);
@@ -4467,7 +4467,7 @@ fn native_initializer_failure_survives_owner_retirement_and_collection() {
         let reference = owner
             .with_arena(|arena| {
                 arena.mutate(|_, engine| {
-                    // SAFETY: the active arena mutation confines the witness to this operation.
+                    // SAFETY: F1.GcHandleRooted — the active arena mutation confines the witness to this operation.
                     let original = unsafe { engine.stack.shared.gc_handles.get(0) }.unwrap().0;
                     encode_reference(original)
                 })
@@ -5610,7 +5610,7 @@ fn foreign_short_weak_handle_clears_before_the_owner_finalizes() {
             arena.mutate(|_, engine| {
                 let handles = &engine.stack.shared.gc_handles;
                 let cleared =
-                    // SAFETY: the active arena mutation confines the witness to this operation.
+                    // SAFETY: F1.GcHandleRooted — the active arena mutation confines the witness to this operation.
                     unsafe { handles.get(0) }.is_none_or(|(object, _)| object.0.is_none());
                 // The object is resurrected into B's finalization queue when the bug is present;
                 // drop the slot so nothing reads it after the owner goes away.

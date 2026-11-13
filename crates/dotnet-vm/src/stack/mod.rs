@@ -233,7 +233,7 @@ impl GCArena {
         while let Some(marked) = self.arena.finish_marking() {
             let mut changed = false;
             marked.finalize(|fc, c| {
-                // SAFETY: the single arena is fully marked and its mutator is stopped.
+                // SAFETY: F1.StwParked — the single arena is fully marked and its mutator is stopped.
                 changed = unsafe { c.stack.shared.gc_handles.activate_dependents(fc) };
             });
             if !changed {

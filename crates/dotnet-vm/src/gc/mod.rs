@@ -36,9 +36,9 @@ pub enum CollectionWork {
 #[cfg(feature = "multithreading")]
 pub fn clear_weak_arena(marked: MarkedArena<'_, GCArenaRoot>) {
     marked.finalize(|fc, c| {
-        // SAFETY: ClearWeak runs on every key owner before sweeping.
+        // SAFETY: F1.StwParked — ClearWeak runs on every key owner before sweeping.
         unsafe { c.stack.shared.gc_handles.clear_dead_dependents(fc) };
-        // SAFETY: ClearWeak runs on each parked owner before any arena sweeps.
+        // SAFETY: F1.StwParked — ClearWeak runs on each parked owner before any arena sweeps.
         unsafe {
             c.stack.shared.gc_handles.clear_dead(
                 fc,

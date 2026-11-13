@@ -801,10 +801,6 @@ impl Executor {
                 .workers
                 .foreground_quiescent(idle, || self.shared.abort_signal().request_abort())
             {
-                #[cfg(feature = "multithreading")]
-                if self.shared.has_pending_finalizers() {
-                    self.shared.abort_signal().request_abort();
-                }
                 if !self.shared.is_abort_requested() {
                     break;
                 }

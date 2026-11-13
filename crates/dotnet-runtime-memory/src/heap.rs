@@ -150,6 +150,8 @@ impl<'gc> HeapManager<'gc> {
         indent: usize,
     ) {
         #[cfg(not(feature = "multithreading"))]
+        // SAFETY: F1.StwParked — the single arena is collecting itself at its fully marked
+        // point, before sweeping, and no other mutator exists.
         unsafe {
             shared.gc_handles().clear_dead_dependents(fc)
         };
@@ -219,7 +221,7 @@ impl<'gc> HeapManager<'gc> {
         // 1. Zero out Weak handles for dead objects.
         // This MUST be done before resurrection because "short" weak handles
         // are cleared as soon as the object is no longer strongly reachable.
-        // SAFETY: finalization runs in the owner arena at the fully marked point.
+        // SAFETY: F1.StwParked — finalization runs in the owner arena at the fully marked point.
         unsafe {
             shared
                 .gc_handles()
@@ -262,7 +264,7 @@ impl<'gc> HeapManager<'gc> {
         let resurrected = HashSet::new();
         // 2. Zero out WeakTrackResurrection handles
         // These are only cleared if the object was NOT resurrected.
-        // SAFETY: finalization runs in the owner arena before any sweep.
+        // SAFETY: F1.StwParked — finalization runs in the owner arena before any sweep.
         unsafe {
             shared
                 .gc_handles()

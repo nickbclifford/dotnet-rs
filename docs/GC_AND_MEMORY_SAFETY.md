@@ -606,7 +606,9 @@ owner after all promoted roots have been traced. For dependent slots, key owners
 shared fixed point, value owners trace activated values, and key owners clear dead pairs before
 finalization. Null keys are cleared in the same phase.
 The MarkAll root barrier runs after mutators park, so publications made during an earlier
-incremental mark are retraced, as with the shared reflection registry. Retired owners continue
+incremental mark are retraced, as with the shared reflection registry. In single-threaded builds,
+handle operations run inside the executor's `mutate_root` calls, whose root barrier likewise
+forces the shared table to be retraced before marking completes. Retired owners continue
 to participate in collections. A mutator retrieving a slot must root its result before its
 next safepoint; the slot lock alone is not an arena lease or a lasting root after removal.
 

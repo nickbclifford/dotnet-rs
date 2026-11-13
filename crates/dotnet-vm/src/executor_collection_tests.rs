@@ -61,9 +61,9 @@ fn probe(executor: &mut Executor, index: usize) -> Option<String> {
     executor
         .with_arena(|arena| {
             arena.mutate(|_, engine| {
-                // SAFETY: the active arena mutation roots the result before any safepoint.
+                // SAFETY: F1.GcHandleRooted — the active arena mutation roots the result before any safepoint.
                 let (obj, _) =
-                    // SAFETY: the active arena mutation confines the witness to this operation.
+                    // SAFETY: F1.GcHandleRooted — the active arena mutation confines the witness to this operation.
                     unsafe { engine.stack.shared.gc_handles.get(index) }.expect("witness slot");
                 obj.0.map(|h| match &h.borrow().storage {
                     HeapStorage::Str(s) => s.as_string(),
@@ -83,8 +83,8 @@ fn arena_lifetime_vm_collection() {
     executor
         .with_arena(|arena| {
             arena.mutate_root(|_gc, engine| {
-                // SAFETY: this mutation is active until the object is installed as a root.
-                // SAFETY: the active arena mutation confines the witness to this operation.
+                // SAFETY: F1.GcHandleRooted — this mutation is active until the object is installed as a root.
+                // SAFETY: F1.GcHandleRooted — the active arena mutation confines the witness to this operation.
                 let obj = unsafe { engine.stack.shared.gc_handles.get(witness) }
                     .unwrap()
                     .0;
@@ -123,8 +123,8 @@ fn run_vm_collection(root_in_a: bool) -> Vec<Option<String>> {
             .with_arena(|arena| {
                 arena.mutate(|_, engine| {
                     encode_reference(
-                        // SAFETY: the owner is in an active arena mutation.
-                        // SAFETY: the active arena mutation confines the witness to this operation.
+                        // SAFETY: F1.GcHandleRooted — the owner is in an active arena mutation.
+                        // SAFETY: F1.GcHandleRooted — the active arena mutation confines the witness to this operation.
                         unsafe { engine.stack.shared.gc_handles.get(witness) }
                             .unwrap()
                             .0,
@@ -292,9 +292,9 @@ fn arena_lifetime_vm_collection_fixed_point_payload_and_reclamation() {
         executor
             .with_arena(|arena| {
                 arena.mutate(|_, engine| {
-                    // SAFETY: the owner is in an active arena mutation.
+                    // SAFETY: F1.GcHandleRooted — the owner is in an active arena mutation.
                     let (obj, _) =
-                        // SAFETY: the active arena mutation confines the witness to this operation.
+                        // SAFETY: F1.GcHandleRooted — the active arena mutation confines the witness to this operation.
                         unsafe { engine.stack.shared.gc_handles.get(index) }.expect("witness slot");
                     obj.0.map(|h| match &h.borrow().storage {
                         HeapStorage::Str(s) => s.as_string(),
@@ -330,8 +330,8 @@ fn arena_lifetime_vm_collection_fixed_point_payload_and_reclamation() {
                 .with_arena(|arena| {
                     arena.mutate(|_, engine| {
                         encode_reference(
-                            // SAFETY: the owner is in an active arena mutation.
-                            // SAFETY: the active arena mutation confines the witness to this operation.
+                            // SAFETY: F1.GcHandleRooted — the owner is in an active arena mutation.
+                            // SAFETY: F1.GcHandleRooted — the active arena mutation confines the witness to this operation.
                             unsafe { engine.stack.shared.gc_handles.get(witness) }
                                 .unwrap()
                                 .0,
@@ -352,9 +352,9 @@ fn arena_lifetime_vm_collection_fixed_point_payload_and_reclamation() {
                         owner
                             .with_arena(|arena| {
                                 arena.mutate_root(|gc, engine| {
-                                    // SAFETY: the owner is in an active arena mutation.
+                                    // SAFETY: F1.GcHandleRooted — the owner is in an active arena mutation.
                                     let (obj, _) =
-                                        // SAFETY: the active arena mutation confines the witness to this operation.
+                                        // SAFETY: F1.GcHandleRooted — the active arena mutation confines the witness to this operation.
                                         unsafe { engine.stack.shared.gc_handles.get(witness) }
                                             .expect("witness slot");
                                     let h = obj.0.expect("payload must still be live to write");
@@ -373,9 +373,9 @@ fn arena_lifetime_vm_collection_fixed_point_payload_and_reclamation() {
                                     let handle =
                                         unsafe { crate::test_utils::test_gc_handle(gc, engine) };
                                     let target = decode_reference(target, handle);
-                                    // SAFETY: the owner is in an active arena mutation.
+                                    // SAFETY: F1.GcHandleRooted — the owner is in an active arena mutation.
                                     let (obj, _) =
-                                        // SAFETY: the active arena mutation confines the witness to this operation.
+                                        // SAFETY: F1.GcHandleRooted — the active arena mutation confines the witness to this operation.
                                         unsafe { engine.stack.shared.gc_handles.get(witness) }
                                             .expect("witness slot");
                                     assert!(obj.0.is_some(), "vector must still be live to link");
@@ -724,9 +724,9 @@ fn dependent_handle_chain_survives_and_clears() {
     executor
         .with_arena(|arena| {
             arena.mutate_root(|_, engine| {
-                // SAFETY: this mutation is active while the witness is inspected.
+                // SAFETY: F1.GcHandleRooted — this mutation is active while the witness is inspected.
                 assert!(
-                    // SAFETY: the active arena mutation confines the witness to this operation.
+                    // SAFETY: F1.GcHandleRooted — the active arena mutation confines the witness to this operation.
                     unsafe { engine.stack.shared.gc_handles.get(1) }
                         .unwrap()
                         .0
@@ -741,9 +741,9 @@ fn dependent_handle_chain_survives_and_clears() {
     executor
         .with_arena(|arena| {
             arena.mutate(|_, engine| {
-                // SAFETY: this mutation is active while the witness is inspected.
+                // SAFETY: F1.GcHandleRooted — this mutation is active while the witness is inspected.
                 assert!(
-                    // SAFETY: the active arena mutation confines the witness to this operation.
+                    // SAFETY: F1.GcHandleRooted — the active arena mutation confines the witness to this operation.
                     unsafe { engine.stack.shared.gc_handles.get(1) }
                         .unwrap()
                         .0
@@ -751,7 +751,7 @@ fn dependent_handle_chain_survives_and_clears() {
                         .is_none()
                 );
                 for index in 0..2 {
-                    // SAFETY: both results remain within this mutation.
+                    // SAFETY: F1.GcHandleRooted — both results remain within this mutation.
                     let (key, value) =
                         unsafe { engine.stack.shared.gc_handles.get_dependent(index) }.unwrap();
                     assert!(key.0.is_none() && value.0.is_none());

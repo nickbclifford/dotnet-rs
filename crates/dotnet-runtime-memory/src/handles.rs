@@ -53,7 +53,7 @@ impl SharedGcHandles {
             .copied()
             .flatten()
             .map(|(ptr, kind)| {
-                // SAFETY: The slot protects its pointer until this read; the caller keeps the
+                // SAFETY: F1.GcHandleRooted — the slot protects its pointer until this read; the caller keeps the
                 // mutator active and roots the result before any safepoint.
                 (
                     ObjectRef(ptr.map(|p| unsafe { Gc::from_ptr(p.as_ptr().cast()) })),
@@ -147,7 +147,7 @@ impl SharedGcHandles {
             if let Some((Some(key), _)) = table.slots[index]
                 && key.owner_id() == owner
             {
-                // SAFETY: Only the key's owner reads its mark color during collection.
+                // SAFETY: F1.StwParked; F6.NoEscapeAcrossArena — only the key's owner reads its mark color during collection.
                 let object: ObjectRef<'gc> =
                     ObjectRef(Some(unsafe { Gc::from_ptr(key.as_ptr().cast()) }));
                 let gc = object.0.unwrap();
@@ -170,7 +170,7 @@ impl SharedGcHandles {
             } else if let (Some(key), _) = *entry
                 && key.owner_id() == owner
             {
-                // SAFETY: Only the key's owner reads its mark color during collection.
+                // SAFETY: F1.StwParked; F6.NoEscapeAcrossArena — only the key's owner reads its mark color during collection.
                 let object: ObjectRef<'gc> =
                     ObjectRef(Some(unsafe { Gc::from_ptr(key.as_ptr().cast()) }));
                 let gc = object.0.unwrap();
@@ -196,7 +196,7 @@ impl SharedGcHandles {
                 && let Some(p) = *ptr
                 && p.owner_id() == owner
             {
-                // SAFETY: STW retains the owner; only its collector reads its colors.
+                // SAFETY: F1.StwParked; F6.NoEscapeAcrossArena — STW retains the owner; only its collector reads its colors.
                 let object: ObjectRef<'gc> =
                     ObjectRef(Some(unsafe { Gc::from_ptr(p.as_ptr().cast()) }));
                 let gc = object.0.unwrap();
@@ -220,7 +220,7 @@ unsafe impl<'gc> Collect<'gc> for SharedGcHandles {
             if let Some(Some((_, Some(value)))) = table.slots.get(*index)
                 && value.owner_id() == owner
             {
-                // SAFETY: STW retains the value's owner throughout tracing.
+                // SAFETY: F1.StwParked; F6.NoEscapeAcrossArena — STW retains the value's owner throughout tracing.
                 ObjectRef(Some(unsafe { Gc::from_ptr(value.as_ptr().cast()) })).trace(cc);
             }
         }
@@ -230,7 +230,7 @@ unsafe impl<'gc> Collect<'gc> for SharedGcHandles {
                 && let Some(p) = ptr
                 && p.owner_id() == owner
             {
-                // SAFETY: STW keeps owners alive and this temporary handle cannot escape.
+                // SAFETY: F1.StwParked; F6.NoEscapeAcrossArena — STW keeps owners alive and this temporary handle cannot escape.
                 ObjectRef(Some(unsafe { Gc::from_ptr(p.as_ptr().cast()) })).trace(cc);
             }
         }

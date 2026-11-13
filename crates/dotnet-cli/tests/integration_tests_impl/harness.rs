@@ -265,7 +265,7 @@ impl TestHarness {
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => false,
             });
 
-        let result = self.run_with_shared_internal(resolution, shared, observe, |_| {});
+        let result = self.run_with_shared_internal(resolution, shared, observe, |_| {}, true);
         let _ = completion_tx.send(());
         if timeout_waiter.join().expect("Timeout waiter panicked") {
             panic!("Execution timed out after {:?}", timeout);
@@ -288,7 +288,7 @@ impl TestHarness {
         resolution: ResolutionS,
         shared: Arc<state::SharedGlobalState>,
     ) -> ExecutionResult {
-        self.run_with_shared_internal(resolution, shared, |_, _, _| {}, |_| {})
+        self.run_with_shared_internal(resolution, shared, |_, _, _| {}, |_| {}, true)
     }
 
     #[cfg(all(feature = "multithreading", not(feature = "fuzzing")))]
@@ -301,7 +301,7 @@ impl TestHarness {
     where
         O: FnOnce(&state::SharedGlobalState, TypeDescription, &ExecutionResult),
     {
-        self.run_with_shared_internal(resolution, shared, observe, |_| {})
+        self.run_with_shared_internal(resolution, shared, observe, |_| {}, true)
     }
 
     #[cfg(feature = "multithreading")]
@@ -328,15 +328,20 @@ impl TestHarness {
                         .expect("release gate wait lock poisoned");
                 }
             },
+            false,
         );
     }
 
+    /// `shutdown` performs process teardown (`shutdown_workers`) after this executor. Callers
+    /// that run several entry executors over one shared VM pass `false` and shut down once,
+    /// after the last executor, because shutdown cancels every remaining executor.
     fn run_with_shared_internal<F, O>(
         &self,
         resolution: ResolutionS,
         shared: Arc<state::SharedGlobalState>,
         observe: O,
         on_complete: F,
+        shutdown: bool,
     ) -> ExecutionResult
     where
         F: FnOnce(ExecutionResult),
@@ -367,7 +372,9 @@ impl TestHarness {
             eprintln!("{}", msg);
             executor.wait_for_foreground_workers();
             drop(executor);
-            shared.shutdown_workers();
+            if shutdown {
+                shared.shutdown_workers();
+            }
             return ExecutionResult {
                 exit_code: 255,
                 stderr: Some(msg),
@@ -422,7 +429,9 @@ impl TestHarness {
         // Executor::drop releases only its reservation; the thread-affine guard
         // independently owns storage and drains its exact registration below.
         drop(executor);
-        shared.shutdown_workers();
+        if shutdown {
+            shared.shutdown_workers();
+        }
 
         on_complete(result.clone());
 
@@ -571,6 +580,8 @@ impl TestHarness {
                     for handle in handles {
                         let _ = handle.join();
                     }
+                    // Process teardown runs once, after the last entry executor.
+                    shared.shutdown_workers();
                     std::panic::resume_unwind(panic_info);
                 }
                 Err(_) => {
@@ -596,6 +607,8 @@ impl TestHarness {
             for handle in handles {
                 let _ = handle.join();
             }
+            // Process teardown runs once, after the last entry executor.
+            shared.shutdown_workers();
             panic!("{}", err);
         }
 
@@ -608,6 +621,8 @@ impl TestHarness {
         for handle in handles {
             let _ = handle.join();
         }
+        // Process teardown runs once, after the last entry executor.
+        shared.shutdown_workers();
     }
 }
 
