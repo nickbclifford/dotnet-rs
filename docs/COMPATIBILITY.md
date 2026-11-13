@@ -7,8 +7,10 @@ remains available for direct assembly-root selection.
 The host path has been validated at three levels:
 
 - the repository's managed fixture suite;
-- a Newtonsoft.Json application with matching output and exit status under
-  stock `dotnet` and `dotnet-rs`;
+- a Newtonsoft.Json application, which matched stock `dotnet` when the host
+  runner landed but currently fails with `InvalidCastException` in
+  `DotnetRs.SZArrayHelper<T>.CopyTo` (tracked in the
+  [plans README](plans/README.md#not-yet-planned));
 - an EF Core InMemory smoke application that creates, saves, and queries an
   entity with matching output and exit status under both runtimes.
 

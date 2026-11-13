@@ -41,15 +41,28 @@ Evidence and IDs (p01…, R01…) are defined in the
   APIs: `gc-arena` in the workspace and both standalone fuzz manifests (3); workspace
   `parking_lot` and `lru` (2); benchmark `criterion` (1); `syn` in dotnet-macros,
   dotnet-macros-core, dotnet-vm build-dependencies and xtask (4); and `phf` plus `phf_codegen`
-  in dotnet-vm (2). The upstream changelog, release and crates.io evidence and compatibility
-  rationale are recorded in [REVIEW.md F-DEP-002](../../REVIEW.md#F-DEP-002). Resolve each
-  family as deliberate API/safety/measurement work; MSRV compatibility alone is not evidence
-  that an upgrade is safe.
+  in dotnet-vm (2). Resolve each family as deliberate API/safety/measurement work; MSRV
+  compatibility alone is not evidence that an upgrade is safe. Why each is separate:
+  - `gc-arena` 0.7: pointer representation and pacing (shallow bytes → pointer counts) change;
+    needs a safety, pacing and performance review, plus an audit of 0.6.1's equal-alignment
+    cast requirement. GC upgrades need Miri evidence, not just compilation.
+  - `parking_lot` 0.13: per-acquisition raw guard state, fairness and recursive-lock changes
+    affect the sync facade, lock order and GC locks; needs Loom evidence.
+  - `syn` 3: AST/parser migration; validate emitted code, signature scans and slot consumers.
+  - `phf`/`phf_codegen` 0.14: table and runtime formats must migrate together and pass the
+    generation/dispatch probes.
+  - `lru` 0.19: shared-iterator `Sync` requirements need trait review (types and VM caches).
+  - `criterion` 0.8: several API generations from 0.5; needs smoke runs and a measurement
+    comparability check.
+
+  The full 2026-11 evidence (changelog and release links) is in the deleted inspection ledger,
+  `git show 0f85ff25^:REVIEW.md` (finding F-DEP-002).
 - **Managed-thread local ID synchronization facade:** `threading/local::NEXT_MANAGED_ID` is a
   process-global `std::sync::atomic::AtomicI32`, unlike the VM synchronization types reexported
   through `dotnet_utils::sync`. Review its feature and Loom ownership before migrating it; preserve
-  monotonic allocation and exhaustion behavior. This is separate from the completed atomic-method
-  rename in [REVIEW.md F-DEPR-001](../../REVIEW.md#F-DEPR-001).
+  monotonic allocation and exhaustion behavior. This is separate from plan 17's completed
+  `try_update` rename, which kept `threading/basic::allocate_managed_thread_id` on the facade's
+  `fetch_update` because Loom 0.7.2 has no `try_update`.
 - **Heap byte-read overflow:** `RawMemoryAccess::read_bytes` adds the owner-relative offset
   and destination length without checked arithmetic. A `VesContext::read_bytes` heap-origin
   call with `usize::MAX` and a one-byte destination panics instead of returning `BoundsCheck`;
@@ -71,7 +84,15 @@ Evidence and IDs (p01…, R01…) are defined in the
 - **Newtonsoft array copying:** the pinned host roundtrip in
   `crates/dotnet-cli/tests/host_projects/newtonsoft_roundtrip` fails in
   `DotnetRs.SZArrayHelper<T>.CopyTo` with `InvalidCastException` while initializing
-  `JsonWriter`; the CLR serializes and deserializes successfully.
+  `JsonWriter`; the CLR serializes and deserializes successfully. This rung passed when the
+  host runner landed, so it is a regression; the 2026-11-11 reproduction is in
+  [evidence/corelib-resource-host-rungs.txt](evidence/corelib-resource-host-rungs.txt).
+- **Userland breadth is untracked:** the only real-application rungs are the Newtonsoft
+  roundtrip above and the EF Core InMemory smoke test
+  (`crates/dotnet-benchmarks/fixtures/ef_inmemory`). No list of gaps beyond those exists; the
+  former EF gap backlog and userland roadmap were deleted. Pick the next application rung
+  (for example EF Core SQLite, which [COMPATIBILITY.md](../COMPATIBILITY.md) lists as
+  unvalidated) and record its failures here before planning fixes.
 - **Reflection compatibility and validation:** reflection calls remain transparent (guest
   exceptions are not wrapped in `TargetInvocationException`) and declared byref returns are
   rejected, both deliberate CLR deviations in the
@@ -171,7 +192,6 @@ Evidence and IDs (p01…, R01…) are defined in the
   producing finalizable garbage. The behavior has not been reproduced.
 - **Loom model coverage:** the hand-written `loom_stw.rs` model does not compile the production
   `WorkerRegistry` and does not cover every stop-the-world, retirement or shutdown interleaving.
-- **CI feedback:** remaining steps of the [test hierarchy](../CI.md#test-hierarchy-and-migration).
 
 ## Writing a plan
 

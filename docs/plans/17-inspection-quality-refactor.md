@@ -6,7 +6,8 @@ entries have verified fixes or documented reasons to retain them without weakeni
 
 ## Problem
 
-The inspection ledger in [REVIEW.md](../../REVIEW.md) identifies repeated intrinsic decoding,
+The inspection ledger (`REVIEW.md`, removed after completion; read it with
+`git show 0f85ff25^:REVIEW.md`) identifies repeated intrinsic decoding,
 reflection slot selection, memory windows and runtime transitions, plus feature-sensitive Rust
 readability and dependency findings. Textual duplicate removal alone can hide rather than remove
 representation knowledge. Inspections cover only one feature configuration.
