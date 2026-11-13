@@ -60,7 +60,7 @@ files and fails on drift.
 | `format`, `clippy`, `test` | `cargo fmt`; `SHARED_FEATURE_MATRIX` in `xtask/src/main.rs` (`cargo run -p xtask -- matrix test-features`). The `test` job also runs the native-effects compile-fail doctests and `scripts/check_vm_effects_compile_fail.py` in no-features and multithreading, and the multithreading hang-probe filters listed in its YAML step. |
 | `clippy-release` | No features and `multithreading` with `--release`, so code under `cfg(not(debug_assertions))` is linted |
 | `provenance-lints` | `scripts/check_provenance_lints.sh` |
-| `loom` | `crates/dotnet-vm/tests/loom_stw.rs` |
+| `loom` | `crates/dotnet-vm/tests/loom_stw.rs` and `crates/dotnet-runtime-memory/tests/loom_shared_tables.rs` |
 | `build-script-regression` | `scripts/check_build_script_regressions.sh` |
 | `build-fixtures` | `xtask fixtures` (output path and cache key) |
 | `miri-value`, `miri-frame-blocks`, `miri-owner-retention` | Selectors and `--require` counts in the job steps in `ci.yml` |
@@ -200,6 +200,23 @@ DOTNET_SKIP_BUILD=1 RUSTFLAGS="--cfg loom" \
 
 Loom is a rustc `cfg`, not a Cargo feature. The model is exhaustive at three threads (the
 collector and two mutators).
+
+The production shared tables are driven by a second suite, because `dotnet-vm` does not compile
+under `cfg(loom)` with `multithreading` but `dotnet-runtime-memory` does:
+
+```bash
+DOTNET_SKIP_BUILD=1 RUSTFLAGS="--cfg loom" \
+  cargo nextest run -p dotnet-runtime-memory --test loom_shared_tables --features multithreading
+```
+
+`loom_shared_tables.rs` runs the real `SharedGcHandles` (concurrent alloc/set/free, then
+owner-partitioned `clear_dead` and tracing on two arenas, each on its own loom thread) and the
+real `Finalizers` queue (`dotnet-vm/src/finalizers.rs`, compiled verbatim with `#[path]`) with a
+finalizer-thread safepoint model: a worker parked mid-call keeps its claimed and pending objects
+rooted through a stop-the-world collection. Both use a preemption bound of 3 (about 14 s). Under
+`cfg(loom)` the managed thread id and `RwLock` are loom-aware in `dotnet_utils::sync`, because
+loom threads share one OS thread. The models avoid strings, whose global interner would outlive
+one loom execution.
 
 ### Source policy and docs
 

@@ -32,3 +32,6 @@ bench-instrumentation = ["dep:dotnet-metrics", "dotnet-metrics/bench-instrumenta
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+loom = { workspace = true }

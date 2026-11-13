@@ -576,6 +576,7 @@ dependencies = [
  "dotnet-value",
  "dotnet-vm-ops",
  "gc-arena",
+ "loom",
  "slab",
  "smallvec",
 ]

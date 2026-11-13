@@ -164,6 +164,9 @@ jobs:
       - name: Run loom STW model
         run: RUSTFLAGS="--cfg loom" cargo nextest run -p dotnet-vm --test loom_stw --no-default-features
 
+      - name: Run loom shared-table models
+        run: RUSTFLAGS="--cfg loom" cargo nextest run -p dotnet-runtime-memory --test loom_shared_tables --features multithreading
+
   provenance-lints:
     name: Strict Provenance Lints
     runs-on: ubuntu-latest

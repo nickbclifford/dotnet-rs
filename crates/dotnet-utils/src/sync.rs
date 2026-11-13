@@ -58,65 +58,109 @@ mod loom_compat {
         }
     }
 
-    /// A parking_lot-shaped wrapper around [`loom::sync::RwLock`].
+    /// A parking_lot-shaped reader-writer lock whose scheduling is modeled by a
+    /// [`loom::sync::RwLock`].
+    ///
+    /// The protected value lives beside the loom lock rather than inside it, so `data_ptr`
+    /// is lock-free as it is for `parking_lot::RwLock`. Production reads the interior of
+    /// `ThreadSafeLock` objects (for example an immutable owner id) through that pointer
+    /// while another thread holds the lock, and modeling it as a write acquisition would
+    /// invent lock-order cycles that do not exist.
     #[derive(Debug, Default)]
-    pub struct RwLock<T>(loom::sync::RwLock<T>);
+    pub struct RwLock<T> {
+        lock: loom::sync::RwLock<()>,
+        data: std::cell::UnsafeCell<T>,
+    }
+
+    // SAFETY: F11.ObjectPointerThreadSafe — the loom lock serializes every guard-based access to
+    // `data`, exactly as `parking_lot::RwLock` does; the lock-free `data_ptr` carries the
+    // caller obligations documented there.
+    unsafe impl<T: Send> Send for RwLock<T> {}
+    // SAFETY: F11.ObjectPointerThreadSafe — as for `Send` above, with shared readers.
+    unsafe impl<T: Send + Sync> Sync for RwLock<T> {}
 
     impl<T> RwLock<T> {
         pub fn new(value: T) -> Self {
-            Self(loom::sync::RwLock::new(value))
+            Self {
+                lock: loom::sync::RwLock::new(()),
+                data: std::cell::UnsafeCell::new(value),
+            }
         }
 
         pub fn read(&self) -> RwLockReadGuard<'_, T> {
-            RwLockReadGuard(self.0.read().expect("loom rwlock cannot be poisoned"))
+            let guard = self.lock.read().expect("loom rwlock cannot be poisoned");
+            RwLockReadGuard {
+                _guard: guard,
+                // SAFETY: F11.ObjectPointerThreadSafe — the read guard excludes writers.
+                value: unsafe { &*self.data.get() },
+            }
         }
 
         pub fn write(&self) -> RwLockWriteGuard<'_, T> {
-            RwLockWriteGuard(self.0.write().expect("loom rwlock cannot be poisoned"))
+            let guard = self.lock.write().expect("loom rwlock cannot be poisoned");
+            RwLockWriteGuard {
+                _guard: guard,
+                // SAFETY: F11.ObjectPointerThreadSafe — the write guard excludes all other guards.
+                value: unsafe { &mut *self.data.get() },
+            }
         }
 
         pub fn try_read(&self) -> Option<RwLockReadGuard<'_, T>> {
-            match self.0.try_read() {
-                Ok(guard) => Some(RwLockReadGuard(guard)),
+            match self.lock.try_read() {
+                Ok(guard) => Some(RwLockReadGuard {
+                    _guard: guard,
+                    // SAFETY: F11.ObjectPointerThreadSafe — the read guard excludes writers.
+                    value: unsafe { &*self.data.get() },
+                }),
                 Err(TryLockError::WouldBlock) => None,
                 Err(TryLockError::Poisoned(_)) => panic!("loom rwlock cannot be poisoned"),
             }
         }
 
         pub fn try_write(&self) -> Option<RwLockWriteGuard<'_, T>> {
-            match self.0.try_write() {
-                Ok(guard) => Some(RwLockWriteGuard(guard)),
+            match self.lock.try_write() {
+                Ok(guard) => Some(RwLockWriteGuard {
+                    _guard: guard,
+                    // SAFETY: F11.ObjectPointerThreadSafe — the write guard excludes all other guards.
+                    value: unsafe { &mut *self.data.get() },
+                }),
                 Err(TryLockError::WouldBlock) => None,
                 Err(TryLockError::Poisoned(_)) => panic!("loom rwlock cannot be poisoned"),
             }
         }
 
         pub fn get_mut(&mut self) -> &mut T {
-            self.0.get_mut().expect("loom rwlock cannot be poisoned")
+            self.data.get_mut()
         }
 
-        /// Get a pointer to the inner data.
+        /// Get a pointer to the inner data without taking the lock.
         ///
         /// # Safety
         ///
         /// Caller must ensure proper access to the data and that the pointer
-        /// does not outlive the lock. Acquiring and dropping the write guard
-        /// obtains the stable inner pointer without exposing loom's poisoning API.
+        /// does not outlive the lock.
         pub unsafe fn data_ptr(&self) -> *mut T {
-            let mut guard = self.write();
-            &mut *guard
+            self.data.get()
         }
     }
 
     /// Read guard for a [`RwLock`].
-    #[derive(Debug)]
-    pub struct RwLockReadGuard<'a, T>(loom::sync::RwLockReadGuard<'a, T>);
+    pub struct RwLockReadGuard<'a, T> {
+        _guard: loom::sync::RwLockReadGuard<'a, ()>,
+        value: &'a T,
+    }
+
+    impl<T: std::fmt::Debug> std::fmt::Debug for RwLockReadGuard<'_, T> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            self.value.fmt(f)
+        }
+    }
 
     impl<T> Deref for RwLockReadGuard<'_, T> {
         type Target = T;
 
         fn deref(&self) -> &Self::Target {
-            &self.0
+            self.value
         }
     }
 
@@ -136,20 +180,28 @@ mod loom_compat {
     }
 
     /// Write guard for a [`RwLock`].
-    #[derive(Debug)]
-    pub struct RwLockWriteGuard<'a, T>(loom::sync::RwLockWriteGuard<'a, T>);
+    pub struct RwLockWriteGuard<'a, T> {
+        _guard: loom::sync::RwLockWriteGuard<'a, ()>,
+        value: &'a mut T,
+    }
+
+    impl<T: std::fmt::Debug> std::fmt::Debug for RwLockWriteGuard<'_, T> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            self.value.fmt(f)
+        }
+    }
 
     impl<T> Deref for RwLockWriteGuard<'_, T> {
         type Target = T;
 
         fn deref(&self) -> &Self::Target {
-            &self.0
+            self.value
         }
     }
 
     impl<T> DerefMut for RwLockWriteGuard<'_, T> {
         fn deref_mut(&mut self) -> &mut Self::Target {
-            &mut self.0
+            self.value
         }
     }
 
@@ -415,7 +467,50 @@ pub use std::sync::atomic::{
     AtomicU32, AtomicU64, AtomicUsize, Ordering,
 };
 
-#[cfg(any(feature = "multithreading", feature = "memory-validation"))]
+/// Loom runs its threads as coroutines on one OS thread, so a `std` thread-local would be shared
+/// by every modeled thread. Under `cfg(loom)` the managed thread id lives in loom's own
+/// thread-local storage instead, behind the same `with`/`get`/`set`/`replace` surface.
+#[cfg(all(loom, any(feature = "multithreading", feature = "memory-validation")))]
+mod loom_thread_id {
+    use std::cell::Cell;
+
+    type Slot = Cell<Option<crate::ArenaId>>;
+
+    loom::thread_local! {
+        static SLOT: Slot = Cell::new(None);
+    }
+
+    pub struct ManagedThreadIdKey;
+
+    impl ManagedThreadIdKey {
+        pub fn with<R>(&'static self, f: impl FnOnce(&Slot) -> R) -> R {
+            SLOT.with(f)
+        }
+
+        pub fn get(&'static self) -> Option<crate::ArenaId> {
+            self.with(Cell::get)
+        }
+
+        pub fn set(&'static self, value: Option<crate::ArenaId>) {
+            self.with(|slot| slot.set(value));
+        }
+
+        pub fn replace(&'static self, value: Option<crate::ArenaId>) -> Option<crate::ArenaId> {
+            self.with(|slot| slot.replace(value))
+        }
+    }
+
+    /// Cached managed thread ID for the current modeled thread.
+    pub static MANAGED_THREAD_ID: ManagedThreadIdKey = ManagedThreadIdKey;
+}
+
+#[cfg(all(loom, any(feature = "multithreading", feature = "memory-validation")))]
+pub use loom_thread_id::MANAGED_THREAD_ID;
+
+#[cfg(all(
+    not(loom),
+    any(feature = "multithreading", feature = "memory-validation")
+))]
 thread_local! {
     /// Cached managed thread ID for the current thread
     pub static MANAGED_THREAD_ID: std::cell::Cell<Option<crate::ArenaId>> = const { std::cell::Cell::new(None) };
