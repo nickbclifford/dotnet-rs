@@ -53,10 +53,46 @@ pub fn clear_weak_arena(marked: MarkedArena<'_, GCArenaRoot>) {
 /// This handles object finalization by checking which objects are no longer reachable.
 pub fn finalize_arena(marked: MarkedArena<'_, GCArenaRoot>) {
     marked.finalize(|fc, c| {
+        #[cfg(feature = "multithreading")]
+        for (ptr, registered) in c.stack.shared.finalizers.take_registrations() {
+            // SAFETY: F1.FinalizerPublication — weak registrations are drained by their owner before sweep.
+            let object = dotnet_value::object::ObjectRef(Some(unsafe {
+                gc_arena::Gc::from_ptr(ptr.as_ptr().cast())
+            }));
+            if let Some(inner) = dotnet_value::ThreadSafeLock::borrow_mut(object.0.unwrap(), fc)
+                .storage
+                .as_obj_mut()
+            {
+                inner.finalizer_suppressed = !registered;
+            }
+            if registered {
+                let mut queue = c.stack.local.heap.finalization_queue.borrow_mut();
+                if !queue.contains(&object) {
+                    queue.push(object);
+                }
+            }
+        }
         c.stack
             .local
             .heap
             .finalize_check(fc, c.stack.shared.as_ref(), c.stack.indent());
+        #[cfg(feature = "multithreading")]
+        if c.stack
+            .shared
+            .finalizer_started
+            .load(dotnet_utils::sync::Ordering::Acquire)
+        {
+            for object in c
+                .stack
+                .local
+                .heap
+                .pending_finalization
+                .borrow_mut()
+                .drain(..)
+            {
+                c.stack.shared.finalizers.enqueue(object);
+            }
+        }
         let heap = &c.stack.local.heap;
         c.stack.shared.publish_finalizers(
             heap,

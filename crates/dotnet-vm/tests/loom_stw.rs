@@ -271,6 +271,42 @@ fn normal_stop_the_world_parks_every_mutator_before_gc_access_and_resumes_after_
     });
 }
 
+#[test]
+fn finalizer_handoff_remains_rooted_while_worker_is_parked() {
+    loom::model(|| {
+        // The mutex models the shared pending/active queue; the worker transfers the root
+        // before entering managed code, and keeps it until after the safepoint resumes.
+        let root = Arc::new(loom::sync::Mutex::new((true, false)));
+        let (claimed, claimed_rx) = channel();
+        let (stop, stop_rx) = channel();
+        let (parked, parked_rx) = channel();
+        let (resume, resume_rx) = channel();
+        let worker_root = root.clone();
+        let worker = thread::spawn(move || {
+            {
+                let mut root = worker_root.lock().unwrap();
+                assert!(root.0);
+                *root = (false, true);
+            }
+            claimed.send(()).unwrap();
+            stop_rx.recv().unwrap();
+            parked.send(()).unwrap();
+            resume_rx.recv().unwrap();
+            worker_root.lock().unwrap().1 = false;
+        });
+        claimed_rx.recv().unwrap();
+        stop.send(()).unwrap();
+        parked_rx.recv().unwrap();
+        assert!(
+            root.lock().unwrap().1,
+            "the active finalizer must be traced"
+        );
+        resume.send(()).unwrap();
+        worker.join().unwrap();
+        assert_eq!(*root.lock().unwrap(), (false, false));
+    });
+}
+
 /// Minimal equivalent of an armed `ResumeOnPanic` before ownership transfers
 /// to `StopTheWorldGuard`.
 struct ResumeOnPanicModel {

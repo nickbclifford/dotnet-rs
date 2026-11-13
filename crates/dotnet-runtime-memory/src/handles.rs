@@ -100,9 +100,12 @@ impl SharedGcHandles {
             .copied()
             .flatten()
             .map(|(key, value)| {
-                // SAFETY: The active mutation prevents collection until the caller roots the results.
+                // The active mutation prevents collection until the caller roots the results.
                 let convert = |ptr: Option<ObjectPtr>| {
-                    ObjectRef(ptr.map(|p| unsafe { Gc::from_ptr(p.as_ptr().cast()) }))
+                    ObjectRef(ptr.map(|p| {
+                        // SAFETY: F1.GcHandleRooted — the active mutation keeps the pointer live.
+                        unsafe { Gc::from_ptr(p.as_ptr().cast()) }
+                    }))
                 };
                 (convert(key), convert(value))
             })

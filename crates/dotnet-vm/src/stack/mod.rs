@@ -132,6 +132,8 @@ unsafe impl<'gc> Collect<'gc> for CallStack<'gc> {
         self.shared.statics.trace(cc);
         self.shared.gc_handles.trace(cc);
         #[cfg(feature = "multithreading")]
+        self.shared.finalizers.trace(cc);
+        #[cfg(feature = "multithreading")]
         self.shared.reflection_registry.trace(cc);
     }
 }

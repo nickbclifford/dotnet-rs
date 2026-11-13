@@ -562,6 +562,16 @@ diff_test!(
     retired_finalizer_monitor_matches_dotnet,
     "tests/debug_fixtures/retired_finalizer_monitor_42.cs"
 );
+#[cfg(feature = "multithreading")]
+diff_test!(
+    finalizer_thread_identity_matches_dotnet,
+    "tests/debug_fixtures/finalizer_thread_identity_42.cs"
+);
+#[cfg(feature = "multithreading")]
+diff_test!(
+    finalizer_thread_blocking_matches_dotnet,
+    "tests/debug_fixtures/finalizer_thread_blocking_42.cs"
+);
 diff_test!(
     finalizer_collect_matches_dotnet,
     "tests/fixtures/gc/finalizer_collect_42.cs"

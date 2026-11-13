@@ -850,6 +850,8 @@ impl Executor {
     /// (a finalizer that never returns would otherwise block it). The caller must call
     /// [`Self::wait_for_foreground_workers`] before dropping the executor.
     pub fn run_entrypoint(&mut self) -> ExecutorResult {
+        #[cfg(feature = "multithreading")]
+        self.start_finalizer_thread();
         let result = self.run_inner(false);
         #[cfg(feature = "multithreading")]
         if let ExecutorResult::Threw(exception) = &result {
@@ -858,6 +860,101 @@ impl Executor {
             self.shared.report_fatal_exception(exception.clone());
         }
         result
+    }
+
+    #[cfg(feature = "multithreading")]
+    fn start_finalizer_thread(&self) {
+        if self.shared.finalizer_started.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let shared = self.shared.clone();
+        self.shared.workers.spawn_finalizer_owner(move |worker| {
+            Self::run_finalizer_thread(shared, worker);
+        });
+    }
+
+    #[cfg(feature = "multithreading")]
+    fn run_finalizer_thread(
+        shared: Arc<SharedGlobalState>,
+        worker: crate::threading::workers::RunningWorker,
+    ) {
+        let mut executor = Self::new(shared.clone());
+        let result = loop {
+            if shared.is_abort_requested() || shared.finalizer_shutdown.load(Ordering::Acquire) {
+                break ExecutorResult::Exited(0);
+            }
+            if shared.thread_manager.is_gc_stop_requested() {
+                shared
+                    .thread_manager
+                    .safe_point(executor.thread_id, &shared.gc_coordinator);
+            }
+            // Claim and install while this mutator is active. The shared active entry remains
+            // rooted through the entire finalizer call, including collections it requests.
+            #[cfg(feature = "memory-validation")]
+            let thread_id = executor.thread_id;
+            let claimed = executor
+                .with_arena(|arena| {
+                    arena.mutate_root(|gc, c| {
+                        if let Some(ptr) = shared.finalizers.claim() {
+                            // SAFETY: F1.FinalizerPublication — the shared active entry roots the object and this arena is
+                            // in an active mutation; the local pending queue roots the branded ref.
+                            let object = ObjectRef(Some(unsafe {
+                                gc_arena::Gc::from_ptr(ptr.as_ptr().cast())
+                            }));
+                            c.stack
+                                .local
+                                .heap
+                                .pending_finalization
+                                .borrow_mut()
+                                .push(object);
+                            let gc = GCHandle::new(
+                                gc,
+                                // SAFETY: F1.GcHandleRooted — the executor holds this arena's mutation.
+                                unsafe { c.stack.arena_inner_gc() },
+                                #[cfg(feature = "memory-validation")]
+                                thread_id,
+                            );
+                            match c.process_pending_finalizers(gc) {
+                                StepResult::FramePushed => Ok(true),
+                                StepResult::Error(error) => Err(error),
+                                _ => Ok(false),
+                            }
+                        } else {
+                            Ok(false)
+                        }
+                    })
+                })
+                .and_then(|result| result);
+            match claimed {
+                Ok(true) => {
+                    let result = executor.run_inner(true);
+                    shared.finalizers.complete();
+                    match result {
+                        ExecutorResult::Exited(_) => {}
+                        ExecutorResult::Threw(exception) => {
+                            shared.report_fatal_exception(exception);
+                            break ExecutorResult::Exited(0);
+                        }
+                        ExecutorResult::Error(error) => {
+                            if !shared.is_abort_requested() {
+                                shared.report_worker_error(error.clone());
+                            }
+                            break ExecutorResult::Error(error);
+                        }
+                    }
+                }
+                Ok(false) => {
+                    shared.finalizers.complete();
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                Err(error) => {
+                    shared.finalizers.complete();
+                    shared.report_worker_error(error.clone());
+                    break ExecutorResult::Error(error);
+                }
+            }
+        };
+        executor.serve_retired(worker.complete(result));
     }
 
     /// Runs the entry point with its arguments already on the stack, and waits for foreground

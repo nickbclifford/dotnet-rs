@@ -230,8 +230,7 @@ executor. After cleaning up the managed segment, it publishes the completion out
 `Executor::serve_retired`. The owner thread and arena remain registered with the GC coordinator and
 the exact-identity lease registry. A retired owner counts as stopped for stop-the-world and services
 the coordinator's mark, finalize and sweep commands; it never resumes its ordinary managed entry
-point. When a sweep queues finalizers, the owner runs only finalizer segments, services their safe
-points, and returns to the retirement loop.
+point. In normal MT execution it publishes finalizers to the dedicated finalizer worker.
 
 Shutdown starts only from that service loop. The owner excludes collections, rechecks that no
 finalizer is queued, marks the worker as shutting down, and unregisters its exact arena identity.
@@ -308,16 +307,12 @@ Defined in `dotnet_utils::gc::GCCommand`, split into two phase-typed inner enums
 
 ### Global finalizer completion
 
-`SharedGlobalState` tracks whether each arena has queued or in-progress finalizers and counts each
-contributing arena once. Collection publishes newly queued work before the stop-the-world cycle
-ends; finalizer-segment retirement and arena teardown update the same contribution.
-`Executor::publish_pending_finalizers` is called independently during unregister and drop, so each
-lifecycle phase publishes before its own ownership transition. Ordinary
-`GC.WaitForPendingFinalizers` completes only when no live or retired arena has pending or active
-finalizer work. Its effects path waits outside an arena mutation and rechecks the global count while
-servicing GC stops. A call made from within a finalizer returns immediately through the synchronous
-selector and legacy fallback; it does not clear `processing_finalizer`. `F1.FinalizerPublication` records
-the publication invariant and its falsifiers.
+In MT, owners publish unreachable objects to a shared queue before the stop ends. Each owner traces
+its queued and active objects; the active entry remains rooted until the dedicated worker completes
+the call. Suppression and re-registration are weak owner-directed requests applied before the
+owner's next sweep. In ST, the arena retains and executes its own queue. Ordinary
+`GC.WaitForPendingFinalizers` currently waits for global quiescence, outside the arena mutation while
+servicing GC stops. A call from a finalizer returns immediately. Generation-based waiting is slice 6.
 
 ```mermaid
 sequenceDiagram

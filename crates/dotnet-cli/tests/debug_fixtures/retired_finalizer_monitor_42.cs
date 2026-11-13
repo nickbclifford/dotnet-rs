@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.CompilerServices;
 using System.Threading;
 
 class Payload
@@ -15,13 +16,12 @@ class Program
     public static object Gate = new object();
     public static volatile bool Started;
     public static bool Done;
+    [MethodImpl(MethodImplOptions.NoInlining)]
     static void Create() { new Payload(); }
     static int Main()
     {
         Monitor.Enter(Gate);
-        var worker = new Thread(Create);
-        worker.Start();
-        worker.Join();
+        Create();
         GC.Collect();
         while (!Started) { }
         Monitor.Exit(Gate);

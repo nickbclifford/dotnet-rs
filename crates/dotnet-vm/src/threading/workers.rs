@@ -30,6 +30,7 @@ struct Entry {
     lifecycle: Lifecycle,
     handle: Option<JoinHandle<()>>,
     background: bool,
+    finalizer: bool,
 }
 
 #[cfg(feature = "multithreading")]
@@ -176,7 +177,7 @@ impl WorkerRegistry {
         &self,
         run: impl FnOnce(RunningWorker) + Send + 'static,
     ) -> WorkerCompletion {
-        self.spawn_owner_inner(None, false, run)
+        self.spawn_owner_inner(None, false, false, run)
     }
 
     pub(crate) fn spawn_managed_owner(
@@ -184,20 +185,28 @@ impl WorkerRegistry {
         thread: ObjectPtr,
         run: impl FnOnce(RunningWorker) + Send + 'static,
     ) -> WorkerCompletion {
-        self.spawn_owner_inner(Some(thread), false, run)
+        self.spawn_owner_inner(Some(thread), false, false, run)
     }
 
     pub(crate) fn spawn_pool_owner(
         &self,
         run: impl FnOnce(RunningWorker) + Send + 'static,
     ) -> WorkerCompletion {
-        self.spawn_owner_inner(None, true, run)
+        self.spawn_owner_inner(None, true, false, run)
+    }
+
+    pub(crate) fn spawn_finalizer_owner(
+        &self,
+        run: impl FnOnce(RunningWorker) + Send + 'static,
+    ) -> WorkerCompletion {
+        self.spawn_owner_inner(None, true, true, run)
     }
 
     fn spawn_owner_inner(
         &self,
         thread: Option<ObjectPtr>,
         pool_background: bool,
+        finalizer: bool,
         run: impl FnOnce(RunningWorker) + Send + 'static,
     ) -> WorkerCompletion {
         let mut state = self.state.lock();
@@ -237,6 +246,7 @@ impl WorkerRegistry {
             lifecycle: Lifecycle::Running,
             handle: Some(handle),
             background,
+            finalizer,
         });
         WorkerCompletion {
             state: Arc::clone(&self.state),
@@ -298,7 +308,7 @@ impl WorkerRegistry {
         if state
             .entries
             .iter()
-            .any(|entry| matches!(entry.lifecycle, Lifecycle::Running))
+            .any(|entry| matches!(entry.lifecycle, Lifecycle::Running) && !entry.finalizer)
         {
             cancel_background();
         }
@@ -548,6 +558,7 @@ mod tests {
                     lifecycle: Lifecycle::Running,
                     handle: None,
                     background: false,
+                    finalizer: false,
                 }],
                 threads: HashMap::new(),
                 completion_signal: Default::default(),
@@ -590,6 +601,7 @@ mod tests {
                 lifecycle: Lifecycle::Running,
                 handle: None,
                 background: false,
+                finalizer: false,
             }],
             threads: HashMap::new(),
             completion_signal: Default::default(),
@@ -618,6 +630,7 @@ mod tests {
                 lifecycle: Lifecycle::Running,
                 handle: None,
                 background: false,
+                finalizer: false,
             }],
             threads: HashMap::new(),
             completion_signal: Default::default(),
@@ -652,6 +665,7 @@ mod tests {
                 lifecycle: Lifecycle::Running,
                 handle: None,
                 background: false,
+                finalizer: false,
             }],
             threads: HashMap::new(),
             completion_signal: Default::default(),
@@ -690,6 +704,7 @@ mod tests {
             lifecycle: Lifecycle::Running,
             handle: None,
             background: false,
+            finalizer: false,
         });
         assert!(!registry.is_quiescent(|| true));
         let running = RunningWorker {
@@ -720,6 +735,7 @@ mod tests {
             lifecycle: Lifecycle::Running,
             handle: None,
             background: false,
+            finalizer: false,
         });
         let canceled = Cell::new(false);
         assert!(!registry.foreground_quiescent(|| true, || canceled.set(true)));
@@ -728,6 +744,22 @@ mod tests {
         assert!(!canceled.get());
         assert!(registry.foreground_quiescent(|| true, || canceled.set(true)));
         assert!(canceled.get());
+        assert!(!registry.is_quiescent(|| true));
+    }
+
+    #[test]
+    fn idle_finalizer_thread_does_not_cancel_other_entrypoints() {
+        use std::cell::Cell;
+        let registry = WorkerRegistry::default();
+        registry.state.lock().entries.push(Entry {
+            lifecycle: Lifecycle::Running,
+            handle: None,
+            background: true,
+            finalizer: true,
+        });
+        let canceled = Cell::new(false);
+        assert!(registry.foreground_quiescent(|| true, || canceled.set(true)));
+        assert!(!canceled.get());
         assert!(!registry.is_quiescent(|| true));
     }
 

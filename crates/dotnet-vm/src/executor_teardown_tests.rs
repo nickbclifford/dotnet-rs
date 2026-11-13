@@ -1214,16 +1214,13 @@ fn retired_owner_stays_registered_while_another_owner_finalizes() {
         .recv_timeout(Duration::from_secs(30))
         .expect("owner did not become ready");
 
-    // A second owner that is mid-finalizer when the shutdown signal arrives.
-    let finalizer_state = state.clone();
+    // The dedicated background owner is mid-finalizer when shutdown is signaled.
     let (finalizing, finalizing_rx) = mpsc::channel();
     let (release, release_rx) = mpsc::channel::<()>();
-    state.workers.spawn_owner(move |running| {
-        let retired = running.complete(ExecutorResult::Exited(0)).retire();
-        assert!(retired.begin_finalizing(&finalizer_state));
+    state.workers.spawn_finalizer_owner(move |running| {
         finalizing.send(()).unwrap();
         let _ = release_rx.recv();
-        retired.finish_finalizing();
+        running.complete(ExecutorResult::Exited(0)).retire();
     });
     finalizing_rx
         .recv_timeout(Duration::from_secs(30))
@@ -1270,9 +1267,7 @@ fn shutdown_waits_for_finalizing_worker_and_joins_workers_it_starts() {
     let finished_late = StdArc::new(AtomicBool::new(false));
     let worker_state = state.clone();
     let (late_started, late_finished) = (started_late.clone(), finished_late.clone());
-    state.workers.spawn_owner(move |running| {
-        let retired = running.complete(ExecutorResult::Exited(0)).retire();
-        assert!(retired.begin_finalizing(&worker_state));
+    state.workers.spawn_finalizer_owner(move |running| {
         finalizing.send(()).unwrap();
         std::thread::sleep(Duration::from_millis(100));
         // A finalizer starting a thread.
@@ -1283,7 +1278,7 @@ fn shutdown_waits_for_finalizing_worker_and_joins_workers_it_starts() {
             finished.store(true, AtomicOrdering::SeqCst);
             let _ = running.complete(ExecutorResult::Exited(0)).retire();
         });
-        retired.finish_finalizing();
+        running.complete(ExecutorResult::Exited(0)).retire();
     });
     finalizing_rx
         .recv_timeout(Duration::from_secs(30))

@@ -157,8 +157,8 @@ lifecycle and managed result. A worker follows
 `ShuttingDown`, then `Drained` or `Leaked`. A panic follows the existing drain-or-leak path.
 `Thread.Join` observes `Completed` and consumes the outcome without waiting for the native thread.
 After segment cleanup and publication, the completed owner stops ordinary managed execution, remains registered
-for GC and leases, and services coordinator commands on its own thread. After collection it may run
-only queued finalizer segments, then returns to the service loop. An abort interrupts a
+for GC and leases, and services coordinator commands on its own thread. Finalizers run on one
+registered background executor with its own arena and managed thread identity. An abort interrupts a
 non-terminating finalizer. The [GC contract](GC_AND_MEMORY_SAFETY.md#retired-worker-arenas) describes
 the collection-exclusion and exact-lease-drain ordering.
 
@@ -170,7 +170,7 @@ return before its executor can observe the abort.
 
 After Main returns, `Executor::run` calls `wait_for_foreground_workers`. (`Executor::run_entrypoint`
 runs only the entry method and returns without that wait; callers must wait before dropping the
-executor.) The entry arena remains registered and services GC stops and its own finalizers while
+executor.) The entry arena remains registered and services GC stops while
 foreground workers finish. The exit decision observes foreground workers, finalizing owners and
 pending finalizers under the registry lock. Once they are idle, any still-running background
 workers receive the shared abort signal and stop at their next safepoint, including in `Sleep`.
@@ -179,7 +179,7 @@ operation that does not return can still delay shutdown. `Thread::InternalFinali
 handle to release because the registry owns those handles. The CLI and in-process harness explicitly call
 `SharedGlobalState::shutdown_workers` after dropping the entry executor, but keep the entry arena's
 storage (`Executor::extract_arena`) until it returns; shutdown must not be deferred to shared-state
-destruction because worker executors hold that state. Shutdown first waits until no worker is
+destruction because worker executors hold that state. Shutdown signals the finalizer worker, waits until no worker is
 running or finalizing, then signals retired owners and joins native handles until none remain,
 including workers a finalizer started after the signal. A retired owner only unregisters and frees
 its arena once the registry is quiescent and no finalizer is pending (or an abort abandoned them),

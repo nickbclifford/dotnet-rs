@@ -553,7 +553,7 @@ include!(concat!(env!("OUT_DIR"), "/tests.rs"));
 
 #[test]
 #[cfg(all(feature = "multithreading", not(feature = "fuzzing")))]
-fn retired_finalizer_observes_abort() {
+fn finalizer_thread_observes_abort() {
     let harness = TestHarness::get();
     let dll = harness.ensure_dll(Path::new("tests/debug_fixtures/retired_finalizer_abort.cs"));
     let resolution = harness.loader.load_resolution_from_file(&dll).unwrap();
@@ -588,7 +588,7 @@ fn retired_finalizer_observes_abort() {
 
 #[test]
 #[cfg(all(feature = "multithreading", not(feature = "fuzzing")))]
-fn retired_finalizer_shutdown_observes_abort() {
+fn finalizer_thread_shutdown_observes_abort() {
     let harness = TestHarness::get();
     let dll = harness.ensure_dll(Path::new(
         "tests/debug_fixtures/retired_finalizer_shutdown.cs",
@@ -631,7 +631,7 @@ fn retired_finalizer_shutdown_observes_abort() {
 
 #[test]
 #[cfg(all(feature = "multithreading", not(feature = "fuzzing")))]
-fn harness_timeout_aborts_and_reaps_retired_finalizer() {
+fn harness_timeout_aborts_and_reaps_finalizer_thread() {
     use std::time::Duration;
 
     let harness = TestHarness::get();
@@ -730,7 +730,7 @@ fn shutdown_waits_for_active_retired_finalizer() {
 
 #[test]
 #[cfg(all(feature = "multithreading", not(feature = "fuzzing")))]
-fn retired_finalizer_keeps_entry_arena_until_completion() {
+fn finalizer_thread_keeps_entry_arena_until_completion() {
     let harness = TestHarness::get();
     let dll = harness.ensure_dll(Path::new(
         "tests/debug_fixtures/retired_finalizer_entry_owner.cs",

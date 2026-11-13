@@ -116,15 +116,8 @@ pub fn intrinsic_gc_suppress_finalize<'gc, T: TypedStackOps<'gc> + MemoryOps<'gc
     _generics: &GenericLookup,
 ) -> StepResult {
     let obj = ctx.pop_obj();
-    if let Some(handle) = obj.0
-        && let Some(o) = dotnet_value::ThreadSafeLock::borrow_mut(
-            handle,
-            &ctx.gc_with_token(&ctx.no_active_borrows_token()),
-        )
-        .storage
-        .as_obj_mut()
-    {
-        o.finalizer_suppressed = true;
+    if obj.0.is_some() {
+        ctx.set_finalizer_registered(obj, false);
     }
     StepResult::Continue
 }
@@ -140,20 +133,7 @@ pub fn intrinsic_gc_reregister_for_finalize<'gc, T: TypedStackOps<'gc> + MemoryO
     if let Some(handle) = obj.0 {
         let is_obj = handle.borrow().storage.as_obj().is_some();
         if is_obj {
-            dotnet_value::ThreadSafeLock::borrow_mut(
-                handle,
-                &ctx.gc_with_token(&ctx.no_active_borrows_token()),
-            )
-            .storage
-            .as_obj_mut()
-            .expect("is_obj checked above")
-            .finalizer_suppressed = false;
-
-            // Add back to finalization queue if not already present
-            let mut queue = ctx.heap().finalization_queue.borrow_mut();
-            if !queue.contains(&obj) {
-                queue.push(obj);
-            }
+            ctx.set_finalizer_registered(obj, true);
         }
     }
     StepResult::Continue

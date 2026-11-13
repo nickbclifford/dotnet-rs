@@ -383,6 +383,12 @@ pub struct SharedGlobalState {
     #[cfg(feature = "multithreading")]
     fatal_worker_error: Mutex<Option<crate::error::VmError>>,
     pending_finalizer_arenas: AtomicUsize,
+    #[cfg(feature = "multithreading")]
+    pub(crate) finalizers: crate::finalizers::Finalizers,
+    #[cfg(feature = "multithreading")]
+    pub(crate) finalizer_started: AtomicBool,
+    #[cfg(feature = "multithreading")]
+    pub(crate) finalizer_shutdown: AtomicBool,
     pub metrics: Arc<RuntimeMetrics>,
     pub tracer: Tracer,
     pub tracer_enabled: Arc<AtomicBool>,
@@ -479,6 +485,12 @@ impl SharedGlobalState {
             #[cfg(feature = "multithreading")]
             fatal_worker_error: Mutex::new(None),
             pending_finalizer_arenas: AtomicUsize::new(0),
+            #[cfg(feature = "multithreading")]
+            finalizers: Default::default(),
+            #[cfg(feature = "multithreading")]
+            finalizer_started: AtomicBool::new(false),
+            #[cfg(feature = "multithreading")]
+            finalizer_shutdown: AtomicBool::new(false),
             metrics,
             tracer,
             tracer_enabled,
@@ -514,13 +526,20 @@ impl SharedGlobalState {
     /// Do not call while this thread is registered with the GC coordinator.
     pub fn shutdown_workers(&self) {
         #[cfg(feature = "multithreading")]
-        self.workers
-            .shutdown(|| self.thread_manager.shutdown_retired());
+        {
+            self.finalizer_shutdown.store(true, Ordering::Release);
+            self.workers
+                .shutdown(|| self.thread_manager.shutdown_retired());
+        }
         #[cfg(not(feature = "multithreading"))]
         self.workers.shutdown();
     }
 
     pub(crate) fn has_pending_finalizers(&self) -> bool {
+        #[cfg(feature = "multithreading")]
+        if self.finalizer_started.load(Ordering::Acquire) {
+            return self.finalizers.is_pending();
+        }
         self.pending_finalizer_arenas.load(Ordering::Acquire) != 0
     }
 

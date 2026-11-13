@@ -77,6 +77,9 @@ pub use executor::ArenaGuard;
 use context::ResolutionContext;
 use state::SharedGlobalState;
 
+#[cfg(feature = "multithreading")]
+mod finalizers;
+
 /// Constructs a [`MethodInfo`] from a resolved method descriptor.
 ///
 /// This factory function lives in `dotnet-vm` rather than `dotnet-vm-ops` because it
