@@ -199,6 +199,15 @@ DOTNET_SKIP_BUILD=1 RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" cargo doc 
 
 No runtime build, Miri or benchmarks are needed.
 
+## IDE inspection scope
+
+The root Cargo workspace does not include the standalone fuzz workspaces. When an IDE does not
+index them automatically, attach `crates/dotnet-value/fuzz/Cargo.toml` and
+`crates/dotnet-vm/fuzz/Cargo.toml` as separate Cargo projects; keep their workspace boundaries
+intact. Exclude generated `target/` and MSBuild `obj/` directories from inspections. Do not add
+source suppressions or edit generated/vendor output to silence inspection reports. The fuzz
+manifests and their targets are listed in [`docs/FUZZING.md`](docs/FUZZING.md).
+
 ## Feature flag matrix reference
 
 Feature combinations and validation ownership are documented in:

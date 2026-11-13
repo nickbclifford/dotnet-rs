@@ -45,13 +45,11 @@ Evidence and IDs (p01…, R01…) are defined in the
   rationale are recorded in [REVIEW.md F-DEP-002](../../REVIEW.md#F-DEP-002). Resolve each
   family as deliberate API/safety/measurement work; MSRV compatibility alone is not evidence
   that an upgrade is safe.
-- **Async build-script probe API drift:** `scripts/tests/async_dispatch_probe.rs` calls
-  `VesContext::unified_dispatch_for_engine_api` and
-  `VesContext::dispatch_resolved_method_for_engine_api`, which are absent from the current
-  VM source; the operation surface instead exposes `VmCallOps::unified_dispatch` and
-  `VesContext::dispatch_method_inline`. `./check.sh --full` fails probe 4 at its temporary
-  nextest selector with E0599 before reaching the shared feature matrix. Align this independent
-  probe with the supported API before relying on the full build-script lane.
+- **Managed-thread local ID synchronization facade:** `threading/local::NEXT_MANAGED_ID` is a
+  process-global `std::sync::atomic::AtomicI32`, unlike the VM synchronization types reexported
+  through `dotnet_utils::sync`. Review its feature and Loom ownership before migrating it; preserve
+  monotonic allocation and exhaustion behavior. This is separate from the completed atomic-method
+  rename in [REVIEW.md F-DEPR-001](../../REVIEW.md#F-DEPR-001).
 - **Heap byte-read overflow:** `RawMemoryAccess::read_bytes` adds the owner-relative offset
   and destination length without checked arithmetic. A `VesContext::read_bytes` heap-origin
   call with `usize::MAX` and a one-byte destination panics instead of returning `BoundsCheck`;

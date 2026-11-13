@@ -2,7 +2,7 @@
 fn async_probe_dispatch_modes() {
     use crate::stack::ops::{UnifiedDispatchTarget, VmCallOps};
     for name in ["First", "Unselected", "Nested", "BodyOnly", "SelectorOnly"] {
-        for mode in ["direct", "ordinary", "tail", "engine"] {
+        for mode in ["inline", "vm-context", "tail"] {
             let mut executor = executor();
             let mut res = Resolution::new(Module::new("AsyncProbe.dll"));
             res.assembly = Some(Assembly::new("AsyncProbe"));
@@ -47,23 +47,26 @@ fn async_probe_dispatch_modes() {
                             GenericLookup::default(),
                         );
                         match mode {
-                            "direct" => ctx.unified_dispatch(target, None, None),
-                            "ordinary" => ctx.unified_dispatch_for_engine_api(target, None, None),
+                            "inline" => ctx.unified_dispatch(target, None, None),
+                            "vm-context" => {
+                                ctx.dispatch_method(method.clone(), GenericLookup::default())
+                            }
                             "tail" => ctx.unified_dispatch_tail(target, None, None),
-                            _ => ctx.dispatch_resolved_method_for_engine_api(
-                                method.clone(),
-                                GenericLookup::default(),
-                            ),
+                            _ => unreachable!("unexpected dispatch mode {mode}"),
                         }
                     })
                 })
                 .unwrap();
-            let absent_other = matches!(name, "BodyOnly" | "SelectorOnly") && matches!(mode, "ordinary" | "engine");
+            let non_inline_async =
+                matches!(name, "BodyOnly" | "SelectorOnly") && mode == "vm-context";
+            let async_started = matches!(mode, "inline" | "tail") && name != "Nested";
             assert_eq!(
                 result,
-                if absent_other {
-                    StepResult::not_implemented(format!("async intrinsic {method:?} reached through non-inline dispatch"))
-                } else if (mode == "direct" || mode == "tail") && name != "Nested" {
+                if non_inline_async {
+                    StepResult::not_implemented(format!(
+                        "async intrinsic {method:?} reached through non-inline dispatch"
+                    ))
+                } else if async_started {
                     StepResult::Yield
                 } else {
                     StepResult::Continue
@@ -75,7 +78,7 @@ fn async_probe_dispatch_modes() {
                     arena.mutate(|_, engine| {
                         assert_eq!(
                             !engine.stack.execution.call_state.native.is_empty(),
-                            (mode == "direct" || mode == "tail") && name != "Nested"
+                            async_started
                         );
                         assert!(engine.stack.execution.evaluation_stack.stack.is_empty());
                     })
