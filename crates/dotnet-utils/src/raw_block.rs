@@ -18,7 +18,7 @@ thread_local! {
 
 /// Number of live blocks owned by the current thread.
 pub fn live_blocks() -> usize {
-    LIVE_BLOCKS.with(Cell::get)
+    LIVE_BLOCKS.get()
 }
 
 /// Failure to construct a raw allocation block.

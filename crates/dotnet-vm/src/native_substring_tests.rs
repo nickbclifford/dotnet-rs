@@ -16,6 +16,7 @@ use dotnet_value::{
 };
 use dotnet_vm_data::ExceptionState;
 use dotnetdll::{prelude::*, resolved::members::Method};
+use std::cell::RefCell;
 
 const CHUNK: usize = 64 * 1024;
 const LENGTH: usize = CHUNK * 2 + 17;
@@ -2167,7 +2168,7 @@ fn native_activation_inline_call_budget() {
     let mut executor = executor();
     let method = substring_method(&executor, true);
     CALL_TARGET.with(|slot| *slot.borrow_mut() = Some(method.clone()));
-    INLINE_CALLS.with(|count| count.set(0));
+    INLINE_CALLS.set(0);
     let first = executor
         .with_arena(|arena| {
             arena.mutate_root(|gc, engine| {
@@ -2190,7 +2191,7 @@ fn native_activation_inline_call_budget() {
         })
         .unwrap();
     assert_eq!(first, StepResult::Yield);
-    INLINE_CALLS.with(|count| assert_eq!(count.get(), 31));
+    assert_eq!(INLINE_CALLS.get(), 31);
     let second = executor
         .with_arena(|arena| {
             arena.mutate_root(|gc, engine| {
@@ -2201,7 +2202,7 @@ fn native_activation_inline_call_budget() {
         })
         .unwrap();
     assert_eq!(second, StepResult::Continue);
-    INLINE_CALLS.with(|count| assert_eq!(count.get(), 40));
+    assert_eq!(INLINE_CALLS.get(), 40);
     CALL_TARGET.with(|slot| *slot.borrow_mut() = None);
 }
 
@@ -3211,31 +3212,106 @@ fn native_activation_foreign_child_return_survives_collection() {
     owner.finish().unwrap();
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct BoundarySnapshot {
+    drops: usize,
+    resumes: usize,
+    next: usize,
+    drop_order: Vec<usize>,
+}
+
 thread_local! {
-    static BOUNDARY_DROPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    static BOUNDARY_RESUMES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    static BOUNDARY_NEXT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    static BOUNDARY_ORDER: std::cell::RefCell<Vec<usize>> = const { std::cell::RefCell::new(Vec::new()) };
+    static BOUNDARY_OBSERVATION: RefCell<BoundarySnapshot> = const {
+        RefCell::new(BoundarySnapshot { drops: 0, resumes: 0, next: 0, drop_order: Vec::new() })
+    };
+}
+
+struct BoundaryObservation;
+
+impl BoundaryObservation {
+    fn reset() {
+        BOUNDARY_OBSERVATION
+            .with(|observation| *observation.borrow_mut() = BoundarySnapshot::default());
+    }
+
+    fn snapshot() -> BoundarySnapshot {
+        BOUNDARY_OBSERVATION.with(|observation| observation.borrow().clone())
+    }
+
+    fn started() -> usize {
+        BOUNDARY_OBSERVATION.with(|observation| {
+            let mut observation = observation.borrow_mut();
+            observation.next += 1;
+            observation.next
+        })
+    }
+
+    fn resumed() {
+        BOUNDARY_OBSERVATION.with(|observation| observation.borrow_mut().resumes += 1);
+    }
+
+    fn dropped(id: Option<usize>) {
+        BOUNDARY_OBSERVATION.with(|observation| {
+            let mut observation = observation.borrow_mut();
+            observation.drops += 1;
+            if let Some(id) = id {
+                observation.drop_order.push(id);
+            }
+        });
+    }
+}
+
+// The synchronous-throw witness has no numbered activation in the drop-order protocol.
+struct BoundaryWitness(Option<usize>);
+
+impl Drop for BoundaryWitness {
+    fn drop(&mut self) {
+        BoundaryObservation::dropped(self.0);
+    }
+}
+
+#[test]
+fn boundary_observation_is_thread_local_and_records_unwind_drops() {
+    BoundaryObservation::reset();
+    let id = BoundaryObservation::started();
+    let other = std::thread::spawn(|| {
+        assert_eq!(BoundaryObservation::snapshot(), BoundarySnapshot::default());
+        let result = std::panic::catch_unwind(|| {
+            let _witness = BoundaryWitness(Some(BoundaryObservation::started()));
+            BoundaryObservation::resumed();
+            panic!("exercise witness cleanup");
+        });
+        assert!(result.is_err());
+        BoundaryObservation::snapshot()
+    })
+    .join()
+    .unwrap();
+    assert_eq!(
+        other,
+        BoundarySnapshot {
+            drops: 1,
+            resumes: 1,
+            next: 1,
+            drop_order: vec![1]
+        }
+    );
+    assert_eq!(
+        BoundaryObservation::snapshot(),
+        BoundarySnapshot {
+            next: id,
+            ..BoundarySnapshot::default()
+        }
+    );
+    BoundaryObservation::reset();
 }
 
 fn boundary_body(
     mut fx: dotnet_vm_ops::effects::VmEffects,
 ) -> dotnet_vm_ops::effects::NativeFuture {
-    struct Witness(usize);
-    impl Drop for Witness {
-        fn drop(&mut self) {
-            BOUNDARY_DROPS.with(|count| count.set(count.get() + 1));
-            BOUNDARY_ORDER.with(|order| order.borrow_mut().push(self.0));
-        }
-    }
     let target = CALL_TARGET.with(|slot| slot.borrow().as_ref().unwrap().clone());
     Box::pin(async move {
-        let id = BOUNDARY_NEXT.with(|next| {
-            let id = next.get() + 1;
-            next.set(id);
-            id
-        });
-        let _witness = Witness(id);
+        let id = BoundaryObservation::started();
+        let _witness = BoundaryWitness(Some(id));
         let source = {
             let mut vm = fx.vm().await?;
             vm.discard_scalars(2)?;
@@ -3247,7 +3323,7 @@ fn boundary_body(
             arguments: Vec::new(),
         })
         .await?;
-        BOUNDARY_RESUMES.with(|count| count.set(count.get() + 1));
+        BoundaryObservation::resumed();
         let mut chars = Vec::new();
         let mut vm = fx.vm().await?;
         vm.string(&source).copy_chunk(0, 3, &mut chars)?;
@@ -3297,7 +3373,7 @@ fn boundary_executor_with_initializer(
         if name == "Exception" && with_trace {
             core.push_field(
                 index,
-                dotnetdll::resolved::members::Field::instance(
+                Field::instance(
                     Accessibility::Public,
                     "_stackTraceString",
                     MemberType::Base(Box::new(BaseType::String)),
@@ -3313,7 +3389,7 @@ fn boundary_executor_with_initializer(
             .0;
         core.push_field(
             exception,
-            dotnetdll::resolved::members::Field::instance(
+            Field::instance(
                 Accessibility::Public,
                 "_innerException",
                 MemberType::Base(Box::new(BaseType::Object)),
@@ -3332,10 +3408,7 @@ fn boundary_executor_with_initializer(
         .loader
         .corlib_type("System.Exception")
         .unwrap();
-    BOUNDARY_DROPS.with(|count| count.set(0));
-    BOUNDARY_RESUMES.with(|count| count.set(0));
-    BOUNDARY_NEXT.with(|count| count.set(0));
-    BOUNDARY_ORDER.with(|order| order.borrow_mut().clear());
+    BoundaryObservation::reset();
     (executor, ty)
 }
 
@@ -3536,7 +3609,7 @@ fn capturing_boundary_body(
         let Err(dotnet_vm_ops::effects::NativeFailure::Managed(exception)) = result else {
             panic!("expected captured exception");
         };
-        BOUNDARY_RESUMES.with(|count| count.set(count.get() + 1));
+        BoundaryObservation::resumed();
         fx.yield_now().await?;
         Err(dotnet_vm_ops::effects::NativeFailure::Managed(exception))
     })
@@ -3569,7 +3642,7 @@ fn native_capture_filters_and_child_cleanup_precede_outer_search() {
                 let gc = unsafe { test_gc_handle(gc, engine) };
                 assert!(matches!(
                     engine.stack.execution.exception_mode,
-                    dotnet_vm_data::ExceptionState::Filtering(_)
+                    ExceptionState::Filtering(_)
                 ));
                 assert_eq!(engine.stack.execution.frame_stack.len(), 2);
                 assert_eq!(engine.ves_context(gc).endfilter(0), StepResult::Exception);
@@ -3585,7 +3658,7 @@ fn native_capture_filters_and_child_cleanup_precede_outer_search() {
                         engine.stack.execution.frame_stack.current_frame().state.ip,
                         ip
                     );
-                    assert_eq!(BOUNDARY_RESUMES.with(|count| count.get()), 0);
+                    assert_eq!(BoundaryObservation::snapshot().resumes, 0);
                 })
             })
             .unwrap();
@@ -3601,7 +3674,7 @@ fn native_capture_filters_and_child_cleanup_precede_outer_search() {
     }
     executor.perform_full_gc().unwrap();
     assert_eq!(resume(&mut executor), StepResult::Yield);
-    assert_eq!(BOUNDARY_RESUMES.with(|count| count.get()), 1);
+    assert_eq!(BoundaryObservation::snapshot().resumes, 1);
     executor.perform_full_gc().unwrap();
     assert_eq!(resume(&mut executor), StepResult::Exception);
     executor
@@ -3611,7 +3684,7 @@ fn native_capture_filters_and_child_cleanup_precede_outer_search() {
                 let gc = unsafe { test_gc_handle(gc, engine) };
                 assert!(matches!(
                     engine.stack.execution.exception_mode,
-                    dotnet_vm_data::ExceptionState::Filtering(_)
+                    ExceptionState::Filtering(_)
                 ));
                 assert_eq!(engine.stack.execution.frame_stack.len(), 1);
                 let original = engine.stack.local.heap.gchandles.borrow()[0]
@@ -3702,7 +3775,7 @@ fn static_store_operand_collection(complete: bool) {
     let index = assembly.push_type_definition(TypeDefinition::new(None, "Subject"));
     assembly.push_field(
         index,
-        dotnetdll::resolved::members::Field::static_member(
+        Field::static_member(
             Accessibility::Public,
             "Value",
             MemberType::Base(Box::new(BaseType::Object)),
@@ -4486,7 +4559,7 @@ fn native_capture_initializer_does_not_wrap_before_reply() {
         StepResult::Yield
     );
     assert_eq!(resume(&mut executor), StepResult::Yield);
-    assert_eq!(BOUNDARY_RESUMES.with(|count| count.get()), 1);
+    assert_eq!(BoundaryObservation::snapshot().resumes, 1);
     let StepResult::MethodThrew(exception) = resume(&mut executor) else {
         panic!("expected the captured exception");
     };
@@ -4514,7 +4587,7 @@ fn capturing_success_body(
             result,
             dotnet_vm_ops::effects::NativeValue::Value(_)
         ));
-        BOUNDARY_RESUMES.with(|count| count.set(count.get() + 1));
+        BoundaryObservation::resumed();
         let mut chars = Vec::new();
         let mut vm = fx.vm().await?;
         vm.string(&source).copy_chunk(0, 3, &mut chars)?;
@@ -4552,7 +4625,7 @@ fn native_capture_child_handler_returns_normally() {
         })
         .unwrap();
     assert_eq!(resume(&mut executor), StepResult::Continue);
-    assert_eq!(BOUNDARY_RESUMES.with(|count| count.get()), 1);
+    assert_eq!(BoundaryObservation::snapshot().resumes, 1);
 }
 
 #[test]
@@ -4643,7 +4716,7 @@ fn capturing_synchronous_body(
         else {
             panic!("expected captured synchronous exception")
         };
-        BOUNDARY_RESUMES.with(|count| count.set(count.get() + 1));
+        BoundaryObservation::resumed();
         Err(dotnet_vm_ops::effects::NativeFailure::Managed(exception))
     })
 }
@@ -4686,16 +4759,16 @@ fn native_capture_intrinsic_throw_precedes_outer_filter() {
         })
         .unwrap();
     assert_eq!(result, StepResult::Yield);
-    assert_eq!(BOUNDARY_RESUMES.with(|count| count.get()), 0);
+    assert_eq!(BoundaryObservation::snapshot().resumes, 0);
     executor.perform_full_gc().unwrap();
     assert_eq!(resume(&mut executor), StepResult::Exception);
-    assert_eq!(BOUNDARY_RESUMES.with(|count| count.get()), 1);
+    assert_eq!(BoundaryObservation::snapshot().resumes, 1);
     executor
         .with_arena(|arena| {
             arena.mutate(|_, engine| {
                 assert!(matches!(
                     engine.stack.execution.exception_mode,
-                    dotnet_vm_data::ExceptionState::Filtering(_)
+                    ExceptionState::Filtering(_)
                 ));
             })
         })
@@ -4721,7 +4794,7 @@ fn capturing_handled_body(
             .await,
             Err(dotnet_vm_ops::effects::NativeFailure::Managed(_))
         ));
-        BOUNDARY_RESUMES.with(|count| count.set(count.get() + 1));
+        BoundaryObservation::resumed();
         let mut chars = Vec::new();
         let mut vm = fx.vm().await?;
         vm.string(&source).copy_chunk(0, 3, &mut chars)?;
@@ -4791,7 +4864,7 @@ fn native_capture_inside_filter_restores_outer_exception() {
     assert_eq!(result, StepResult::Yield);
     executor.perform_full_gc().unwrap();
     assert_eq!(resume(&mut executor), StepResult::Continue);
-    assert_eq!(BOUNDARY_RESUMES.with(|count| count.get()), 1);
+    assert_eq!(BoundaryObservation::snapshot().resumes, 1);
     executor
         .with_arena(|arena| {
             arena.mutate_root(|gc, engine| {
@@ -4805,7 +4878,7 @@ fn native_capture_inside_filter_restores_outer_exception() {
         })
         .unwrap();
     assert_eq!(boundary_handle(&mut executor, false), StepResult::Exception);
-    assert_eq!(BOUNDARY_DROPS.with(|count| count.get()), 1);
+    assert_eq!(BoundaryObservation::snapshot().drops, 1);
 }
 
 #[test]
@@ -4827,7 +4900,7 @@ fn native_boundary_unhandled_runs_child_cleanup() {
                 arena.mutate(|_, engine| {
                     assert!(matches!(
                         engine.stack.execution.exception_mode,
-                        dotnet_vm_data::ExceptionState::ExecutingHandler(_)
+                        ExceptionState::ExecutingHandler(_)
                     ));
                     assert_eq!(
                         engine.stack.execution.frame_stack.current_frame().state.ip,
@@ -4837,7 +4910,7 @@ fn native_boundary_unhandled_runs_child_cleanup() {
                 })
             })
             .unwrap();
-        assert_eq!(BOUNDARY_DROPS.with(|x| x.get()), 0);
+        assert_eq!(BoundaryObservation::snapshot().drops, 0);
         let result = boundary_handle(&mut executor, true);
         if ip == 1 {
             assert_eq!(result, StepResult::Exception);
@@ -4853,8 +4926,8 @@ fn native_boundary_unhandled_runs_child_cleanup() {
             );
         }
     }
-    assert_eq!(BOUNDARY_DROPS.with(|x| x.get()), 1);
-    assert_eq!(BOUNDARY_RESUMES.with(|x| x.get()), 0);
+    assert_eq!(BoundaryObservation::snapshot().drops, 1);
+    assert_eq!(BoundaryObservation::snapshot().resumes, 0);
 }
 
 #[test]
@@ -4888,7 +4961,7 @@ fn native_boundary_outer_handler_runs_after_child_cleanup() {
                 })
             })
             .unwrap();
-        assert_eq!(BOUNDARY_DROPS.with(|x| x.get()), 0);
+        assert_eq!(BoundaryObservation::snapshot().drops, 0);
         assert_eq!(boundary_handle(&mut executor, true), StepResult::Exception);
     }
     executor
@@ -4903,8 +4976,8 @@ fn native_boundary_outer_handler_runs_after_child_cleanup() {
             })
         })
         .unwrap();
-    assert_eq!(BOUNDARY_DROPS.with(|x| x.get()), 1);
-    assert_eq!(BOUNDARY_RESUMES.with(|x| x.get()), 0);
+    assert_eq!(BoundaryObservation::snapshot().drops, 1);
+    assert_eq!(BoundaryObservation::snapshot().resumes, 0);
 }
 
 #[test]
@@ -4922,7 +4995,7 @@ fn native_boundary_inner_handler_keeps_parent_alive() {
         StepResult::Exception
     );
     assert_eq!(boundary_handle(&mut executor, false), StepResult::Exception);
-    assert_eq!(BOUNDARY_DROPS.with(|x| x.get()), 0);
+    assert_eq!(BoundaryObservation::snapshot().drops, 0);
     executor
         .with_arena(|arena| {
             arena.mutate_root(|gc, engine| {
@@ -4938,8 +5011,8 @@ fn native_boundary_inner_handler_keeps_parent_alive() {
         })
         .unwrap();
     assert_eq!(resume(&mut executor), StepResult::Continue);
-    assert_eq!(BOUNDARY_RESUMES.with(|x| x.get()), 1);
-    assert_eq!(BOUNDARY_DROPS.with(|x| x.get()), 1);
+    assert_eq!(BoundaryObservation::snapshot().resumes, 1);
+    assert_eq!(BoundaryObservation::snapshot().drops, 1);
 }
 
 #[test]
@@ -4965,20 +5038,20 @@ fn native_boundary_filter_search_precedes_cleanup() {
                 let gc = unsafe { test_gc_handle(gc, engine) };
                 assert!(matches!(
                     engine.stack.execution.exception_mode,
-                    dotnet_vm_data::ExceptionState::Filtering(_)
+                    ExceptionState::Filtering(_)
                 ));
                 assert_eq!(engine.stack.execution.frame_stack.len(), 1);
-                assert_eq!(BOUNDARY_DROPS.with(|x| x.get()), 0);
-                assert_eq!(BOUNDARY_RESUMES.with(|x| x.get()), 0);
+                assert_eq!(BoundaryObservation::snapshot().drops, 0);
+                assert_eq!(BoundaryObservation::snapshot().resumes, 0);
                 assert_eq!(engine.ves_context(gc).endfilter(1), StepResult::Exception);
             })
         })
         .unwrap();
     assert_eq!(boundary_handle(&mut executor, false), StepResult::Exception);
-    assert_eq!(BOUNDARY_DROPS.with(|x| x.get()), 0);
+    assert_eq!(BoundaryObservation::snapshot().drops, 0);
     assert_eq!(boundary_handle(&mut executor, true), StepResult::Exception);
-    assert_eq!(BOUNDARY_DROPS.with(|x| x.get()), 1);
-    assert_eq!(BOUNDARY_RESUMES.with(|x| x.get()), 0);
+    assert_eq!(BoundaryObservation::snapshot().drops, 1);
+    assert_eq!(BoundaryObservation::snapshot().resumes, 0);
 }
 
 #[test]
@@ -5018,8 +5091,8 @@ fn native_boundary_stack_trace_and_cleanup_for_nested_calls() {
     let second = trace.find("[Native 1]").unwrap();
     assert!(first < second, "{trace}");
     assert_eq!(trace.matches("[Native ").count(), 2, "{trace}");
-    assert_eq!(BOUNDARY_DROPS.with(|x| x.get()), 2);
-    assert_eq!(BOUNDARY_RESUMES.with(|x| x.get()), 0);
+    assert_eq!(BoundaryObservation::snapshot().drops, 2);
+    assert_eq!(BoundaryObservation::snapshot().resumes, 0);
 }
 
 #[test]
@@ -5072,10 +5145,10 @@ fn native_boundary_survives_exception_in_outer_filter() {
         })
         .unwrap();
     assert_eq!(result, StepResult::Exception);
-    assert_eq!(BOUNDARY_DROPS.with(|x| x.get()), 0);
+    assert_eq!(BoundaryObservation::snapshot().drops, 0);
     assert_eq!(boundary_handle(&mut executor, false), StepResult::Exception);
-    assert_eq!(BOUNDARY_DROPS.with(|x| x.get()), 1);
-    assert_eq!(BOUNDARY_RESUMES.with(|x| x.get()), 0);
+    assert_eq!(BoundaryObservation::snapshot().drops, 1);
+    assert_eq!(BoundaryObservation::snapshot().resumes, 0);
 }
 
 #[test]
@@ -5095,24 +5168,18 @@ fn native_boundary_cleanup_survives_collection() {
     );
     assert_eq!(boundary_handle(&mut executor, false), StepResult::Exception);
     executor.perform_full_gc().unwrap();
-    assert_eq!(BOUNDARY_DROPS.with(|x| x.get()), 0);
+    assert_eq!(BoundaryObservation::snapshot().drops, 0);
     assert_eq!(boundary_handle(&mut executor, true), StepResult::Exception);
-    assert_eq!(BOUNDARY_DROPS.with(|x| x.get()), 1);
-    assert_eq!(BOUNDARY_RESUMES.with(|x| x.get()), 0);
+    assert_eq!(BoundaryObservation::snapshot().drops, 1);
+    assert_eq!(BoundaryObservation::snapshot().resumes, 0);
 }
 
 fn boundary_synchronous_throw_body(
     mut fx: dotnet_vm_ops::effects::VmEffects,
 ) -> dotnet_vm_ops::effects::NativeFuture {
-    struct Witness;
-    impl Drop for Witness {
-        fn drop(&mut self) {
-            BOUNDARY_DROPS.with(|count| count.set(count.get() + 1));
-        }
-    }
     let method = CALL_TARGET.with(|slot| slot.borrow().as_ref().unwrap().clone());
     Box::pin(async move {
-        let _witness = Witness;
+        let _witness = BoundaryWitness(None);
         let (source, start, length) = {
             let mut vm = fx.vm().await?;
             vm.discard_scalars(2)?;
@@ -5127,7 +5194,7 @@ fn boundary_synchronous_throw_body(
             arguments: vec![source, start, length],
         })
         .await?;
-        BOUNDARY_RESUMES.with(|count| count.set(count.get() + 1));
+        BoundaryObservation::resumed();
         Ok(())
     })
 }
@@ -5178,12 +5245,12 @@ fn native_boundary_synchronous_throw_reaches_caller_handler() {
     for _ in 0..4 {
         let result = resume(&mut executor);
         assert_eq!(result, StepResult::Exception);
-        if BOUNDARY_DROPS.with(|x| x.get()) == 1 {
+        if BoundaryObservation::snapshot().drops == 1 {
             break;
         }
     }
-    assert_eq!(BOUNDARY_DROPS.with(|x| x.get()), 1);
-    assert_eq!(BOUNDARY_RESUMES.with(|x| x.get()), 0);
+    assert_eq!(BoundaryObservation::snapshot().drops, 1);
+    assert_eq!(BoundaryObservation::snapshot().resumes, 0);
     executor
         .with_arena(|arena| {
             arena.mutate(|_, engine| {
@@ -5283,9 +5350,9 @@ fn native_call_in_filter_does_not_reply_to_suspended_call() {
             })
         })
         .unwrap();
-    assert_eq!(BOUNDARY_RESUMES.with(|x| x.get()), 0);
+    assert_eq!(BoundaryObservation::snapshot().resumes, 0);
     assert_eq!(boundary_handle(&mut executor, false), StepResult::Exception);
-    assert_eq!(BOUNDARY_DROPS.with(|x| x.get()), 1);
+    assert_eq!(BoundaryObservation::snapshot().drops, 1);
 }
 
 fn native_replacement_target(executor: &Executor, tail: bool) -> MethodDescription {
@@ -5630,7 +5697,7 @@ fn finalizer_preserves_filter_and_suspended_native_context() {
         })
         .unwrap();
     assert_eq!(boundary_handle(&mut executor, false), StepResult::Exception);
-    assert_eq!(BOUNDARY_DROPS.with(|x| x.get()), 1);
+    assert_eq!(BoundaryObservation::snapshot().drops, 1);
 }
 
 #[test]
@@ -5686,7 +5753,7 @@ fn finalizer_exception_cannot_reach_interrupted_handler() {
             })
         })
         .unwrap();
-    assert_eq!(BOUNDARY_DROPS.with(|x| x.get()), 0);
+    assert_eq!(BoundaryObservation::snapshot().drops, 0);
 }
 
 #[test]
@@ -5821,7 +5888,7 @@ fn native_call_in_handler_preserves_ambient_unwind() {
             })
         })
         .unwrap();
-    assert_eq!(BOUNDARY_DROPS.with(|x| x.get()), 1);
+    assert_eq!(BoundaryObservation::snapshot().drops, 1);
 }
 
 #[test]
@@ -5922,7 +5989,7 @@ fn native_activations_follow_nested_filter_segments() {
                 // B, the call the first filter made, stays active.
                 assert_eq!(calls.suspended_native.len(), 2);
                 assert_eq!(calls.native.len(), 1);
-                assert_eq!(BOUNDARY_DROPS.with(|x| x.get()), 0);
+                assert_eq!(BoundaryObservation::snapshot().drops, 0);
             })
         })
         .unwrap();
@@ -5935,7 +6002,7 @@ fn native_activations_follow_nested_filter_segments() {
                 assert_eq!(engine.ves_context(gc).endfilter(0), StepResult::Exception);
                 assert_eq!(engine.stack.execution.call_state.suspended_native.len(), 1);
                 assert_eq!(engine.stack.execution.call_state.native.len(), 2);
-                assert_eq!(BOUNDARY_DROPS.with(|x| x.get()), 0);
+                assert_eq!(BoundaryObservation::snapshot().drops, 0);
             })
         })
         .unwrap();
@@ -5943,8 +6010,8 @@ fn native_activations_follow_nested_filter_segments() {
         boundary_handle(&mut executor, false),
         StepResult::MethodThrew(_)
     ));
-    assert_eq!(BOUNDARY_DROPS.with(|x| x.get()), 3);
-    assert_eq!(BOUNDARY_RESUMES.with(|x| x.get()), 0);
+    assert_eq!(BoundaryObservation::snapshot().drops, 3);
+    assert_eq!(BoundaryObservation::snapshot().resumes, 0);
 }
 
 #[test]
@@ -5974,7 +6041,7 @@ fn abort_retires_suspended_native_frames() {
             })
         })
         .unwrap();
-    assert_eq!(BOUNDARY_DROPS.with(|x| x.get()), 1);
+    assert_eq!(BoundaryObservation::snapshot().drops, 1);
 }
 
 #[test]
@@ -6094,7 +6161,7 @@ fn finalizer_exception_cannot_enter_interrupted_filter() {
             })
         })
         .unwrap();
-    assert_eq!(BOUNDARY_DROPS.with(|x| x.get()), 0);
+    assert_eq!(BoundaryObservation::snapshot().drops, 0);
 }
 
 #[test]
@@ -6180,7 +6247,7 @@ fn abort_drops_suspended_children_before_active_parent() {
         .unwrap();
     executor.shared.abort_signal().request_abort();
     assert!(matches!(executor.run(), ExecutorResult::Error(_)));
-    BOUNDARY_ORDER.with(|order| assert_eq!(&*order.borrow(), &[2, 1]));
+    assert_eq!(BoundaryObservation::snapshot().drop_order, [2, 1]);
 }
 
 #[test]
@@ -6212,7 +6279,7 @@ fn abort_cleans_finalizer_and_parked_caller() {
             })
         })
         .unwrap();
-    assert_eq!(BOUNDARY_DROPS.with(|x| x.get()), 1);
+    assert_eq!(BoundaryObservation::snapshot().drops, 1);
 }
 
 #[path = "condition_wait_tests.rs"]
@@ -6803,7 +6870,7 @@ fn static_fields_complete_without_activation(recursive: bool) {
     let index = assembly.push_type_definition(TypeDefinition::new(None, "Subject"));
     assembly.push_field(
         index,
-        dotnetdll::resolved::members::Field::static_member(
+        Field::static_member(
             Accessibility::Public,
             "Value",
             MemberType::Base(Box::new(BaseType::UInt8)),

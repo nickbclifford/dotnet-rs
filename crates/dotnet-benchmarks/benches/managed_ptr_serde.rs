@@ -48,18 +48,14 @@ struct ManagedThreadIdGuard {
 
 impl ManagedThreadIdGuard {
     fn set(arena_id: ArenaId) -> Self {
-        let previous = MANAGED_THREAD_ID.with(|thread_id| {
-            let previous = thread_id.get();
-            thread_id.set(Some(arena_id));
-            previous
-        });
+        let previous = MANAGED_THREAD_ID.replace(Some(arena_id));
         Self { previous }
     }
 }
 
 impl Drop for ManagedThreadIdGuard {
     fn drop(&mut self) {
-        MANAGED_THREAD_ID.with(|thread_id| thread_id.set(self.previous));
+        MANAGED_THREAD_ID.set(self.previous);
     }
 }
 

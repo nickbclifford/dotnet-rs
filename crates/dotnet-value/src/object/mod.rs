@@ -1088,11 +1088,7 @@ mod tests {
     #[cfg(feature = "multithreading")]
     impl ManagedThreadIdGuard {
         fn set(id: ArenaId) -> Self {
-            let previous = MANAGED_THREAD_ID.with(|thread_id| {
-                let prev = thread_id.get();
-                thread_id.set(Some(id));
-                prev
-            });
+            let previous = MANAGED_THREAD_ID.replace(Some(id));
             Self { previous }
         }
     }
@@ -1100,7 +1096,7 @@ mod tests {
     #[cfg(feature = "multithreading")]
     impl Drop for ManagedThreadIdGuard {
         fn drop(&mut self) {
-            MANAGED_THREAD_ID.with(|thread_id| thread_id.set(self.previous));
+            MANAGED_THREAD_ID.set(self.previous);
         }
     }
 

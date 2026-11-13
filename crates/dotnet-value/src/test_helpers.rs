@@ -22,11 +22,7 @@ struct ManagedThreadIdGuard {
 #[cfg(any(feature = "multithreading", feature = "memory-validation"))]
 impl ManagedThreadIdGuard {
     fn set(id: crate::ArenaId) -> Self {
-        let previous = MANAGED_THREAD_ID.with(|thread_id| {
-            let prev = thread_id.get();
-            thread_id.set(Some(id));
-            prev
-        });
+        let previous = MANAGED_THREAD_ID.replace(Some(id));
         Self { previous }
     }
 }
@@ -34,7 +30,7 @@ impl ManagedThreadIdGuard {
 #[cfg(any(feature = "multithreading", feature = "memory-validation"))]
 impl Drop for ManagedThreadIdGuard {
     fn drop(&mut self) {
-        MANAGED_THREAD_ID.with(|thread_id| thread_id.set(self.previous));
+        MANAGED_THREAD_ID.set(self.previous);
     }
 }
 
@@ -100,4 +96,27 @@ pub(crate) fn with_test_gc_context<R>(
         );
         f(gc_handle)
     })
+}
+
+#[cfg(all(test, any(feature = "multithreading", feature = "memory-validation")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_context_restores_thread_id_during_unwind() {
+        let original = MANAGED_THREAD_ID.get();
+        // No test context allocates the reserved invalid arena ID.
+        let outer = crate::ArenaId::INVALID;
+        let guard = ManagedThreadIdGuard::set(outer);
+        let result = std::panic::catch_unwind(|| {
+            with_test_gc_context(|_| {
+                assert_ne!(MANAGED_THREAD_ID.get(), Some(outer));
+                panic!("exercise context cleanup");
+            });
+        });
+        assert!(result.is_err());
+        assert_eq!(MANAGED_THREAD_ID.get(), Some(outer));
+        drop(guard);
+        assert_eq!(MANAGED_THREAD_ID.get(), original);
+    }
 }

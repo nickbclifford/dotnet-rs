@@ -2039,7 +2039,7 @@ mod owner_retention_cross_arena {
         pub(super) fn new() -> Self {
             let arena_id = next_test_arena_id();
             register_arena(arena_id, Arc::new(AtomicBool::new(false)));
-            MANAGED_THREAD_ID.with(|id| id.set(Some(arena_id)));
+            MANAGED_THREAD_ID.set(Some(arena_id));
             let handle_owner = ArenaHandle::new(arena_id);
             // SAFETY: F1.GcHandleRooted — `handle_owner` outlives every `GCHandle` built from
             // this reference; the fixture only drops it after the arena has been dropped.
@@ -2098,7 +2098,7 @@ mod owner_retention_cross_arena {
         pub(super) fn drop_arena(self) {
             drop(self.arena);
             drop(self.handle_owner);
-            MANAGED_THREAD_ID.with(|id| id.set(None));
+            MANAGED_THREAD_ID.set(None);
         }
     }
 
@@ -2243,7 +2243,7 @@ mod owner_retention_cross_arena {
         let object_ptr = fixture.object_ptr;
         // The fixture thread is the owner; pretend to be another thread so the
         // cross-arena validation path runs.
-        MANAGED_THREAD_ID.with(|id| id.set(Some(next_test_arena_id())));
+        MANAGED_THREAD_ID.set(Some(next_test_arena_id()));
         let lease = try_acquire_lease(arena_id).expect("registered owner");
         let teardown = thread::spawn(move || unregister_arena(arena_id));
         while try_acquire_lease(arena_id).is_some() {

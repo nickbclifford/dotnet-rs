@@ -39,7 +39,7 @@ fn method(executor: &Executor, case: ReturnCase) -> MethodDescription {
             by_ref: false,
             return_type: MemberType::Base(Box::new(BaseType::Int64)),
             accessibility: dotnetdll::resolved::members::Accessibility::Access(
-                dotnetdll::resolved::Accessibility::Public,
+                Accessibility::Public,
             ),
             static_member: false,
             init_only: false,
@@ -114,12 +114,12 @@ fn method(executor: &Executor, case: ReturnCase) -> MethodDescription {
 }
 
 fn return_body(mut fx: VmEffects) -> dotnet_vm_ops::effects::NativeFuture {
-    ENTERED.with(|entered| entered.set(true));
+    ENTERED.set(true);
     Box::pin(async move {
         let mut vm = fx.vm().await?;
         vm.discard_scalars(1)?;
         let value = vm.with(|region| {
-            let value = CASE.with(|case| match case.get() {
+            let value = match CASE.get() {
                 ReturnCase::Int32 => StackValue::Int32(17),
                 ReturnCase::Int64 | ReturnCase::Enum => StackValue::Int64(42),
                 ReturnCase::NativeInt => StackValue::NativeInt(19),
@@ -128,7 +128,7 @@ fn return_body(mut fx: VmEffects) -> dotnet_vm_ops::effects::NativeFuture {
                 | ReturnCase::DelegateString
                 | ReturnCase::DelegateOtherString => StackValue::null(),
                 _ => StackValue::Int32(0),
-            });
+            };
             region.root(value)
         })??;
         vm.push_value(NativeValue::Value(value))
@@ -138,8 +138,8 @@ fn return_body(mut fx: VmEffects) -> dotnet_vm_ops::effects::NativeFuture {
 fn run(case: ReturnCase) -> (StepResult, bool, Vec<StackValue<'static>>, usize) {
     let mut executor = executor();
     let method = method(&executor, case);
-    CASE.with(|slot| slot.set(case));
-    ENTERED.with(|slot| slot.set(false));
+    CASE.set(case);
+    ENTERED.set(false);
     executor
         .with_arena(|arena| {
             arena.mutate_root(|gc, engine| {
@@ -170,7 +170,7 @@ fn run(case: ReturnCase) -> (StepResult, bool, Vec<StackValue<'static>>, usize) 
                     .collect();
                 (
                     result,
-                    ENTERED.with(|slot| slot.get()),
+                    ENTERED.get(),
                     values,
                     ctx.frame_stack.current_frame().stack_height.as_usize(),
                 )

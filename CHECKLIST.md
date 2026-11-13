@@ -18,7 +18,7 @@ Ordered, enabled slices; detailed rationale and per-entry dispositions are in RE
 
 ## Phase 2: Instrumentation and Rust readability
 
-- [ ] 2.1 Give native-effect tests a coherent boundary-observation API [effort: high] — refs REVIEW.md#F-IDIOM-001
+- [x] 2.1 Give native-effect tests a coherent boundary-observation API [effort: high] — refs REVIEW.md#F-IDIOM-001
   Replace scattered BOUNDARY_DROPS/RESUMES/NEXT reset, increment and observation plumbing in native_substring_tests with a small thread-local boundary-observation abstraction whose reset/snapshot/event methods express the test protocol; migrate all existing tests in this slice, preserving observable ordering and drop timing. Convert other exported trivial LocalKey<Cell> reads/writes to get/set/replace/take in their owning test/production modules, without forcing RefCell hooks or read-modify-write closures into fake helpers. Fold the touched test qualifications in. Acceptance: all 75 exported TLS sites resolved or individually justified, isolation and unwind/drop assertions retained, enabled native substring/return/teardown tests run in no-feature, MT and MT+validation-all, affected value/utils/vm-data crate tests, clippy and doc drift pass.
 
 - [ ] 2.2 Finish the feature-aware Rust readability sweep [effort: default] — refs REVIEW.md#F-QUAL-001, REVIEW.md#F-IDIOM-002, REVIEW.md#F-IDIOM-003, REVIEW.md#F-DEPR-001

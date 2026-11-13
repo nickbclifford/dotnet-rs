@@ -2,8 +2,8 @@
 
 ## Executive Summary
 
-- **High:** raw-memory bounds validation repeats with inconsistent overflow behavior. Share a checked-window contract, not unsafe-access macros. Preserve provenance and local proofs.
-- **Medium:** exception construction, event transitions, allocation accounting and native-effect test observation repeat domain rules. These deserve owning abstractions with all callers migrated together.
+- **High:** raw-memory windows use a shared checked contract while preserving provenance and local proofs.
+- **Medium:** exception construction, event transitions, allocation accounting and native-effect test observation use owning contracts across their callers.
 - **Low:** qualification noise, assertion diagnostics and unnecessarily elaborate signatures/control flow obscure the important invariants. Fix selectively, preserving macro hygiene, named arena relationships and synchronization identity.
 - **Informational:** workflow input warnings, detached fuzz/generated files and the intentional rerun probe are IDE limitations. Major dependency notices are separate migration work, not authorization to change GC or synchronization semantics.
 
@@ -51,10 +51,10 @@ The generated table below partitions each problem into **fix / refute / keep / d
 | RsLift | 4 | dotnet-assemblies (1), dotnet-vm (1), dotnet-vm-ops (2) | 4 / 0 / 0 / 0 | F-IDIOM-002 |
 | RsNeedlessLifetimes | 22 | dotnet-intrinsics-reflection (3), dotnet-intrinsics-string (1), dotnet-intrinsics-unsafe (2), dotnet-runtime-memory (3), dotnet-value (9), dotnet-vm (4) | 11 / 0 / 11 / 0 | F-IDIOM-002 |
 | RsSortImplTraitMembers | 11 | dotnet-benchmarks (1), dotnet-cli (3), dotnet-vm (6), xtask (1) | 0 / 0 / 11 / 0 | F-IDIOM-003 |
-| RsThreadLocalStableMethodCanBeUsed | 75 | dotnet-benchmarks (1), dotnet-utils (2), dotnet-value (4), dotnet-vm (64), dotnet-vm-data (4) | 75 / 0 / 0 / 0 | F-IDIOM-001 |
+| RsThreadLocalStableMethodCanBeUsed | 75 | dotnet-benchmarks (1), dotnet-utils (2), dotnet-value (4), dotnet-vm (64), dotnet-vm-data (4) | 71 (71 resolved) / 0 / 4 / 0 | F-IDIOM-001 |
 | RsUnnecessaryCast | 2 | dotnet-assemblies (2) | 2 / 0 / 0 / 0 | F-IDIOM-002 |
 | RsUnnecessaryParentheses | 4 | dotnet-utils (2), dotnet-vm-ops (2) | 4 / 0 / 0 / 0 | F-IDIOM-002 |
-| RsUnnecessaryQualifications | 296 | dotnet-benchmarks (1), dotnet-intrinsics-reflection (2), dotnet-intrinsics-string (2), dotnet-intrinsics-threading (2), dotnet-intrinsics-unsafe (4), dotnet-macros (2), dotnet-macros-core (11), dotnet-metrics (1), dotnet-pinvoke (4), dotnet-runtime-memory (4), dotnet-runtime-resolver (3), dotnet-tracer (2), dotnet-types (4), dotnet-utils (10), dotnet-value (23), dotnet-vm (209), dotnet-vm-data (1), dotnet-vm-ops (11) | 279 (54 resolved) / 0 / 17 / 0 | F-QUAL-001 |
+| RsUnnecessaryQualifications | 296 | dotnet-benchmarks (1), dotnet-intrinsics-reflection (2), dotnet-intrinsics-string (2), dotnet-intrinsics-threading (2), dotnet-intrinsics-unsafe (4), dotnet-macros (2), dotnet-macros-core (11), dotnet-metrics (1), dotnet-pinvoke (4), dotnet-runtime-memory (4), dotnet-runtime-resolver (3), dotnet-tracer (2), dotnet-types (4), dotnet-utils (10), dotnet-value (23), dotnet-vm (209), dotnet-vm-data (1), dotnet-vm-ops (11) | 279 (64 resolved) / 0 / 17 / 0 | F-QUAL-001 |
 | RsUnusedMut | 1 | dotnet-vm (1) | 0 / 1 / 0 / 0 | F-IDIOM-002 |
 | UndefinedParamsPresent | 109 | .github (109) | 0 / 109 / 0 / 0 | F-CI-001 |
 
@@ -125,11 +125,9 @@ Verification: reconcile the inventory against all aggregate fragments, retain en
 <a id="F-IDIOM-001"></a>
 #### F-IDIOM-001 — Thread-local access reveals a boundary observation protocol
 
-**Medium; high effort.** 58 of 75 sites are in `dotnet-vm/src/native_substring_tests.rs`. BOUNDARY_DROPS/RESUMES/NEXT/ORDER near :3215, reset at :3335, feed many effect-boundary tests. Use one owning observation structure with reset, record-event and snapshot operations, migrating every test now. Preserve exact drop timing, ordering and per-thread isolation. Replacing closures with one alias per counter would merely rename storage plumbing.
+**Resolved.** `BoundaryObservation` owns the per-thread reset, activation numbering, resume and drop events, and snapshots in `native_substring_tests`. Numbered witnesses preserve child-before-parent drop order; the synchronous-throw witness counts its drop without adding an order entry. Enabled tests check thread isolation, Rust unwind cleanup and VM exception/abort timing.
 
-Elsewhere prefer stable LocalKey<Cell>::get/set/replace/take for single-value operations: MANAGED_THREAD_ID restoration guards in `dotnet-value/src/test_helpers.rs:37`, benchmarks/benches/managed_ptr_serde.rs:62, and vm-data/src/frame_alloc.rs:150 byte counters. These APIs predate the pin. Use replace when preserving an old value. Keep read-modify-write closures when a single access scope explains the operation; RefCell hooks remain borrow-based. Do not silently change callback reentrancy or retain a borrow differently.
-
-Risk: test observability and restoration on unwind. Verify enabled native substring/return/teardown tests across core rows, affected value/utils/vm-data tests, isolation and panic/drop behavior, optional instrumentation and clippy/doc drift. “Fix” includes broader observation API consolidation, not necessarily literal get/set at every counter.
+Trivial `LocalKey<Cell>` operations use `get`, `set`, or `replace`; managed-thread guards restore the previous value on unwind. The four retained read-modify-write closures (`LIVE_BLOCKS`, `COLLECTION_LOCK_DEBUG_DEPTH`, and `INLINE_CALLS`) keep the operation within one TLS access; borrow-based hooks retain their existing reentrancy boundaries. See the [execution record](AGENT_MEMORY.md) for feature and test evidence.
 
 <a id="F-IDIOM-002"></a>
 #### F-IDIOM-002 — Better assertions and simpler signatures/control flow
@@ -721,81 +719,81 @@ Each row is one exported problem, identified by inspection and one-based XML ord
 
 | Entry | Snapshot site and nearby symbol | Decision | Reason / finding |
 |---|---|---|---|
-| 1 | `crates/dotnet-benchmarks/benches/managed_ptr_serde.rs:62` — `drop` | fix | F-IDIOM-001; `with` |
-| 2 | `crates/dotnet-utils/src/raw_block.rs:73` — `zeroed_with` | fix | F-IDIOM-001; `with` |
-| 3 | `crates/dotnet-utils/src/raw_block.rs:118` — `drop` | fix | F-IDIOM-001; `with` |
-| 4 | `crates/dotnet-value/src/object/mod.rs:1103` — `drop` | fix | F-IDIOM-001; `with` |
-| 5 | `crates/dotnet-value/src/pointer/tests.rs:2042` — `new` | fix | F-IDIOM-001; `with` |
-| 6 | `crates/dotnet-value/src/pointer/tests.rs:2101` — `drop_arena` | fix | F-IDIOM-001; `with` |
-| 7 | `crates/dotnet-value/src/test_helpers.rs:37` — `drop` | fix | F-IDIOM-001; `with` |
-| 8 | `crates/dotnet-vm/src/executor_teardown_tests.rs:981` — `drop` | fix | F-IDIOM-001; `with` |
-| 9 | `crates/dotnet-vm/src/gc/coordinator.rs:82` — `debug_mark_collection_lock_acquired` | fix | F-IDIOM-001; `with` |
-| 10 | `crates/dotnet-vm/src/native_return_tests.rs:117` — `return_body` | fix | F-IDIOM-001; `with` |
-| 11 | `crates/dotnet-vm/src/native_return_tests.rs:141` — `run` | fix | F-IDIOM-001; `with` |
-| 12 | `crates/dotnet-vm/src/native_return_tests.rs:142` — `run` | fix | F-IDIOM-001; `with` |
-| 13 | `crates/dotnet-vm/src/native_return_tests.rs:173` — `run` | fix | F-IDIOM-001; `with` |
-| 14 | `crates/dotnet-vm/src/native_substring_tests.rs:2153` — `native_inline_calls_body` | fix | F-IDIOM-001; `with` |
-| 15 | `crates/dotnet-vm/src/native_substring_tests.rs:2170` — `native_activation_inline_call_budget` | fix | F-IDIOM-001; `with` |
-| 16 | `crates/dotnet-vm/src/native_substring_tests.rs:3227` — `drop` | fix | F-IDIOM-001; `with` |
-| 17 | `crates/dotnet-vm/src/native_substring_tests.rs:3250` — `drop` | fix | F-IDIOM-001; `with` |
-| 18 | `crates/dotnet-vm/src/native_substring_tests.rs:3335` — `boundary_executor_with_initializer` | fix | F-IDIOM-001; `with` |
-| 19 | `crates/dotnet-vm/src/native_substring_tests.rs:3336` — `boundary_executor_with_initializer` | fix | F-IDIOM-001; `with` |
-| 20 | `crates/dotnet-vm/src/native_substring_tests.rs:3337` — `boundary_executor_with_initializer` | fix | F-IDIOM-001; `with` |
-| 21 | `crates/dotnet-vm/src/native_substring_tests.rs:3539` — `capturing_boundary_body` | fix | F-IDIOM-001; `with` |
-| 22 | `crates/dotnet-vm/src/native_substring_tests.rs:3588` — `native_capture_filters_and_child_cleanup_precede_outer_search` | fix | F-IDIOM-001; `with` |
-| 23 | `crates/dotnet-vm/src/native_substring_tests.rs:3604` — `native_capture_filters_and_child_cleanup_precede_outer_search` | fix | F-IDIOM-001; `with` |
-| 24 | `crates/dotnet-vm/src/native_substring_tests.rs:4489` — `native_capture_initializer_does_not_wrap_before_reply` | fix | F-IDIOM-001; `with` |
-| 25 | `crates/dotnet-vm/src/native_substring_tests.rs:4517` — `capturing_success_body` | fix | F-IDIOM-001; `with` |
-| 26 | `crates/dotnet-vm/src/native_substring_tests.rs:4555` — `native_capture_child_handler_returns_normally` | fix | F-IDIOM-001; `with` |
-| 27 | `crates/dotnet-vm/src/native_substring_tests.rs:4646` — `capturing_synchronous_body` | fix | F-IDIOM-001; `with` |
-| 28 | `crates/dotnet-vm/src/native_substring_tests.rs:4689` — `native_capture_intrinsic_throw_precedes_outer_filter` | fix | F-IDIOM-001; `with` |
-| 29 | `crates/dotnet-vm/src/native_substring_tests.rs:4692` — `native_capture_intrinsic_throw_precedes_outer_filter` | fix | F-IDIOM-001; `with` |
-| 30 | `crates/dotnet-vm/src/native_substring_tests.rs:4724` — `capturing_handled_body` | fix | F-IDIOM-001; `with` |
-| 31 | `crates/dotnet-vm/src/native_substring_tests.rs:4794` — `native_capture_inside_filter_restores_outer_exception` | fix | F-IDIOM-001; `with` |
-| 32 | `crates/dotnet-vm/src/native_substring_tests.rs:4808` — `native_capture_inside_filter_restores_outer_exception` | fix | F-IDIOM-001; `with` |
-| 33 | `crates/dotnet-vm/src/native_substring_tests.rs:4840` — `native_boundary_unhandled_runs_child_cleanup` | fix | F-IDIOM-001; `with` |
-| 34 | `crates/dotnet-vm/src/native_substring_tests.rs:4856` — `native_boundary_unhandled_runs_child_cleanup` | fix | F-IDIOM-001; `with` |
-| 35 | `crates/dotnet-vm/src/native_substring_tests.rs:4857` — `native_boundary_unhandled_runs_child_cleanup` | fix | F-IDIOM-001; `with` |
-| 36 | `crates/dotnet-vm/src/native_substring_tests.rs:4891` — `native_boundary_outer_handler_runs_after_child_cleanup` | fix | F-IDIOM-001; `with` |
-| 37 | `crates/dotnet-vm/src/native_substring_tests.rs:4906` — `native_boundary_outer_handler_runs_after_child_cleanup` | fix | F-IDIOM-001; `with` |
-| 38 | `crates/dotnet-vm/src/native_substring_tests.rs:4907` — `native_boundary_outer_handler_runs_after_child_cleanup` | fix | F-IDIOM-001; `with` |
-| 39 | `crates/dotnet-vm/src/native_substring_tests.rs:4925` — `native_boundary_inner_handler_keeps_parent_alive` | fix | F-IDIOM-001; `with` |
-| 40 | `crates/dotnet-vm/src/native_substring_tests.rs:4941` — `native_boundary_inner_handler_keeps_parent_alive` | fix | F-IDIOM-001; `with` |
-| 41 | `crates/dotnet-vm/src/native_substring_tests.rs:4942` — `native_boundary_inner_handler_keeps_parent_alive` | fix | F-IDIOM-001; `with` |
-| 42 | `crates/dotnet-vm/src/native_substring_tests.rs:4971` — `native_boundary_filter_search_precedes_cleanup` | fix | F-IDIOM-001; `with` |
-| 43 | `crates/dotnet-vm/src/native_substring_tests.rs:4972` — `native_boundary_filter_search_precedes_cleanup` | fix | F-IDIOM-001; `with` |
-| 44 | `crates/dotnet-vm/src/native_substring_tests.rs:4978` — `native_boundary_filter_search_precedes_cleanup` | fix | F-IDIOM-001; `with` |
-| 45 | `crates/dotnet-vm/src/native_substring_tests.rs:4980` — `native_boundary_filter_search_precedes_cleanup` | fix | F-IDIOM-001; `with` |
-| 46 | `crates/dotnet-vm/src/native_substring_tests.rs:4981` — `native_boundary_filter_search_precedes_cleanup` | fix | F-IDIOM-001; `with` |
-| 47 | `crates/dotnet-vm/src/native_substring_tests.rs:5021` — `native_boundary_stack_trace_and_cleanup_for_nested_calls` | fix | F-IDIOM-001; `with` |
-| 48 | `crates/dotnet-vm/src/native_substring_tests.rs:5022` — `native_boundary_stack_trace_and_cleanup_for_nested_calls` | fix | F-IDIOM-001; `with` |
-| 49 | `crates/dotnet-vm/src/native_substring_tests.rs:5075` — `native_boundary_survives_exception_in_outer_filter` | fix | F-IDIOM-001; `with` |
-| 50 | `crates/dotnet-vm/src/native_substring_tests.rs:5077` — `native_boundary_survives_exception_in_outer_filter` | fix | F-IDIOM-001; `with` |
-| 51 | `crates/dotnet-vm/src/native_substring_tests.rs:5078` — `native_boundary_survives_exception_in_outer_filter` | fix | F-IDIOM-001; `with` |
-| 52 | `crates/dotnet-vm/src/native_substring_tests.rs:5098` — `native_boundary_cleanup_survives_collection` | fix | F-IDIOM-001; `with` |
-| 53 | `crates/dotnet-vm/src/native_substring_tests.rs:5100` — `native_boundary_cleanup_survives_collection` | fix | F-IDIOM-001; `with` |
-| 54 | `crates/dotnet-vm/src/native_substring_tests.rs:5101` — `native_boundary_cleanup_survives_collection` | fix | F-IDIOM-001; `with` |
-| 55 | `crates/dotnet-vm/src/native_substring_tests.rs:5110` — `drop` | fix | F-IDIOM-001; `with` |
-| 56 | `crates/dotnet-vm/src/native_substring_tests.rs:5130` — `drop` | fix | F-IDIOM-001; `with` |
-| 57 | `crates/dotnet-vm/src/native_substring_tests.rs:5181` — `native_boundary_synchronous_throw_reaches_caller_handler` | fix | F-IDIOM-001; `with` |
-| 58 | `crates/dotnet-vm/src/native_substring_tests.rs:5185` — `native_boundary_synchronous_throw_reaches_caller_handler` | fix | F-IDIOM-001; `with` |
-| 59 | `crates/dotnet-vm/src/native_substring_tests.rs:5186` — `native_boundary_synchronous_throw_reaches_caller_handler` | fix | F-IDIOM-001; `with` |
-| 60 | `crates/dotnet-vm/src/native_substring_tests.rs:5286` — `native_call_in_filter_does_not_reply_to_suspended_call` | fix | F-IDIOM-001; `with` |
-| 61 | `crates/dotnet-vm/src/native_substring_tests.rs:5288` — `native_call_in_filter_does_not_reply_to_suspended_call` | fix | F-IDIOM-001; `with` |
-| 62 | `crates/dotnet-vm/src/native_substring_tests.rs:5633` — `finalizer_preserves_filter_and_suspended_native_context` | fix | F-IDIOM-001; `with` |
-| 63 | `crates/dotnet-vm/src/native_substring_tests.rs:5689` — `finalizer_exception_cannot_reach_interrupted_handler` | fix | F-IDIOM-001; `with` |
-| 64 | `crates/dotnet-vm/src/native_substring_tests.rs:5824` — `native_call_in_handler_preserves_ambient_unwind` | fix | F-IDIOM-001; `with` |
-| 65 | `crates/dotnet-vm/src/native_substring_tests.rs:5925` — `native_activations_follow_nested_filter_segments` | fix | F-IDIOM-001; `with` |
-| 66 | `crates/dotnet-vm/src/native_substring_tests.rs:5938` — `native_activations_follow_nested_filter_segments` | fix | F-IDIOM-001; `with` |
-| 67 | `crates/dotnet-vm/src/native_substring_tests.rs:5946` — `native_activations_follow_nested_filter_segments` | fix | F-IDIOM-001; `with` |
-| 68 | `crates/dotnet-vm/src/native_substring_tests.rs:5947` — `native_activations_follow_nested_filter_segments` | fix | F-IDIOM-001; `with` |
-| 69 | `crates/dotnet-vm/src/native_substring_tests.rs:5977` — `abort_retires_suspended_native_frames` | fix | F-IDIOM-001; `with` |
-| 70 | `crates/dotnet-vm/src/native_substring_tests.rs:6097` — `finalizer_exception_cannot_enter_interrupted_filter` | fix | F-IDIOM-001; `with` |
-| 71 | `crates/dotnet-vm/src/native_substring_tests.rs:6215` — `abort_cleans_finalizer_and_parked_caller` | fix | F-IDIOM-001; `with` |
-| 72 | `crates/dotnet-vm-data/src/frame_alloc.rs:114` — `allocate_external` | fix | F-IDIOM-001; `with` |
-| 73 | `crates/dotnet-vm-data/src/frame_alloc.rs:150` — `bytes` | fix | F-IDIOM-001; `with` |
-| 74 | `crates/dotnet-vm-data/src/frame_alloc.rs:344` — `overflow_and_invalid_layout_leave_state_unchanged` | fix | F-IDIOM-001; `with` |
-| 75 | `crates/dotnet-vm-data/src/frame_alloc.rs:349` — `overflow_and_invalid_layout_leave_state_unchanged` | fix | F-IDIOM-001; `with` |
+| 1 | `crates/dotnet-benchmarks/benches/managed_ptr_serde.rs:62` — `drop` | fix (resolved) | F-IDIOM-001; resolved with LocalKey cell method |
+| 2 | `crates/dotnet-utils/src/raw_block.rs:73` — `zeroed_with` | keep | F-IDIOM-001; read-modify-write remains in one TLS access |
+| 3 | `crates/dotnet-utils/src/raw_block.rs:118` — `drop` | keep | F-IDIOM-001; read-modify-write remains in one TLS access |
+| 4 | `crates/dotnet-value/src/object/mod.rs:1103` — `drop` | fix (resolved) | F-IDIOM-001; resolved with LocalKey cell method |
+| 5 | `crates/dotnet-value/src/pointer/tests.rs:2042` — `new` | fix (resolved) | F-IDIOM-001; resolved with LocalKey cell method |
+| 6 | `crates/dotnet-value/src/pointer/tests.rs:2101` — `drop_arena` | fix (resolved) | F-IDIOM-001; resolved with LocalKey cell method |
+| 7 | `crates/dotnet-value/src/test_helpers.rs:37` — `drop` | fix (resolved) | F-IDIOM-001; resolved with LocalKey cell method |
+| 8 | `crates/dotnet-vm/src/executor_teardown_tests.rs:981` — `drop` | fix (resolved) | F-IDIOM-001; resolved with LocalKey cell method |
+| 9 | `crates/dotnet-vm/src/gc/coordinator.rs:82` — `debug_mark_collection_lock_acquired` | keep | F-IDIOM-001; debug depth read-modify-write remains in one TLS access |
+| 10 | `crates/dotnet-vm/src/native_return_tests.rs:117` — `return_body` | fix (resolved) | F-IDIOM-001; resolved with LocalKey cell method |
+| 11 | `crates/dotnet-vm/src/native_return_tests.rs:141` — `run` | fix (resolved) | F-IDIOM-001; resolved with LocalKey cell method |
+| 12 | `crates/dotnet-vm/src/native_return_tests.rs:142` — `run` | fix (resolved) | F-IDIOM-001; resolved with LocalKey cell method |
+| 13 | `crates/dotnet-vm/src/native_return_tests.rs:173` — `run` | fix (resolved) | F-IDIOM-001; resolved with LocalKey cell method |
+| 14 | `crates/dotnet-vm/src/native_substring_tests.rs:2153` — `native_inline_calls_body` | keep | F-IDIOM-001; inline-call read-modify-write remains in one TLS access |
+| 15 | `crates/dotnet-vm/src/native_substring_tests.rs:2170` — `native_activation_inline_call_budget` | fix (resolved) | F-IDIOM-001; resolved with LocalKey cell method |
+| 16 | `crates/dotnet-vm/src/native_substring_tests.rs:3227` — `drop` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 17 | `crates/dotnet-vm/src/native_substring_tests.rs:3250` — `drop` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 18 | `crates/dotnet-vm/src/native_substring_tests.rs:3335` — `boundary_executor_with_initializer` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 19 | `crates/dotnet-vm/src/native_substring_tests.rs:3336` — `boundary_executor_with_initializer` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 20 | `crates/dotnet-vm/src/native_substring_tests.rs:3337` — `boundary_executor_with_initializer` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 21 | `crates/dotnet-vm/src/native_substring_tests.rs:3539` — `capturing_boundary_body` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 22 | `crates/dotnet-vm/src/native_substring_tests.rs:3588` — `native_capture_filters_and_child_cleanup_precede_outer_search` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 23 | `crates/dotnet-vm/src/native_substring_tests.rs:3604` — `native_capture_filters_and_child_cleanup_precede_outer_search` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 24 | `crates/dotnet-vm/src/native_substring_tests.rs:4489` — `native_capture_initializer_does_not_wrap_before_reply` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 25 | `crates/dotnet-vm/src/native_substring_tests.rs:4517` — `capturing_success_body` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 26 | `crates/dotnet-vm/src/native_substring_tests.rs:4555` — `native_capture_child_handler_returns_normally` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 27 | `crates/dotnet-vm/src/native_substring_tests.rs:4646` — `capturing_synchronous_body` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 28 | `crates/dotnet-vm/src/native_substring_tests.rs:4689` — `native_capture_intrinsic_throw_precedes_outer_filter` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 29 | `crates/dotnet-vm/src/native_substring_tests.rs:4692` — `native_capture_intrinsic_throw_precedes_outer_filter` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 30 | `crates/dotnet-vm/src/native_substring_tests.rs:4724` — `capturing_handled_body` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 31 | `crates/dotnet-vm/src/native_substring_tests.rs:4794` — `native_capture_inside_filter_restores_outer_exception` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 32 | `crates/dotnet-vm/src/native_substring_tests.rs:4808` — `native_capture_inside_filter_restores_outer_exception` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 33 | `crates/dotnet-vm/src/native_substring_tests.rs:4840` — `native_boundary_unhandled_runs_child_cleanup` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 34 | `crates/dotnet-vm/src/native_substring_tests.rs:4856` — `native_boundary_unhandled_runs_child_cleanup` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 35 | `crates/dotnet-vm/src/native_substring_tests.rs:4857` — `native_boundary_unhandled_runs_child_cleanup` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 36 | `crates/dotnet-vm/src/native_substring_tests.rs:4891` — `native_boundary_outer_handler_runs_after_child_cleanup` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 37 | `crates/dotnet-vm/src/native_substring_tests.rs:4906` — `native_boundary_outer_handler_runs_after_child_cleanup` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 38 | `crates/dotnet-vm/src/native_substring_tests.rs:4907` — `native_boundary_outer_handler_runs_after_child_cleanup` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 39 | `crates/dotnet-vm/src/native_substring_tests.rs:4925` — `native_boundary_inner_handler_keeps_parent_alive` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 40 | `crates/dotnet-vm/src/native_substring_tests.rs:4941` — `native_boundary_inner_handler_keeps_parent_alive` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 41 | `crates/dotnet-vm/src/native_substring_tests.rs:4942` — `native_boundary_inner_handler_keeps_parent_alive` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 42 | `crates/dotnet-vm/src/native_substring_tests.rs:4971` — `native_boundary_filter_search_precedes_cleanup` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 43 | `crates/dotnet-vm/src/native_substring_tests.rs:4972` — `native_boundary_filter_search_precedes_cleanup` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 44 | `crates/dotnet-vm/src/native_substring_tests.rs:4978` — `native_boundary_filter_search_precedes_cleanup` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 45 | `crates/dotnet-vm/src/native_substring_tests.rs:4980` — `native_boundary_filter_search_precedes_cleanup` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 46 | `crates/dotnet-vm/src/native_substring_tests.rs:4981` — `native_boundary_filter_search_precedes_cleanup` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 47 | `crates/dotnet-vm/src/native_substring_tests.rs:5021` — `native_boundary_stack_trace_and_cleanup_for_nested_calls` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 48 | `crates/dotnet-vm/src/native_substring_tests.rs:5022` — `native_boundary_stack_trace_and_cleanup_for_nested_calls` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 49 | `crates/dotnet-vm/src/native_substring_tests.rs:5075` — `native_boundary_survives_exception_in_outer_filter` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 50 | `crates/dotnet-vm/src/native_substring_tests.rs:5077` — `native_boundary_survives_exception_in_outer_filter` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 51 | `crates/dotnet-vm/src/native_substring_tests.rs:5078` — `native_boundary_survives_exception_in_outer_filter` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 52 | `crates/dotnet-vm/src/native_substring_tests.rs:5098` — `native_boundary_cleanup_survives_collection` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 53 | `crates/dotnet-vm/src/native_substring_tests.rs:5100` — `native_boundary_cleanup_survives_collection` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 54 | `crates/dotnet-vm/src/native_substring_tests.rs:5101` — `native_boundary_cleanup_survives_collection` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 55 | `crates/dotnet-vm/src/native_substring_tests.rs:5110` — `drop` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 56 | `crates/dotnet-vm/src/native_substring_tests.rs:5130` — `drop` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 57 | `crates/dotnet-vm/src/native_substring_tests.rs:5181` — `native_boundary_synchronous_throw_reaches_caller_handler` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 58 | `crates/dotnet-vm/src/native_substring_tests.rs:5185` — `native_boundary_synchronous_throw_reaches_caller_handler` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 59 | `crates/dotnet-vm/src/native_substring_tests.rs:5186` — `native_boundary_synchronous_throw_reaches_caller_handler` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 60 | `crates/dotnet-vm/src/native_substring_tests.rs:5286` — `native_call_in_filter_does_not_reply_to_suspended_call` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 61 | `crates/dotnet-vm/src/native_substring_tests.rs:5288` — `native_call_in_filter_does_not_reply_to_suspended_call` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 62 | `crates/dotnet-vm/src/native_substring_tests.rs:5633` — `finalizer_preserves_filter_and_suspended_native_context` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 63 | `crates/dotnet-vm/src/native_substring_tests.rs:5689` — `finalizer_exception_cannot_reach_interrupted_handler` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 64 | `crates/dotnet-vm/src/native_substring_tests.rs:5824` — `native_call_in_handler_preserves_ambient_unwind` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 65 | `crates/dotnet-vm/src/native_substring_tests.rs:5925` — `native_activations_follow_nested_filter_segments` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 66 | `crates/dotnet-vm/src/native_substring_tests.rs:5938` — `native_activations_follow_nested_filter_segments` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 67 | `crates/dotnet-vm/src/native_substring_tests.rs:5946` — `native_activations_follow_nested_filter_segments` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 68 | `crates/dotnet-vm/src/native_substring_tests.rs:5947` — `native_activations_follow_nested_filter_segments` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 69 | `crates/dotnet-vm/src/native_substring_tests.rs:5977` — `abort_retires_suspended_native_frames` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 70 | `crates/dotnet-vm/src/native_substring_tests.rs:6097` — `finalizer_exception_cannot_enter_interrupted_filter` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 71 | `crates/dotnet-vm/src/native_substring_tests.rs:6215` — `abort_cleans_finalizer_and_parked_caller` | fix (resolved) | F-IDIOM-001; resolved by boundary event/snapshot protocol |
+| 72 | `crates/dotnet-vm-data/src/frame_alloc.rs:114` — `allocate_external` | fix (resolved) | F-IDIOM-001; resolved with LocalKey cell method |
+| 73 | `crates/dotnet-vm-data/src/frame_alloc.rs:150` — `bytes` | fix (resolved) | F-IDIOM-001; resolved with LocalKey cell method |
+| 74 | `crates/dotnet-vm-data/src/frame_alloc.rs:344` — `overflow_and_invalid_layout_leave_state_unchanged` | fix (resolved) | F-IDIOM-001; resolved with LocalKey cell method |
+| 75 | `crates/dotnet-vm-data/src/frame_alloc.rs:349` — `overflow_and_invalid_layout_leave_state_unchanged` | fix (resolved) | F-IDIOM-001; resolved with LocalKey cell method |
 
 ### RsUnnecessaryCast — 2 entries
 
@@ -969,7 +967,7 @@ Each row is one exported problem, identified by inspection and one-based XML ord
 | 144 | `crates/dotnet-vm/src/intrinsics/object_ops.rs:366` — `generic_enum_type` | fix | F-QUAL-001; `dotnetdll::prelude::` |
 | 145 | `crates/dotnet-vm/src/intrinsics/object_ops.rs:444` — `runtime_type_from_desc` | fix | F-QUAL-001; `dotnet_types::` |
 | 146 | `crates/dotnet-vm/src/layout.rs:166` — `runtime_handle_value_slots_use_object_ref_layout` | fix | F-QUAL-001; `std::mem::` |
-| 147 | `crates/dotnet-vm/src/native_return_tests.rs:42` — `method` | fix | F-QUAL-001; `dotnetdll::resolved::` |
+| 147 | `crates/dotnet-vm/src/native_return_tests.rs:42` — `method` | fix (resolved) | F-QUAL-001; `dotnetdll::resolved::` |
 | 148 | `crates/dotnet-vm/src/native_substring_tests.rs:404` — `pending_finalizer_runs_in_separate_segment_during_copy` | fix | F-QUAL-001; `dotnetdll::resolved::signature::` |
 | 149 | `crates/dotnet-vm/src/native_substring_tests.rs:786` — `indirect_opcode_refuses_without_consuming_operands` | fix | F-QUAL-001; `dotnetdll::resolved::signature::` |
 | 150 | `crates/dotnet-vm/src/native_substring_tests.rs:799` — `indirect_opcode_refuses_without_consuming_operands` | fix | F-QUAL-001; `crate::error::` |
@@ -983,11 +981,11 @@ Each row is one exported problem, identified by inspection and one-based XML ord
 | 158 | `crates/dotnet-vm/src/native_substring_tests.rs:1977` — `native_activation_rejects_each_changed_caller_component` | fix | F-QUAL-001; `crate::error::` |
 | 159 | `crates/dotnet-vm/src/native_substring_tests.rs:1978` — `native_activation_rejects_each_changed_caller_component` | fix | F-QUAL-001; `crate::error::` |
 | 160 | `crates/dotnet-vm/src/native_substring_tests.rs:2974` — `push_new_string` | fix | F-QUAL-001; `crate::error::` |
-| 161 | `crates/dotnet-vm/src/native_substring_tests.rs:3300` — `boundary_executor_with_initializer` | fix | F-QUAL-001; `dotnetdll::resolved::members::` |
-| 162 | `crates/dotnet-vm/src/native_substring_tests.rs:3316` — `boundary_executor_with_initializer` | fix | F-QUAL-001; `dotnetdll::resolved::members::` |
-| 163 | `crates/dotnet-vm/src/native_substring_tests.rs:3572` — `native_capture_filters_and_child_cleanup_precede_outer_search` | fix | F-QUAL-001; `dotnet_vm_data::` |
-| 164 | `crates/dotnet-vm/src/native_substring_tests.rs:3614` — `native_capture_filters_and_child_cleanup_precede_outer_search` | fix | F-QUAL-001; `dotnet_vm_data::` |
-| 165 | `crates/dotnet-vm/src/native_substring_tests.rs:3705` — `static_store_operand_collection` | fix | F-QUAL-001; `dotnetdll::resolved::members::` |
+| 161 | `crates/dotnet-vm/src/native_substring_tests.rs:3300` — `boundary_executor_with_initializer` | fix (resolved) | F-QUAL-001; `dotnetdll::resolved::members::` |
+| 162 | `crates/dotnet-vm/src/native_substring_tests.rs:3316` — `boundary_executor_with_initializer` | fix (resolved) | F-QUAL-001; `dotnetdll::resolved::members::` |
+| 163 | `crates/dotnet-vm/src/native_substring_tests.rs:3572` — `native_capture_filters_and_child_cleanup_precede_outer_search` | fix (resolved) | F-QUAL-001; `dotnet_vm_data::` |
+| 164 | `crates/dotnet-vm/src/native_substring_tests.rs:3614` — `native_capture_filters_and_child_cleanup_precede_outer_search` | fix (resolved) | F-QUAL-001; `dotnet_vm_data::` |
+| 165 | `crates/dotnet-vm/src/native_substring_tests.rs:3705` — `static_store_operand_collection` | fix (resolved) | F-QUAL-001; `dotnetdll::resolved::members::` |
 | 166 | `crates/dotnet-vm/src/native_substring_tests.rs:4091` — `claim_initializer_for` | fix | F-QUAL-001; `dotnet_utils::` |
 | 167 | `crates/dotnet-vm/src/native_substring_tests.rs:4116` — `native_initializer_wait_rechecks_cycle_after_real_collection` | fix | F-QUAL-001; `dotnet_utils::` |
 | 168 | `crates/dotnet-vm/src/native_substring_tests.rs:4160` — `native_initializer_wait_replies_before_collection_when_owner_is_busy` | fix | F-QUAL-001; `dotnet_utils::` |
@@ -996,9 +994,9 @@ Each row is one exported problem, identified by inspection and one-based XML ord
 | 171 | `crates/dotnet-vm/src/native_substring_tests.rs:4263` — `drop` | fix | F-QUAL-001; `super::` |
 | 172 | `crates/dotnet-vm/src/native_substring_tests.rs:4268` — `drop` | fix | F-QUAL-001; `dotnet_utils::` |
 | 173 | `crates/dotnet-vm/src/native_substring_tests.rs:4295` — `drop` | fix | F-QUAL-001; `super::` |
-| 174 | `crates/dotnet-vm/src/native_substring_tests.rs:4698` — `native_capture_intrinsic_throw_precedes_outer_filter` | fix | F-QUAL-001; `dotnet_vm_data::` |
-| 175 | `crates/dotnet-vm/src/native_substring_tests.rs:4830` — `native_boundary_unhandled_runs_child_cleanup` | fix | F-QUAL-001; `dotnet_vm_data::` |
-| 176 | `crates/dotnet-vm/src/native_substring_tests.rs:4968` — `native_boundary_filter_search_precedes_cleanup` | fix | F-QUAL-001; `dotnet_vm_data::` |
+| 174 | `crates/dotnet-vm/src/native_substring_tests.rs:4698` — `native_capture_intrinsic_throw_precedes_outer_filter` | fix (resolved) | F-QUAL-001; `dotnet_vm_data::` |
+| 175 | `crates/dotnet-vm/src/native_substring_tests.rs:4830` — `native_boundary_unhandled_runs_child_cleanup` | fix (resolved) | F-QUAL-001; `dotnet_vm_data::` |
+| 176 | `crates/dotnet-vm/src/native_substring_tests.rs:4968` — `native_boundary_filter_search_precedes_cleanup` | fix (resolved) | F-QUAL-001; `dotnet_vm_data::` |
 | 177 | `crates/dotnet-vm/src/native_substring_tests.rs:5815` — `native_call_in_handler_preserves_ambient_unwind` | fix | F-QUAL-001; `dotnet_vm_data::exceptions::` |
 | 178 | `crates/dotnet-vm/src/native_substring_tests.rs:6258` — `managed_join_returns_before_native_worker_exits` | fix | F-QUAL-001; `std::sync::` |
 | 179 | `crates/dotnet-vm/src/native_substring_tests.rs:6305` — `managed_join_resolves_completion_published_after_start` | fix | F-QUAL-001; `std::sync::` |
@@ -1006,7 +1004,7 @@ Each row is one exported problem, identified by inspection and one-based XML ord
 | 181 | `crates/dotnet-vm/src/native_substring_tests.rs:6536` — `worker_teardown_cleans_native_before_retiring_caller` | fix | F-QUAL-001; `std::future::` |
 | 182 | `crates/dotnet-vm/src/native_substring_tests.rs:6642` — `drop` | fix | F-QUAL-001; `dotnet_types::error::` |
 | 183 | `crates/dotnet-vm/src/native_substring_tests.rs:6741` — `drop` | fix | F-QUAL-001; `dotnet_types::error::` |
-| 184 | `crates/dotnet-vm/src/native_substring_tests.rs:6806` — `static_fields_complete_without_activation` | fix | F-QUAL-001; `dotnetdll::resolved::members::` |
+| 184 | `crates/dotnet-vm/src/native_substring_tests.rs:6806` — `static_fields_complete_without_activation` | fix (resolved) | F-QUAL-001; `dotnetdll::resolved::members::` |
 | 185 | `crates/dotnet-vm/src/native_substring_tests.rs:7416` — `test_failing_value_constructor` | fix | F-QUAL-001; `crate::error::` |
 | 186 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:508` — `void_sig` | fix | F-QUAL-001; `dotnetdll::binary::signature::kinds::` |
 | 187 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:513` — `void_sig` | fix | F-QUAL-001; `dotnetdll::binary::signature::kinds::` |

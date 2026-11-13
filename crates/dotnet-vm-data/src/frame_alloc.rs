@@ -111,7 +111,7 @@ impl FrameAllocations {
             .map_err(FrameAllocationError::HostAllocationFailed)?;
         debug_assert_eq!(charge, block.accounted_bytes());
         self.used = frame_bytes;
-        THREAD_BYTES.with(|bytes| bytes.set(thread_bytes));
+        THREAD_BYTES.set(thread_bytes);
         Ok(block)
     }
 
@@ -147,7 +147,7 @@ mod tests {
     use dotnet_utils::raw_block::{RawBlockError, live_blocks};
 
     fn bytes() -> usize {
-        THREAD_BYTES.with(|value| value.get())
+        THREAD_BYTES.get()
     }
 
     fn budget(max_request: usize, per_frame: usize, per_thread: usize) -> FrameBudget {
@@ -341,12 +341,12 @@ mod tests {
             Err(Error::FrameBudgetExceeded)
         );
         allocations.used = 0;
-        THREAD_BYTES.with(|value| value.set(usize::MAX));
+        THREAD_BYTES.set(usize::MAX);
         assert_eq!(
             allocations.allocate_within(1, &unlimited),
             Err(Error::ThreadBudgetExceeded)
         );
-        THREAD_BYTES.with(|value| value.set(baseline));
+        THREAD_BYTES.set(baseline);
         assert_eq!(
             allocations.allocate_within(isize::MAX as usize, &unlimited),
             Err(Error::HostAllocationFailed(RawBlockError::LayoutOverflow))

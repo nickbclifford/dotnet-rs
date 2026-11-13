@@ -978,7 +978,7 @@ mod ownership {
     }
     impl Drop for Fault {
         fn drop(&mut self) {
-            OWNERSHIP_PANIC.with(|fault| fault.set(None));
+            OWNERSHIP_PANIC.set(None);
         }
     }
 
