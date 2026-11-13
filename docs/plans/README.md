@@ -86,12 +86,11 @@ Evidence and IDs (p01…, R01…) are defined in the
   optimize. The warm case includes exception handling rather than isolating dictionary lookup.
   Numbers and commands are in
   [plan 15](15-corelib-task-and-thread-pool.md).
-- **Newtonsoft array copying:** the pinned host roundtrip in
-  `crates/dotnet-cli/tests/host_projects/newtonsoft_roundtrip` fails in
-  `DotnetRs.SZArrayHelper<T>.CopyTo` with `InvalidCastException` while initializing
-  `JsonWriter`; the CLR serializes and deserializes successfully. This rung passed when the
-  host runner landed, so it is a regression; the 2026-11-11 reproduction is in
-  [evidence/corelib-resource-host-rungs.txt](evidence/corelib-resource-host-rungs.txt).
+- **Newtonsoft runtime type handling:** the pinned host roundtrip in
+  `crates/dotnet-cli/tests/host_projects/newtonsoft_roundtrip` progresses past array copying
+  but fails in `System.RuntimeType.GetNativeTypeHandle` during `DynamicMethod.Init`.
+  The CLR completes the roundtrip; ST and MT results are recorded in
+  [plan 18 evidence](evidence/18-array-casts-host-rungs.txt).
 - **Userland breadth is untracked:** the only real-application rungs are the Newtonsoft
   roundtrip above and the EF Core InMemory smoke test
   (`crates/dotnet-benchmarks/fixtures/ef_inmemory`). No list of gaps beyond those exists; the
@@ -184,14 +183,6 @@ Evidence and IDs (p01…, R01…) are defined in the
     of its own (`Console` writes reach `write(2)` through the native shim, and the CLI flushes
     stdio on every exit path), so a repro (a fixture that writes, then fails with `Internal VM
     error`) is needed first.
-  - `Delegate.GetInvocationList` is missing on `System.Delegate` (only `MulticastDelegate`
-    has it), and `delegate is MulticastDelegate` is false for a runtime delegate type.
-  - A `Synchronized` instance method on a value type runs without taking a monitor.
-  - `Type.ToString()` returns `"Type: Name"` where the CLR returns the type name, so
-    `$"{obj.GetType()}"` and a boxed struct's default `ToString()` (through
-    `ValueType.ToString`) differ from the CLR.
-  - `Type.IsByRefLike` always returns `false`; reflection invocation now detects byref-like
-    types (`invoke_args::is_byref_like`), but the property does not use it.
 - **`GC.WaitForPendingFinalizers` global quiescence:** it waits until no arena has pending or
   in-progress finalizers, rather than completing one pass, and can livelock while a thread keeps
   producing finalizable garbage. The behavior has not been reproduced.

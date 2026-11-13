@@ -8,9 +8,9 @@ The host path has been validated at three levels:
 
 - the repository's managed fixture suite;
 - a Newtonsoft.Json application, which matched stock `dotnet` when the host
-  runner landed but currently fails with `InvalidCastException` in
-  `DotnetRs.SZArrayHelper<T>.CopyTo` (tracked in the
-  [plans README](plans/README.md#not-yet-planned));
+  runner landed but currently fails during `DynamicMethod.Init` in
+  `System.RuntimeType.GetNativeTypeHandle` (see
+  [host rung evidence](plans/evidence/18-array-casts-host-rungs.txt));
 - an EF Core InMemory smoke application that creates, saves, and queries an
   entity with matching output and exit status under both runtimes.
 
