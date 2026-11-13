@@ -409,6 +409,10 @@ diff_test!(
     "tests/fixtures/strings/substring_fallback_42.cs"
 );
 diff_test!(
+    strings_ctor_char_array_range_42_matches_dotnet,
+    "tests/fixtures/strings/ctor_char_array_range_42.cs"
+);
+diff_test!(
     expressions_expression_compile_42_matches_dotnet,
     "tests/fixtures/expressions/expression_compile_42.cs"
 );

@@ -224,6 +224,66 @@ pub fn intrinsic_string_ctor_char_array<'gc, T: IntrinsicStringHost<'gc>>(
     StepResult::Continue
 }
 
+/// `System.String::.ctor(char[], int, int)` copies `length` chars starting at `startIndex`.
+///
+/// Validation follows CoreLib: null `value` throws `ArgumentNullException`; a negative index or
+/// length, or a range past the end, throws `ArgumentOutOfRangeException`. One linear copy runs
+/// to completion without polling, as for `cpblk` (plan 16).
+#[dotnet_intrinsic("void System.String::.ctor(char[], int, int)")]
+pub fn intrinsic_string_ctor_char_array_range<'gc, T: IntrinsicStringHost<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let length = ctx.pop_i32();
+    let start_index = ctx.pop_i32();
+    let value = ctx.pop();
+
+    let arg_obj = match value {
+        StackValue::ObjectRef(ObjectRef(Some(_))) => value,
+        StackValue::ObjectRef(ObjectRef(None)) => {
+            return ctx.throw_by_name_with_message(
+                "System.ArgumentNullException",
+                "Value cannot be null. (Parameter 'value')",
+            );
+        }
+        other => {
+            return StepResult::type_error(
+                "char[]",
+                format!("invalid value for System.String::.ctor(char[], int, int): {other:?}"),
+            );
+        }
+    };
+    if start_index < 0 {
+        return ctx.throw_argument_out_of_range("startIndex");
+    }
+    if length < 0 {
+        return ctx.throw_argument_out_of_range("length");
+    }
+
+    let array_len = with_vector!(ctx, &arg_obj, |v| v.layout.length);
+    let (start, len) = (start_index as usize, length as usize);
+    if start > array_len.saturating_sub(len) || len > array_len {
+        return ctx.throw_argument_out_of_range("startIndex");
+    }
+
+    let mut chars = Vec::with_capacity(len);
+    with_vector!(ctx, &arg_obj, |v| {
+        if let Some(bytes) = v.get().get(start * 2..(start + len) * 2) {
+            extend_from_utf16_ne_bytes(&mut chars, bytes);
+        }
+    });
+    if chars.len() != len {
+        return StepResult::type_error(
+            "char[]",
+            "System.String::.ctor(char[], int, int) source shorter than its length",
+        );
+    }
+
+    ctx.push_string(CLRString::new(chars));
+    StepResult::Continue
+}
+
 /// `System.String::.ctor(char, int)` builds a string of `count` copies of `c`.
 ///
 /// ECMA-335 does not define this BCL constructor; the CLR throws

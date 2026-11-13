@@ -1,6 +1,6 @@
 # Managed API gaps against the CLR
 
-**Status:** Slices 1–6 implemented; Newtonsoft exposes a subsequent runtime-type gap (see `evidence/18-array-casts-host-rungs.txt`).
+**Status:** Complete
 **Outcome:** The Newtonsoft host rung matches `dotnet` again, and new diff fixtures for array
 casts, delegate invocation lists, `Synchronized` value-type methods, `Type`/`Object.ToString` and
 `Type.IsByRefLike` match `dotnet` in ST and MT.
@@ -76,6 +76,26 @@ add a README entry if a fixture shows otherwise.
 6. **Docs.** Remove the README entries this plan closes (Newtonsoft array copying, and the
    delegate, `Synchronized`, `ToString` and `IsByRefLike` items under "Other missing or incorrect
    runtime behavior"); update `COMPATIBILITY.md` once Newtonsoft passes.
+7. **Newtonsoft after slice 1.** Added after slice 1, when Newtonsoft failed with an
+   `AccessViolationException` in `RuntimeType.GetNativeTypeHandle` during `DynamicMethod.Init`
+   ([evidence](evidence/18-array-casts-host-rungs.txt)).
+   - Cause: Newtonsoft 13.0.3 (net6.0) uses Reflection.Emit when
+     `RuntimeFeature.IsDynamicCodeCompiled` is true. CoreLib returns `IsDynamicCodeSupported`,
+     which `82902cf3` (2026-07-02) let default to true. Seeding the switch to false again (as
+     `a527aa54` had) was tried and rejected: EF Core treats it as NativeAOT and throws "Model
+     building is not supported when publishing with NativeAOT".
+   - Fix: an intrinsic makes `IsDynamicCodeCompiled` false while `IsDynamicCodeSupported` stays
+     true. That is the documented meaning for a runtime that interprets (Mono's interpreter
+     reports the same), and it moves Newtonsoft and DI to their reflection paths.
+     `basic/runtime_feature_dynamic_code_42.cs` pins it (not diffed; the CLR reports true).
+   - Deserialization then reached `new string(char[], int, int)`, which had no intrinsic and
+     failed with `Invalid instruction pointer: 0`. It is now implemented, with
+     `strings/ctor_char_array_range_42.cs` as a diff test. This was never a regression: the
+     roundtrip project (added 2026-11-11) is the first rung that deserializes; the June rung only
+     serialized.
+   - Not changed: because `IsDynamicCodeSupported` stays true, the `LambdaExpression.Compile()`
+     redirect and the `ForceAllowDynamicCode` stub in `call_ops_impl.rs` remain (README entry
+     "Dynamic code without Reflection.Emit").
 
 ## Done when
 

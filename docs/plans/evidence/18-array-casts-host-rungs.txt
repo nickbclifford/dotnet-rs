@@ -18,3 +18,29 @@ System.RuntimeType.GetNativeTypeHandle, called by get_IsActualInterface during
 DynamicMethod.Init and Newtonsoft's DynamicReflectionDelegateFactory. The CLR
 exited 42 and printed {"name":"test","value":42}. This is a separate gap
 from the array-cast failure and requires the maintainer decision in the plan.
+
+Plan 18 slice 7 — 2026-11-13
+
+Same commands (CLI rebuilt per configuration, DOTNET_RS_BIN=target/debug/dotnet-rs,
+scripts/diff_run.sh --host; EF copied to /tmp without bin/obj).
+
+Rejected attempt — IsDynamicCodeSupported switch seeded false, call-site
+workarounds removed: Expression PASS; EF FAIL (exit 1, InvalidOperationException
+"Model building is not supported when publishing with NativeAOT. Use a compiled
+model." from DbContextServices.CreateModel); Newtonsoft FAIL (correct
+serialization output, then "Internal VM error: Method execution failed: Invalid
+instruction pointer: 0").
+
+The invalid IP was a frame for System.String::.ctor(char[], int, int), which has
+no IL body and had no intrinsic, called from
+Newtonsoft.Json.Utilities.StringReference.ToString during deserialization.
+
+Final — IsDynamicCodeCompiled intrinsic returns false, IsDynamicCodeSupported
+left at its default (true), String(char[], int, int) implemented:
+
+                         ST       MT
+Newtonsoft roundtrip     PASS     PASS
+EF InMemory              PASS     PASS
+expression_compile_42    PASS     PASS
+
+dotnet-cli integration tests: 368/368 (no features), 482/482 (multithreading).

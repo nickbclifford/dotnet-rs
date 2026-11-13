@@ -10,7 +10,7 @@ In priority order. Each plan's own `Status:` line is the only record of its stat
 
 | ID | Plan | Note |
 |---|---|---|
-| 18 | [Managed API gaps against the CLR](18-managed-api-clr-gaps.md) | Newtonsoft `unbox.any` regression first, then delegate, type-name and `IsByRefLike` gaps |
+| 18 | [Managed API gaps against the CLR](18-managed-api-clr-gaps.md) | Complete; Newtonsoft and EF host rungs match `dotnet` |
 | 19 | [Reflection invocation matches the CLR](19-reflection-invoke-clr-parity.md) | Reverses plan 08's transparent-exception and byref-return decisions |
 | 20 | [Shared GC handles and a dedicated finalizer thread](20-gc-handles-and-finalizer-thread.md) | Starts with untraced dependent handles (likely use-after-free) |
 | 17 | [Inspection-driven code quality refactor](17-inspection-quality-refactor.md) | Ordered semantic, readability and dependency slices with an inspection ledger |
@@ -86,13 +86,19 @@ Evidence and IDs (p01…, R01…) are defined in the
   optimize. The warm case includes exception handling rather than isolating dictionary lookup.
   Numbers and commands are in
   [plan 15](15-corelib-task-and-thread-pool.md).
-- **Newtonsoft runtime type handling:** the pinned host roundtrip in
-  `crates/dotnet-cli/tests/host_projects/newtonsoft_roundtrip` progresses past array copying
-  but fails in `System.RuntimeType.GetNativeTypeHandle` during `DynamicMethod.Init`.
-  The CLR completes the roundtrip; ST and MT results are recorded in
-  [plan 18 evidence](evidence/18-array-casts-host-rungs.txt).
+- **Dynamic code without Reflection.Emit:** the VM reports `IsDynamicCodeSupported` true (EF Core
+  treats false as NativeAOT) and `IsDynamicCodeCompiled` false (plan 18 slice 7). Code that checks
+  only `IsDynamicCodeSupported` and then emits IL fails; two such paths are patched per call site
+  in `crates/dotnet-vm/src/stack/call_ops_impl.rs` (`LambdaExpression.Compile()` redirected to
+  the interpreter overload, Expression's `ForceAllowDynamicCode` stubbed). Either implement
+  `DynamicMethod` or find a single switch-level answer before adding more call-site patches.
+- **Access violation in `RuntimeType.GetNativeTypeHandle`:** reached from `DynamicMethod.Init`
+  (`get_IsActualInterface`) when Newtonsoft used Reflection.Emit; managed code should never
+  produce an `AccessViolationException`. No longer reached by any rung
+  ([evidence](evidence/18-array-casts-host-rungs.txt)).
 - **Userland breadth is untracked:** the only real-application rungs are the Newtonsoft
-  roundtrip above and the EF Core InMemory smoke test
+  roundtrip (`crates/dotnet-cli/tests/host_projects/newtonsoft_roundtrip`) and the EF Core
+  InMemory smoke test
   (`crates/dotnet-benchmarks/fixtures/ef_inmemory`). No list of gaps beyond those exists; the
   former EF gap backlog and userland roadmap were deleted. Pick the next application rung
   (for example EF Core SQLite, which [COMPATIBILITY.md](../COMPATIBILITY.md) lists as
@@ -179,6 +185,10 @@ Evidence and IDs (p01…, R01…) are defined in the
   CLR can finish without observing the intended `ArgumentException` and its differential sanity
   check can fail despite correct execution.
 - **Other missing or incorrect runtime behavior:**
+  - Empty strings have no shared identity: `string.Empty` allocates on every load
+    (`intrinsic_field_string_empty`), so `ReferenceEquals(string.Empty, string.Empty)` and
+    `ReferenceEquals(string.Empty, "")` are false (the CLR prints true for both), and APIs that
+    return `string.Empty` for empty results cannot do so.
   - Buffered stdout lost on an internal-error exit: not reproduced. The VM has no stdout buffer
     of its own (`Console` writes reach `write(2)` through the native shim, and the CLI flushes
     stdio on every exit path), so a repro (a fixture that writes, then fails with `Internal VM
