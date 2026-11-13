@@ -12,7 +12,10 @@ use dotnet_value::{
 use dotnet_vm_data::StepResult;
 use dotnet_vm_ops::ops::{EvalStackOps, ExceptionOps, LoaderOps, RawMemoryOps, TypedStackOps};
 use dotnetdll::prelude::{BaseType, MethodType, ParameterType};
-use std::ptr::{self, NonNull};
+use std::{
+    mem,
+    ptr::{self, NonNull},
+};
 
 /// Returns the raw address represented by a managed pointer for unsafe intrinsics.
 ///
@@ -101,7 +104,7 @@ pub fn intrinsic_unsafe_null_ref<'gc, T: TypedStackOps<'gc> + LoaderOps>(
         );
     };
     let target_type = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(target));
-    ctx.push_ptr(std::ptr::null_mut(), target_type, false, None, None);
+    ctx.push_ptr(ptr::null_mut(), target_type, false, None, None);
     StepResult::Continue
 }
 
@@ -443,7 +446,7 @@ pub fn intrinsic_unsafe_bitcast<'gc, T: UnsafeIntrinsicHost<'gc>>(
                     value
                 ));
             };
-            if std::mem::size_of::<isize>() == 8 {
+            if mem::size_of::<isize>() == 8 {
                 src_slice.copy_from_slice(&(v as i64).to_ne_bytes());
             } else {
                 src_slice.copy_from_slice(&(v as i32).to_ne_bytes());
@@ -504,7 +507,7 @@ pub fn intrinsic_unsafe_bitcast<'gc, T: UnsafeIntrinsicHost<'gc>>(
             ctx.push_i64(i64::from_ne_bytes(arr));
         }
         LayoutManager::Scalar(Scalar::NativeInt) => {
-            if std::mem::size_of::<isize>() == 8 {
+            if mem::size_of::<isize>() == 8 {
                 let mut arr = [0u8; 8];
                 arr.copy_from_slice(dst_slice);
                 ctx.push_isize(i64::from_ne_bytes(arr) as isize);

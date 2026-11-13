@@ -8,6 +8,7 @@ use crate::{
 };
 use dotnet_types::{
     TypeDescription,
+    error::MemoryAccessError,
     generics::{ConcreteType, GenericLookup},
     resolution::ResolutionS,
 };
@@ -36,7 +37,7 @@ const NO_MANAGED_BASES: TestManagedPtrResolver = TestManagedPtrResolver { static
 
 #[derive(Default)]
 struct CountingHeapCache<'gc> {
-    entries: hashbrown::HashMap<usize, ObjectRef<'gc>>,
+    entries: HashMap<usize, ObjectRef<'gc>>,
     hits: usize,
     misses: usize,
 }
@@ -123,9 +124,7 @@ fn owner_retention_transient_native_int_conversion_is_rejected() {
         false,
         ByteOffset::new(0),
     );
-    let stack = static_ptr.with_origin(PointerOrigin::FrameHome(
-        crate::pointer::FrameHomeSerial::new(1),
-    ));
+    let stack = static_ptr.with_origin(PointerOrigin::FrameHome(FrameHomeSerial::new(1)));
     for ptr in [&unmanaged, &null, &stack, &static_ptr] {
         assert_eq!(ptr.try_observe_address(), Ok(ptr.observe_address()));
     }
@@ -983,7 +982,7 @@ fn frame_home_access_checks_liveness_and_range() {
     let too_long = unsafe { ptr.with_frame_home_data(&live, 25, |_| ()) };
     assert_eq!(
         too_long,
-        Err(dotnet_types::error::MemoryAccessError::BoundsCheck {
+        Err(MemoryAccessError::BoundsCheck {
             offset: 8,
             size: 25,
             len: 32
@@ -991,10 +990,7 @@ fn frame_home_access_checks_liveness_and_range() {
     );
     // SAFETY: F10.FrameHomeChecked — the closure only reads.
     let returned = unsafe { ptr.with_frame_home_data(&NO_MANAGED_BASES, 1, |_| ()) };
-    assert_eq!(
-        returned,
-        Err(dotnet_types::error::MemoryAccessError::InvalidOrigin)
-    );
+    assert_eq!(returned, Err(MemoryAccessError::InvalidOrigin));
     // The unchecked accessor never reads a frame-home pointer.
     // SAFETY: F10.RawMemoryAccessValid — `try_with_data` rejects frame-home origins before access.
     assert!(unsafe { ptr.try_with_data(1, |_| ()) }.is_none());
@@ -1225,14 +1221,14 @@ fn test_managed_ptr_serialization_bugs_reproduction() {
         let mut buf = [0u8; ManagedPtr::SIZE];
 
         // 1. Transient origin (Fixed behavior in Stage 1)
-        let layout = Arc::new(crate::layout::FieldLayoutManager {
-            fields: hashbrown::HashMap::new(),
+        let layout = Arc::new(FieldLayoutManager {
+            fields: HashMap::new(),
             total_size: 0,
             alignment: 1,
-            gc_desc: crate::layout::GcDesc::default(),
+            gc_desc: GcDesc::default(),
             has_ref_fields: false,
         });
-        let storage = crate::storage::FieldStorage::new(layout, vec![]);
+        let storage = FieldStorage::new(layout, vec![]);
         let obj = Object::new(TypeDescription::NULL, GenericLookup::default(), storage);
         let transient_addr = 0x5000usize;
         let ptr_transient = ManagedPtr::new_transient(
@@ -1384,9 +1380,7 @@ fn ptr_arith_managed_ptr_checked_offset_reports_errors() {
         false,
         Some(ByteOffset::new(3)),
     )
-    .with_origin(PointerOrigin::FrameHome(
-        crate::pointer::FrameHomeSerial::new(1),
-    ));
+    .with_origin(PointerOrigin::FrameHome(FrameHomeSerial::new(1)));
 
     assert_eq!(
         ptr.clone().checked_offset(-4).err(),
@@ -1480,9 +1474,7 @@ fn ptr_arith_managed_ptr_checked_offset_reports_errors() {
         false,
         Some(ByteOffset::new(u32::MAX as usize)),
     )
-    .with_origin(PointerOrigin::FrameHome(
-        crate::pointer::FrameHomeSerial::new(1),
-    ));
+    .with_origin(PointerOrigin::FrameHome(FrameHomeSerial::new(1)));
     assert_eq!(
         far.clone().checked_offset(-1).unwrap().byte_offset(),
         ByteOffset::new(u32::MAX as usize - 1)
@@ -1503,9 +1495,7 @@ fn ptr_arith_managed_ptr_checked_offset_reports_errors() {
         false,
         Some(ByteOffset::new(1)),
     )
-    .with_origin(PointerOrigin::FrameHome(
-        crate::pointer::FrameHomeSerial::new(1),
-    ));
+    .with_origin(PointerOrigin::FrameHome(FrameHomeSerial::new(1)));
     assert_eq!(
         stack.checked_offset(-1).err(),
         Some(ManagedPtrOffsetError::NullCachedAddress)
@@ -1624,18 +1614,18 @@ fn ptr_arith_unmanaged_arithmetic_wraps_to_explicit_null() {
     let base = crate::StackValue::unmanaged_ptr(raw);
     let address = base.as_ptr().addr() as isize;
     let zero = (base - crate::StackValue::NativeInt(address)).unwrap();
-    assert!(zero == crate::StackValue::NativeInt(0));
+    assert_eq!(zero, crate::StackValue::NativeInt(0));
     assert!(zero.is_null());
 
     let max_address =
         crate::StackValue::unmanaged_ptr(std::ptr::without_provenance_mut(usize::MAX));
     let wrapped_from_max = (max_address + crate::StackValue::Int32(1)).unwrap();
-    assert!(wrapped_from_max == crate::StackValue::NativeInt(0));
+    assert_eq!(wrapped_from_max, crate::StackValue::NativeInt(0));
     assert!(wrapped_from_max.is_null());
 
     let address_one = crate::StackValue::unmanaged_ptr(std::ptr::without_provenance_mut(1));
     let wrapped_from_one = (address_one - crate::StackValue::Int32(1)).unwrap();
-    assert!(wrapped_from_one == crate::StackValue::NativeInt(0));
+    assert_eq!(wrapped_from_one, crate::StackValue::NativeInt(0));
     assert!(wrapped_from_one.is_null());
 
     let exposed_address = raw.expose_provenance();
@@ -1693,10 +1683,7 @@ fn ptr_arith_pointer_comparisons_are_value_bearing() {
 
     let base = crate::StackValue::unmanaged_ptr(base_raw);
     let later = crate::StackValue::unmanaged_ptr(base_raw.wrapping_add(8));
-    assert!(
-        base == base.clone(),
-        "an unmanaged pointer must equal itself"
-    );
+    assert_eq!(base, base.clone(), "an unmanaged pointer must equal itself");
     assert_eq!(
         base.compare(&later, crate::NumberSign::Unsigned),
         Some(std::cmp::Ordering::Less)
@@ -1716,8 +1703,8 @@ fn ptr_arith_pointer_comparisons_are_value_bearing() {
 
     let base_address = base_raw.expose_provenance();
     let base_integer = crate::StackValue::NativeInt(base_address as isize);
-    assert!(base == base_integer.clone());
-    assert!(base_integer == base);
+    assert_eq!(base, base_integer.clone());
+    assert_eq!(base_integer, base);
     assert_eq!(
         base.compare(&base_integer, crate::NumberSign::Unsigned),
         Some(std::cmp::Ordering::Equal)
@@ -1768,15 +1755,15 @@ fn ptr_arith_pointer_comparisons_are_value_bearing() {
     let managed_value = crate::StackValue::ManagedPtr(managed.clone().into());
     let null_managed = crate::StackValue::ManagedPtr(ManagedPtr::null().into());
     let zero = crate::StackValue::NativeInt(0);
-    assert!(null_managed == zero);
-    assert!(zero == null_managed);
-    assert!(base != zero);
-    assert!(zero != base);
-    assert!(managed_value != zero);
-    assert!(managed_value == base);
-    assert!(base == managed_value);
-    assert!(managed_value == base_integer);
-    assert!(base_integer == managed_value);
+    assert_eq!(null_managed, zero);
+    assert_eq!(zero, null_managed);
+    assert_ne!(base, zero);
+    assert_ne!(zero, base);
+    assert_ne!(managed_value, zero);
+    assert_eq!(managed_value, base);
+    assert_eq!(base, managed_value);
+    assert_eq!(managed_value, base_integer);
+    assert_eq!(base_integer, managed_value);
     assert_eq!(
         managed_value.partial_cmp(&base),
         Some(std::cmp::Ordering::Equal)
@@ -1884,7 +1871,10 @@ fn ptr_arith_managed_ptr_far_oob_compare_and_difference() {
         );
 
         let observed_far = far.observe_address().expect("observed far address");
-        assert!(far_value == crate::StackValue::NativeInt(observed_far.addr().get() as isize));
+        assert_eq!(
+            far_value,
+            crate::StackValue::NativeInt(observed_far.addr().get() as isize)
+        );
         let observed_base = near.observe_address().expect("observed base address");
         assert_eq!(
             far_value.compare(
@@ -1898,7 +1888,10 @@ fn ptr_arith_managed_ptr_far_oob_compare_and_difference() {
             .observe_address()
             .expect("observed u32::MAX address");
         let far_max_value = crate::StackValue::ManagedPtr(far_u32_max.into());
-        assert!(far_max_value == crate::StackValue::NativeInt(observed_max.addr().get() as isize));
+        assert_eq!(
+            far_max_value,
+            crate::StackValue::NativeInt(observed_max.addr().get() as isize)
+        );
 
         let other_vector = Vector::new(
             ConcreteType::new(ResolutionS::NULL, BaseType::UInt8),
@@ -2529,7 +2522,7 @@ fn arena_lifetime_transport_strict_core() {
 #[test]
 fn retained_frame_home_range_checks_full_access() {
     let mut storage = [0u8; 32];
-    let base = std::ptr::NonNull::new(storage.as_mut_ptr()).unwrap();
+    let base = NonNull::new(storage.as_mut_ptr()).unwrap();
     let serial = FrameHomeSerial::new(123);
     let live = FrameHomeResolver {
         serial,
@@ -2538,23 +2531,22 @@ fn retained_frame_home_range_checks_full_access() {
     };
     let pointer = frame_home_ptr(base, serial, 8);
     let retained =
-        super::RetainedPtr::try_from_stack_value(crate::StackValue::ManagedPtr(pointer.into()))
-            .unwrap();
+        RetainedPtr::try_from_stack_value(crate::StackValue::ManagedPtr(pointer.into())).unwrap();
     assert_eq!(
         retained.checked_range(&live, 24).unwrap(),
         base.as_ptr().wrapping_add(8)
     );
     assert!(matches!(
         retained.checked_range(&live, 25),
-        Err(dotnet_types::error::MemoryAccessError::BoundsCheck { .. })
+        Err(MemoryAccessError::BoundsCheck { .. })
     ));
     assert!(matches!(
         retained.checked_range(&live, usize::MAX),
-        Err(dotnet_types::error::MemoryAccessError::BoundsCheck { .. })
+        Err(MemoryAccessError::BoundsCheck { .. })
     ));
     assert!(matches!(
         retained.checked_range(&NO_MANAGED_BASES, 1),
-        Err(dotnet_types::error::MemoryAccessError::InvalidOrigin)
+        Err(MemoryAccessError::InvalidOrigin)
     ));
 }
 

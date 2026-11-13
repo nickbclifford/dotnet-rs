@@ -131,7 +131,7 @@ pub trait TypedStackOps<'gc>: EvalStackOps<'gc> {
     fn push_isize(&mut self, value: isize) {
         self.push(StackValue::NativeInt(value));
     }
-    fn push_value_type(&mut self, value: dotnet_value::object::Object<'gc>) {
+    fn push_value_type(&mut self, value: Object<'gc>) {
         self.push(StackValue::ValueType(value));
     }
     fn push_managed_ptr(&mut self, value: ManagedPtr<'gc>) {
@@ -178,7 +178,7 @@ pub trait TypedStackOps<'gc>: EvalStackOps<'gc> {
         self.pop().as_ptr().addr()
     }
     #[must_use]
-    fn pop_value_type(&mut self) -> dotnet_value::object::Object<'gc> {
+    fn pop_value_type(&mut self) -> Object<'gc> {
         self.pop().as_value_type()
     }
     #[must_use]
@@ -434,15 +434,12 @@ pub trait MemoryOps<'gc> {
         element: dotnet_types::generics::ConcreteType,
         size: usize,
     ) -> Result<Vector<'gc>, TypeResolutionError>;
-    fn new_object(
-        &self,
-        td: TypeDescription,
-    ) -> Result<dotnet_value::object::Object<'gc>, TypeResolutionError>;
+    fn new_object(&self, td: TypeDescription) -> Result<Object<'gc>, TypeResolutionError>;
     fn new_object_with_lookup(
         &self,
         td: TypeDescription,
         _lookup: &dotnet_types::generics::GenericLookup,
-    ) -> Result<dotnet_value::object::Object<'gc>, TypeResolutionError> {
+    ) -> Result<Object<'gc>, TypeResolutionError> {
         self.new_object(td)
     }
     fn new_value_type(

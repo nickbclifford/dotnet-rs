@@ -77,7 +77,7 @@ pub fn unbox_any<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepR
             return StepResult::Continue;
         };
         if obj.0.is_none() {
-            if is_nullable {
+            return if is_nullable {
                 // ECMA-335 §III.4.33: unbox.any Nullable<T> on null produces a Nullable<T> with HasValue=false.
                 let td = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(target_ct.clone()));
                 let BaseType::Type { source, .. } = target_ct.get() else {
@@ -89,12 +89,11 @@ pub fn unbox_any<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepR
                 let instance = dotnet_vm_ops::vm_try!(ctx_with_generics.new_object(td));
 
                 ctx.push(StackValue::ValueType(instance));
-                return StepResult::Continue;
+                StepResult::Continue
             } else {
                 // unbox.any on null value type throws NullReferenceException (III.4.33)
-                return ctx
-                    .throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
-            }
+                ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG)
+            };
         }
 
         let result = dotnet_vm_ops::vm_try!(obj.try_as_heap_storage(

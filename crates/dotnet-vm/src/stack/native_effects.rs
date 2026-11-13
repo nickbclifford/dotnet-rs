@@ -144,7 +144,7 @@ pub(crate) struct PendingMonitorWait {
 
 struct NativeInitializerClaim {
     manager: crate::sync::Arc<crate::statics::StaticStorageManager>,
-    description: dotnet_types::TypeDescription,
+    description: TypeDescription,
     generics: GenericLookup,
     claim: crate::statics::InitializerClaim,
 }
@@ -429,9 +429,7 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
     fn active_scope_depth(&self) -> usize {
         self.context.local.active_borrows.get()
     }
-    fn class_constructor_target(
-        &mut self,
-    ) -> Result<(dotnet_types::TypeDescription, GenericLookup), VmError> {
+    fn class_constructor_target(&mut self) -> Result<(TypeDescription, GenericLookup), VmError> {
         let arg = self.operands.last().ok_or_else(|| {
             dotnet_types::error::ExecutionError::InternalError(
                 "class constructor operand missing".into(),
@@ -466,7 +464,7 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
     }
     fn probe_initializer(
         &mut self,
-        description: dotnet_types::TypeDescription,
+        description: TypeDescription,
         generics: &GenericLookup,
     ) -> Result<NativeInitProbe<'gc>, VmError> {
         let arity = description.definition().generic_parameters.len();
@@ -523,7 +521,7 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
     }
     fn wrap_initializer_failure(
         &mut self,
-        description: &dotnet_types::TypeDescription,
+        description: &TypeDescription,
         inner: Option<ObjectRef<'gc>>,
     ) -> Result<ObjectRef<'gc>, VmError> {
         let previous = *self.context.exception_mode;
@@ -1130,7 +1128,7 @@ impl<'gc> NativeIntrinsicHost<'gc> for VesContext<'_, 'gc> {
         if mode == NativeDispatchMode::Other {
             return match fallback {
                 Some(handler) => handler(self, method, generics),
-                None => dotnet_vm_data::StepResult::not_implemented(format!(
+                None => StepResult::not_implemented(format!(
                     "async intrinsic {method:?} reached through non-inline dispatch"
                 )),
             };

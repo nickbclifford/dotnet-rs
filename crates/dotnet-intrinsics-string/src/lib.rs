@@ -39,9 +39,9 @@ pub trait IntrinsicStringHost<'gc>: VmStringIntrinsicHost<'gc> {
         generics: &GenericLookup,
     ) -> StepResult;
 
-    fn string_with_span_data<'span, R, F: FnOnce(&[u8]) -> R>(
+    fn string_with_span_data<R, F: FnOnce(&[u8]) -> R>(
         &self,
-        span: Object<'span>,
+        span: Object<'_>,
         element_type: TypeDescription,
         element_size: usize,
         f: F,

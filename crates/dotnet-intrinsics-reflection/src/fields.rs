@@ -424,8 +424,8 @@ fn coerce_field_set_value_argument<'gc, T: ReflectionIntrinsicHost<'gc>>(
     }
 }
 
-fn read_instance_field_bytes<'gc>(
-    target_obj: ObjectRef<'gc>,
+fn read_instance_field_bytes(
+    target_obj: ObjectRef<'_>,
     field_parent: TypeDescription,
     field_name: &str,
 ) -> Result<Vec<u8>, dotnet_types::error::ExecutionError> {

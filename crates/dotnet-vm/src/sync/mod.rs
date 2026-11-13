@@ -92,7 +92,9 @@ impl MonitorWait {
     }
     #[cfg(all(test, feature = "multithreading"))]
     pub(crate) fn expire_for_test(&mut self) {
-        self.deadline = Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+        use std::time::{Duration, Instant};
+
+        self.deadline = Some(Instant::now() - Duration::from_secs(1));
     }
     pub(crate) fn sleep_deadline(&self) -> Option<std::time::Instant> {
         if self.id.is_some() {

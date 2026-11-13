@@ -1,4 +1,12 @@
+#[cfg(feature = "multithreading")]
+use super::super::RETIRED_QUIESCENCE_TEST_HOOK;
 use super::*;
+#[cfg(feature = "multithreading")]
+use crate::error::ExecutionError;
+use crate::{error::VmError, executor::WAIT_TEST_HOOK, test_utils::parameterless_i32_signature};
+use dotnet_utils::{ArenaId, ByteOffset};
+#[cfg(feature = "multithreading")]
+use std::sync::{Arc as StdArc, atomic::AtomicBool};
 
 fn condition_wait_method(executor: &Executor, object: bool) -> MethodDescription {
     use dotnetdll::{binary::signature::kinds::CallingConvention, resolved::types::TypeDefinition};
@@ -114,7 +122,7 @@ fn condition_wait_release_before_recheck_keeps_ownership() {
     use dotnet_vm_ops::effects::{NativeDispatchMode, NativeIntrinsicHost};
     let mut executor = executor();
     let method = condition_wait_method(&executor, true);
-    let owner = dotnet_utils::ArenaId::new(9999);
+    let owner = ArenaId::new(9999);
     let thread = executor.thread_id;
     let block = executor
         .with_arena(|arena| {
@@ -399,11 +407,11 @@ fn finalizer_wait_executor(test_self_wait: bool, cctor: bool) {
             })
         })
         .unwrap();
-    crate::executor::WAIT_TEST_HOOK.with(|hook| {
+    WAIT_TEST_HOOK.with(|hook| {
         *hook.borrow_mut() = Some(Box::new(|| panic!("ready finalizer wait must not park")));
     });
     assert!(matches!(executor.run(), ExecutorResult::Exited(0)));
-    crate::executor::WAIT_TEST_HOOK.with(|hook| drop(hook.borrow_mut().take()));
+    WAIT_TEST_HOOK.with(|hook| drop(hook.borrow_mut().take()));
     executor
         .with_arena(|arena| {
             arena.mutate(|_, engine| {
@@ -449,7 +457,7 @@ fn start_condition_monitor(
                     .push(Some((source, GCHandleType::Weak)));
                 let mut ctx = engine.ves_context(gc);
                 let block = ctx.monitor_get_or_create_sync_block_for_object(source, gc);
-                assert!(block.try_enter(dotnet_utils::ArenaId::new(9999)));
+                assert!(block.try_enter(ArenaId::new(9999)));
                 ctx.push(StackValue::Int32(0));
                 ctx.push(StackValue::ObjectRef(source));
                 install(block.clone());
@@ -472,7 +480,7 @@ fn start_condition_monitor(
 fn condition_wait_registration_schedules_do_not_lose_release() {
     use crate::stack::native_effects::{WAIT_TEST_HOOK, WaitTestPoint};
     use crate::sync::SyncBlockOps;
-    let owner = dotnet_utils::ArenaId::new(9999);
+    let owner = ArenaId::new(9999);
     for release_after_registration in [false, true] {
         let mut executor = executor();
         let thread = executor.thread_id;
@@ -508,7 +516,7 @@ fn condition_wait_registration_schedules_do_not_lose_release() {
 fn condition_wait_stale_release_never_grants_ownership() {
     use crate::stack::native_effects::{WAIT_TEST_HOOK, WaitTestPoint};
     use crate::sync::SyncBlockOps;
-    let owner = dotnet_utils::ArenaId::new(9999);
+    let owner = ArenaId::new(9999);
     let mut executor = executor();
     let thread = executor.thread_id;
     let (result, block) = start_condition_monitor(
@@ -541,7 +549,7 @@ fn condition_wait_stale_release_never_grants_ownership() {
 fn condition_wait_executor_parks_outside_mutation_and_wakes_on_release() {
     use crate::{sync::SyncBlockOps, test_utils::worker::Worker};
     use std::{sync::mpsc, thread, time::Duration};
-    let owner = dotnet_utils::ArenaId::new(9999);
+    let owner = ArenaId::new(9999);
     let mut executor = executor();
     let thread = executor.thread_id;
     let (result, block) = start_condition_monitor(&mut executor, |_| {}, condition_monitor_body);
@@ -596,10 +604,9 @@ fn condition_wait_cancel_does_not_manufacture_finalizer_readiness() {
         .unwrap();
     assert_eq!(resume(&mut executor), StepResult::Yield);
     let abort = executor.shared.abort_signal();
-    crate::executor::WAIT_TEST_HOOK
-        .with(|hook| *hook.borrow_mut() = Some(Box::new(move || abort.request_abort())));
+    WAIT_TEST_HOOK.with(|hook| *hook.borrow_mut() = Some(Box::new(move || abort.request_abort())));
     assert!(matches!(executor.run(), ExecutorResult::Error(_)));
-    crate::executor::WAIT_TEST_HOOK.with(|hook| assert!(hook.borrow().is_none()));
+    WAIT_TEST_HOOK.with(|hook| assert!(hook.borrow().is_none()));
     executor
         .with_arena(|arena| {
             arena.mutate(|_, engine| {
@@ -626,7 +633,7 @@ fn condition_timeout_body(
 #[test]
 fn condition_wait_timeout_does_not_acquire_or_release_monitor() {
     use crate::sync::SyncBlockOps;
-    let owner = dotnet_utils::ArenaId::new(9999);
+    let owner = ArenaId::new(9999);
     let mut executor = executor();
     let thread = executor.thread_id;
     let (result, block) = start_condition_monitor(&mut executor, |_| {}, condition_timeout_body);
@@ -642,7 +649,7 @@ fn condition_wait_timeout_does_not_acquire_or_release_monitor() {
 fn condition_wait_executor_participates_in_real_gc_stop() {
     use crate::{sync::SyncBlockOps, test_utils::worker::Worker};
     use std::{sync::mpsc, thread, time::Duration};
-    let owner = dotnet_utils::ArenaId::new(9999);
+    let owner = ArenaId::new(9999);
     let mut executor = executor();
     let thread = executor.thread_id;
     let (result, block) = start_condition_monitor(&mut executor, |_| {}, condition_monitor_body);
@@ -679,7 +686,7 @@ fn condition_wait_executor_participates_in_real_gc_stop() {
 fn condition_wait_spurious_and_duplicate_wakes_only_trigger_rechecks() {
     use crate::{sync::SyncBlockOps, test_utils::worker::Worker};
     use std::{sync::mpsc, thread, time::Duration};
-    let owner = dotnet_utils::ArenaId::new(9999);
+    let owner = ArenaId::new(9999);
     let mut executor = executor();
     let thread = executor.thread_id;
     let (result, block) = start_condition_monitor(&mut executor, |_| {}, condition_monitor_body);
@@ -717,14 +724,13 @@ fn condition_wait_spurious_and_duplicate_wakes_only_trigger_rechecks() {
 #[test]
 fn condition_wait_cancellation_releases_registration_without_releasing_monitor() {
     use crate::sync::SyncBlockOps;
-    let owner = dotnet_utils::ArenaId::new(9999);
+    let owner = ArenaId::new(9999);
     let mut executor = executor();
     let thread = executor.thread_id;
     let (result, block) = start_condition_monitor(&mut executor, |_| {}, condition_monitor_body);
     assert_eq!(result, StepResult::Yield);
     let abort = executor.shared.abort_signal();
-    crate::executor::WAIT_TEST_HOOK
-        .with(|hook| *hook.borrow_mut() = Some(Box::new(move || abort.request_abort())));
+    WAIT_TEST_HOOK.with(|hook| *hook.borrow_mut() = Some(Box::new(move || abort.request_abort())));
     assert!(matches!(executor.run(), ExecutorResult::Error(_)));
     executor
         .with_arena(|arena| {
@@ -751,7 +757,7 @@ fn condition_long_deadline_body(
 #[test]
 fn condition_wait_deadline_survives_real_collection() {
     use crate::{stack::native_effects::PendingWait, sync::SyncBlockOps};
-    let owner = dotnet_utils::ArenaId::new(9999);
+    let owner = ArenaId::new(9999);
     let mut executor = executor();
     let (result, block) =
         start_condition_monitor(&mut executor, |_| {}, condition_long_deadline_body);
@@ -803,7 +809,7 @@ fn condition_wait_deadline_survives_real_collection() {
 #[test]
 fn condition_wait_deadlines_and_notifications_are_activation_local() {
     use crate::{stack::native_effects::PendingWait, sync::SyncBlockOps};
-    let owner = dotnet_utils::ArenaId::new(9999);
+    let owner = ArenaId::new(9999);
     let mut executor = executor();
     let (result, first_block) =
         start_condition_monitor(&mut executor, |_| {}, condition_timeout_body);
@@ -847,9 +853,7 @@ fn condition_error_after_acquire_body(
     Box::pin(async move {
         let object = fx.vm().await?.pop_object()?;
         assert!(fx.monitor_enter(object, None).await?);
-        let error: dotnet_types::error::VmError =
-            dotnet_types::error::ExecutionError::InternalError("injected native failure".into())
-                .into();
+        let error: VmError = ExecutionError::InternalError("injected native failure".into()).into();
         Err(error.into())
     })
 }
@@ -858,7 +862,7 @@ fn condition_error_after_acquire_body(
 #[test]
 fn condition_wait_acquisition_survives_later_native_failure() {
     use crate::sync::SyncBlockOps;
-    let owner = dotnet_utils::ArenaId::new(9999);
+    let owner = ArenaId::new(9999);
     let mut executor = executor();
     let thread = executor.thread_id;
     let (result, block) =
@@ -946,7 +950,7 @@ fn condition_wait_foreign_monitor_owner_survives_collection() {
         command_tx,
     );
     let storage = source_rx.recv_timeout(Duration::from_secs(30)).unwrap();
-    let fake_owner = dotnet_utils::ArenaId::new(9999);
+    let fake_owner = ArenaId::new(9999);
     let waiter = executor.thread_id;
     let block = executor
         .with_arena(|arena| {
@@ -995,7 +999,7 @@ fn condition_wait_foreign_monitor_owner_survives_collection() {
 #[test]
 fn condition_wait_unprobed_monitor_rechecks_before_parking() {
     use crate::{stack::native_effects::PendingWait, sync::SyncBlockOps};
-    let owner = dotnet_utils::ArenaId::new(9999);
+    let owner = ArenaId::new(9999);
     let mut executor = executor();
     let thread = executor.thread_id;
     let (result, block) = start_condition_monitor(&mut executor, |_| {}, condition_monitor_body);
@@ -1019,11 +1023,11 @@ fn condition_wait_unprobed_monitor_rechecks_before_parking() {
         })
         .unwrap();
     assert!(block.exit(owner));
-    crate::executor::WAIT_TEST_HOOK.with(|hook| {
+    WAIT_TEST_HOOK.with(|hook| {
         *hook.borrow_mut() = Some(Box::new(|| panic!("unprobed monitor must not park")))
     });
     assert!(matches!(executor.run(), ExecutorResult::Exited(0)));
-    crate::executor::WAIT_TEST_HOOK.with(|hook| drop(hook.borrow_mut().take()));
+    WAIT_TEST_HOOK.with(|hook| drop(hook.borrow_mut().take()));
     assert!(block.exit(thread));
 }
 
@@ -1105,7 +1109,7 @@ fn monitor_byref_dispatch_writes_frame_home() {
                     address,
                     TypeDescription::NULL,
                     serial,
-                    dotnet_utils::ByteOffset::new(0),
+                    ByteOffset::new(0),
                     false,
                 );
                 let object = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("monitor")));
@@ -1136,7 +1140,7 @@ fn monitor_byref_contended_dispatch_survives_collection() {
     use dotnet_vm_ops::effects::NativeDispatchMode;
     let mut executor = executor();
     let method = monitor_byref_method(&executor);
-    let owner = dotnet_utils::ArenaId::new(9999);
+    let owner = ArenaId::new(9999);
     let thread = executor.thread_id;
     let (block, serial) = executor
         .with_arena(|arena| {
@@ -1165,7 +1169,7 @@ fn monitor_byref_contended_dispatch_survives_collection() {
                     address,
                     TypeDescription::NULL,
                     serial,
-                    dotnet_utils::ByteOffset::new(0),
+                    ByteOffset::new(0),
                     false,
                 );
                 let object = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("monitor")));
@@ -1306,7 +1310,7 @@ fn static_descriptor_body(
                 dotnet_value::pointer::PointerOrigin::Static(_)
             ));
             assert!(pointer.observe_address().is_none());
-            Ok::<_, dotnet_types::error::VmError>(())
+            Ok::<_, VmError>(())
         })??;
         // SAFETY: F10.RawMemoryAccessValid — this is an initialized static bool, accessed
         // exclusively by the test executor; the backend checks the complete range.
@@ -1347,7 +1351,7 @@ fn static_descriptor_survives_collection_and_resolves_raw_access() {
                     method.parent.clone(),
                     generics,
                     false,
-                    dotnet_utils::ByteOffset::ZERO,
+                    ByteOffset::ZERO,
                 );
                 ctx.push(StackValue::ObjectRef(ObjectRef(None)));
                 ctx.push(StackValue::Int32(0));
@@ -1380,7 +1384,7 @@ fn static_descriptor_survives_collection_and_resolves_raw_access() {
                     method.parent.clone(),
                     Default::default(),
                     false,
-                    dotnet_utils::ByteOffset::ZERO,
+                    ByteOffset::ZERO,
                 );
                 let mut byte = [0];
                 // SAFETY: F10.RawMemoryAccessValid — this is the initialized static bool field and the
@@ -1413,7 +1417,7 @@ fn monitor_static_byref_inline_and_out_of_bounds() {
             ctx.shared.statics.init(method.parent.clone(), &ctx.with_generics(&generics), ctx.thread_id.get()).unwrap();
             let length = ctx.shared.statics.get(method.parent.clone(), &generics).storage.with_data(|data| data.len());
             let offset = if out_of_bounds { length } else { 0 };
-            let pointer = ManagedPtr::new_static(None, TypeDescription::NULL, method.parent.clone(), generics, false, dotnet_utils::ByteOffset::new(offset));
+            let pointer = ManagedPtr::new_static(None, TypeDescription::NULL, method.parent.clone(), generics, false, ByteOffset::new(offset));
             let object = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("monitor")));
             let block = ctx.monitor_get_or_create_sync_block_for_object(object, gc);
             ctx.push(StackValue::ObjectRef(object));
@@ -1456,7 +1460,7 @@ fn monitor_static_operand_is_addressless_during_initial_gc_stop() {
         ctx.shared.statics.init(method.parent.clone(), &ctx.with_generics(&generics), ctx.thread_id.get()).unwrap();
         let storage = ctx.shared.statics.get(method.parent.clone(), &generics);
         let address = storage.storage.with_data(|data| std::ptr::NonNull::new(data.as_ptr().cast_mut()).unwrap());
-        let pointer = ManagedPtr::new_static(Some(address), TypeDescription::NULL, method.parent.clone(), generics, false, dotnet_utils::ByteOffset::ZERO);
+        let pointer = ManagedPtr::new_static(Some(address), TypeDescription::NULL, method.parent.clone(), generics, false, ByteOffset::ZERO);
         assert!(pointer.observe_address().is_some());
         let object = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("monitor")));
         let block = ctx.monitor_get_or_create_sync_block_for_object(object, gc);
@@ -1503,7 +1507,7 @@ fn monitor_static_timed_wait_survives_collection_and_writes_result() {
     for expire in [false, true] {
         let mut executor = executor();
         let method = timed_monitor_method(&executor);
-        let owner = dotnet_utils::ArenaId::new(9999);
+        let owner = ArenaId::new(9999);
         let thread = executor.thread_id;
         MONITOR_FLAG_WRITES
             .with(|writes| assert!(writes.borrow_mut().replace(Vec::new()).is_none()));
@@ -1513,7 +1517,7 @@ fn monitor_static_timed_wait_survives_collection_and_writes_result() {
             let mut ctx = engine.ves_context(gc);
             let generics = GenericLookup::default();
             ctx.shared.statics.init(method.parent.clone(), &ctx.with_generics(&generics), ctx.thread_id.get()).unwrap();
-            let pointer = ManagedPtr::new_static(None, TypeDescription::NULL, method.parent.clone(), generics, false, dotnet_utils::ByteOffset::ZERO);
+            let pointer = ManagedPtr::new_static(None, TypeDescription::NULL, method.parent.clone(), generics, false, ByteOffset::ZERO);
             let object = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("monitor")));
             let block = ctx.monitor_get_or_create_sync_block_for_object(object, gc);
             assert!(block.try_enter(owner));
@@ -1586,7 +1590,7 @@ fn monitor_unmanaged_timed_wait_survives_collection_and_writes_result() {
     for expire in [false, true] {
         let mut executor = executor();
         let method = timed_monitor_method(&executor);
-        let owner = dotnet_utils::ArenaId::new(9999);
+        let owner = ArenaId::new(9999);
         let thread = executor.thread_id;
         let mut flag = Box::new(0u8);
         let address = std::ptr::NonNull::from(flag.as_mut());
@@ -1661,10 +1665,7 @@ impl Drop for SimulatedMonitorContention {
 }
 
 #[cfg(not(feature = "multithreading"))]
-fn hold_monitor_for_timeout(
-    _: &crate::sync::SyncBlock,
-    _: dotnet_utils::ArenaId,
-) -> SimulatedMonitorContention {
+fn hold_monitor_for_timeout(_: &crate::sync::SyncBlock, _: ArenaId) -> SimulatedMonitorContention {
     // A single-threaded sync block always acquires, so emulate a failed probe while the
     // real driver handles the expired deadline and replies to the actual intrinsic.
     crate::sync::MONITOR_TEST_CONTENDED.with(|contended| {
@@ -1676,20 +1677,20 @@ fn hold_monitor_for_timeout(
 #[cfg(not(feature = "multithreading"))]
 fn release_monitor_for_test(
     _: &crate::sync::SyncBlock,
-    _: dotnet_utils::ArenaId,
+    _: ArenaId,
     contention: SimulatedMonitorContention,
 ) {
     drop(contention);
 }
 
 #[cfg(feature = "multithreading")]
-fn release_monitor_for_test(block: &crate::sync::SyncBlock, owner: dotnet_utils::ArenaId, _: bool) {
+fn release_monitor_for_test(block: &crate::sync::SyncBlock, owner: ArenaId, _: bool) {
     use crate::sync::SyncBlockOps;
     assert!(block.exit(owner));
 }
 
 #[cfg(feature = "multithreading")]
-fn hold_monitor_for_timeout(block: &crate::sync::SyncBlock, owner: dotnet_utils::ArenaId) -> bool {
+fn hold_monitor_for_timeout(block: &crate::sync::SyncBlock, owner: ArenaId) -> bool {
     use crate::sync::SyncBlockOps;
     assert!(block.try_enter(owner));
     true
@@ -1708,7 +1709,7 @@ fn monitor_timed_byref_alias_writes_once_for_timeout_and_acquisition() {
 
     let mut executor = executor();
     let method = timed_monitor_method(&executor);
-    let owner = dotnet_utils::ArenaId::new(9999);
+    let owner = ArenaId::new(9999);
     let thread = executor.thread_id;
     for (index, acquired) in [false, true].into_iter().enumerate() {
         let (block, contention) = executor.with_arena(|arena| arena.mutate_root(|gc, engine| {
@@ -1725,7 +1726,7 @@ fn monitor_timed_byref_alias_writes_once_for_timeout_and_acquisition() {
                 HeapStorage::Obj(obj) => obj.instance_storage.with_data(|data| std::ptr::NonNull::new(data.as_ptr().cast_mut())),
                 _ => unreachable!(),
             });
-            let pointer = ManagedPtr::new(address, TypeDescription::NULL, Some(flag), false, Some(dotnet_utils::ByteOffset::new(0)));
+            let pointer = ManagedPtr::new(address, TypeDescription::NULL, Some(flag), false, Some(ByteOffset::new(0)));
             engine.stack.local.heap.gchandles.borrow_mut().push(Some((flag, GCHandleType::Weak)));
             let object = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("monitor")));
             let mut ctx = engine.ves_context(gc);
@@ -1819,7 +1820,7 @@ fn monitor_timed_byref_writes_result_and_preserves_ownership() {
     use dotnet_vm_ops::effects::NativeDispatchMode;
     let mut executor = executor();
     let method = timed_monitor_method(&executor);
-    let owner = dotnet_utils::ArenaId::new(9999);
+    let owner = ArenaId::new(9999);
     let thread = executor.thread_id;
     executor.with_arena(|arena| arena.mutate_root(|gc, engine| {
         // SAFETY: F1.GcHandleRooted — the engine is the live arena root for this mutation.
@@ -1830,7 +1831,7 @@ fn monitor_timed_byref_writes_result_and_preserves_ownership() {
         let layout = dotnet_vm_data::frame_homes::FrameHomeLayout::new(layout, Box::new([]), Box::new([]));
         frames.current_frame_mut().homes = dotnet_vm_data::frame_homes::FrameHomes::allocate(Arc::new(layout), serial).unwrap();
         let (address, _) = frames.home_block(serial).unwrap();
-        let pointer = ManagedPtr::new_frame_home(address, TypeDescription::NULL, serial, dotnet_utils::ByteOffset::new(0), false);
+        let pointer = ManagedPtr::new_frame_home(address, TypeDescription::NULL, serial, ByteOffset::new(0), false);
         let object = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("monitor")));
         let mut ctx = engine.ves_context(gc);
         let block = ctx.monitor_get_or_create_sync_block_for_object(object, gc);
@@ -1867,7 +1868,7 @@ fn monitor_heap_byref_survives_collection_and_writes_owner() {
     use dotnet_vm_ops::effects::NativeDispatchMode;
     let mut executor = executor();
     let method = monitor_byref_method(&executor);
-    let owner = dotnet_utils::ArenaId::new(9999);
+    let owner = ArenaId::new(9999);
     let thread = executor.thread_id;
     let block = executor
         .with_arena(|arena| {
@@ -1900,7 +1901,7 @@ fn monitor_heap_byref_survives_collection_and_writes_owner() {
                     TypeDescription::NULL,
                     Some(flag),
                     false,
-                    Some(dotnet_utils::ByteOffset::new(0)),
+                    Some(ByteOffset::new(0)),
                 );
                 engine
                     .stack
@@ -1998,7 +1999,7 @@ fn monitor_byref_rejects_out_of_range_before_acquisition() {
                     one_past,
                     TypeDescription::NULL,
                     serial,
-                    dotnet_utils::ByteOffset::new(1),
+                    ByteOffset::new(1),
                     false,
                 );
                 let object = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("monitor")));
@@ -2057,7 +2058,7 @@ fn monitor_heap_byref_survives_stop_before_dispatch() {
                     TypeDescription::NULL,
                     Some(flag),
                     false,
-                    Some(dotnet_utils::ByteOffset::new(0)),
+                    Some(ByteOffset::new(0)),
                 );
                 engine
                     .stack
@@ -2109,7 +2110,7 @@ fn monitor_wait_rejects_retired_frame_home_without_unlocking() {
     use dotnet_vm_ops::effects::NativeDispatchMode;
     let mut executor = executor();
     let method = monitor_byref_method(&executor);
-    let owner = dotnet_utils::ArenaId::new(9999);
+    let owner = ArenaId::new(9999);
     let thread = executor.thread_id;
     let block = executor
         .with_arena(|arena| {
@@ -2138,7 +2139,7 @@ fn monitor_wait_rejects_retired_frame_home_without_unlocking() {
                     address,
                     TypeDescription::NULL,
                     serial,
-                    dotnet_utils::ByteOffset::new(0),
+                    ByteOffset::new(0),
                     false,
                 );
                 let object = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("monitor")));
@@ -2172,7 +2173,7 @@ fn monitor_timed_dispatch_keeps_deadline_across_collection() {
     use dotnet_vm_ops::effects::NativeDispatchMode;
     let mut executor = executor();
     let method = timed_monitor_method(&executor);
-    let owner = dotnet_utils::ArenaId::new(9999);
+    let owner = ArenaId::new(9999);
     let thread = executor.thread_id;
     let (block, serial, deadline) = executor.with_arena(|arena| arena.mutate_root(|gc, engine| {
         // SAFETY: F1.GcHandleRooted — the engine is the live arena root for this mutation.
@@ -2183,7 +2184,7 @@ fn monitor_timed_dispatch_keeps_deadline_across_collection() {
         let layout = dotnet_vm_data::frame_homes::FrameHomeLayout::new(layout, Box::new([]), Box::new([]));
         frames.current_frame_mut().homes = dotnet_vm_data::frame_homes::FrameHomes::allocate(Arc::new(layout), serial).unwrap();
         let (address, _) = frames.home_block(serial).unwrap();
-        let pointer = ManagedPtr::new_frame_home(address, TypeDescription::NULL, serial, dotnet_utils::ByteOffset::new(0), false);
+        let pointer = ManagedPtr::new_frame_home(address, TypeDescription::NULL, serial, ByteOffset::new(0), false);
         let object = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("monitor")));
         let mut ctx = engine.ves_context(gc);
         let block = ctx.monitor_get_or_create_sync_block_for_object(object, gc);
@@ -2377,7 +2378,7 @@ fn retired_owner_remains_registered_while_other_arena_has_queued_finalizer() {
     let (ready_tx, ready_rx) = mpsc::channel();
     let (probe_tx, probe_rx) = mpsc::channel();
     let worker = shared.workers.spawn_owner(move |running| {
-        super::super::RETIRED_QUIESCENCE_TEST_HOOK.with(|hook| {
+        RETIRED_QUIESCENCE_TEST_HOOK.with(|hook| {
             *hook.borrow_mut() = Some(Box::new(move |quiescent| {
                 let _ = probe_tx.send(quiescent);
             }));
@@ -2615,7 +2616,7 @@ fn sleep_park_participates_in_gc_and_abort() {
         }),
         (),
     );
-    crate::executor::WAIT_TEST_HOOK.with(|hook| {
+    WAIT_TEST_HOOK.with(|hook| {
         *hook.borrow_mut() = Some(Box::new(move || {
             start_tx.send(()).unwrap();
         }))
@@ -2682,7 +2683,7 @@ fn start_pulse_wait(
 fn monitor_pulse_schedules_preserve_wake_and_recursion() {
     use crate::stack::native_effects::{WAIT_TEST_HOOK, WaitTestPoint};
     use crate::sync::SyncBlockOps;
-    let other = dotnet_utils::ArenaId::new(9999);
+    let other = ArenaId::new(9999);
     for schedule in 0..3 {
         let mut executor = executor();
         let thread = executor.thread_id;
@@ -2730,9 +2731,9 @@ fn monitor_timeout_and_pulse_are_serialized_and_cancel_removes_waiter() {
     use crate::sync::{MonitorWait, SyncBlockOps, SyncManagerOps};
     use std::time::{Duration, Instant};
     let (_, block) = crate::sync::SyncBlockManager::new().create_sync_block();
-    let a = dotnet_utils::ArenaId::new(100);
-    let b = dotnet_utils::ArenaId::new(101);
-    let c = dotnet_utils::ArenaId::new(102);
+    let a = ArenaId::new(100);
+    let b = ArenaId::new(101);
+    let c = ArenaId::new(102);
     assert!(block.try_enter(a));
     assert!(block.pulse(a, false)); // No future waiter inherits this pulse.
     let mut expired = MonitorWait::begin(
@@ -2865,7 +2866,7 @@ fn native_monitor_wait_pulse_restores_recursion_after_suspension() {
     let mut executor = executor();
     let method = validation_method(&executor, true, false, true);
     let thread = executor.thread_id;
-    let other = dotnet_utils::ArenaId::new(9999);
+    let other = ArenaId::new(9999);
     let block = executor
         .with_arena(|arena| {
             arena.mutate_root(|gc, engine| {
@@ -3136,7 +3137,7 @@ fn monitor_enter_aliases_validate_before_acquiring() {
                             address,
                             TypeDescription::NULL,
                             serial,
-                            dotnet_utils::ByteOffset::new(0),
+                            ByteOffset::new(0),
                             false,
                         );
                         let object =
@@ -3413,7 +3414,7 @@ fn transient_monitor_byref_is_rejected_before_commitment() {
         let layout = Arc::new(FieldLayoutManager { fields: Default::default(), total_size: 1, alignment: 1, gc_desc: GcDesc::default(), has_ref_fields: false });
         let object = Object::new(TypeDescription::NULL, GenericLookup::default(), FieldStorage::new(layout, vec![0]));
         let address = object.with_data(|data| std::ptr::NonNull::new(data.as_ptr().cast_mut()));
-        let pointer = ManagedPtr::new_transient(address, TypeDescription::NULL, object, dotnet_utils::ByteOffset::ZERO);
+        let pointer = ManagedPtr::new_transient(address, TypeDescription::NULL, object, ByteOffset::ZERO);
         ctx.push(StackValue::ObjectRef(ObjectRef(None)));
         ctx.push(StackValue::ManagedPtr(pointer.into()));
         let before = ctx.evaluation_stack.stack.clone();
@@ -3616,7 +3617,7 @@ fn pool_worker_parks_participates_in_gc_reuses_executor_and_shuts_down() {
     executor.shared.loader.register_owned_assembly(corlib);
     let (mut res, _, type_idx) = make_test_assembly!("PoolWorker.dll", "PoolWorker", "Worker");
     res[type_idx].extends = None;
-    let mut setter_sig = crate::test_utils::parameterless_i32_signature();
+    let mut setter_sig = parameterless_i32_signature();
     setter_sig.instance = true;
     setter_sig.parameters.push(Parameter(
         vec![],
@@ -3632,7 +3633,7 @@ fn pool_worker_parks_participates_in_gc_reuses_executor_and_shuts_down() {
             Some(make_test_method!(max_stack: 1, instructions: vec![Instruction::Return])),
         ),
     );
-    let dispatch_idx = res.push_method(type_idx, Method::new(Accessibility::Public, crate::test_utils::parameterless_i32_signature(), "Dispatch", Some(make_test_method!(max_stack: 1, instructions: vec![Instruction::LoadConstantInt32(1), Instruction::Return]))));
+    let dispatch_idx = res.push_method(type_idx, Method::new(Accessibility::Public, parameterless_i32_signature(), "Dispatch", Some(make_test_method!(max_stack: 1, instructions: vec![Instruction::LoadConstantInt32(1), Instruction::Return]))));
     let res = executor.shared.loader.register_owned_assembly(res);
     let ty = TypeDescription::new(res.clone(), type_idx);
     let describe = |index| {
@@ -3739,7 +3740,7 @@ fn pool_tuning_out_parameters_write_checked_frame_homes() {
                         address,
                         TypeDescription::NULL,
                         serial,
-                        dotnet_utils::ByteOffset::new(offset),
+                        ByteOffset::new(offset),
                         false,
                     )
                 };
@@ -3921,7 +3922,7 @@ fn event_wait_parked_gc_and_signal() {
         (),
     );
     ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    crate::executor::WAIT_TEST_HOOK.with(|hook| {
+    WAIT_TEST_HOOK.with(|hook| {
         *hook.borrow_mut() = Some(Box::new(move || {
             start_tx.send(()).unwrap();
         }))
@@ -3945,8 +3946,7 @@ fn event_wait_spurious_wakes_and_abort_remove_registration() {
     event.notify_spurious();
     assert_eq!(resume(&mut executor), StepResult::Yield);
     let abort = executor.shared.abort_signal();
-    crate::executor::WAIT_TEST_HOOK
-        .with(|hook| *hook.borrow_mut() = Some(Box::new(move || abort.request_abort())));
+    WAIT_TEST_HOOK.with(|hook| *hook.borrow_mut() = Some(Box::new(move || abort.request_abort())));
     assert!(matches!(executor.run(), ExecutorResult::Error(_)));
     assert_eq!(event.waiter_count(), 0);
     event.set();
@@ -4212,7 +4212,7 @@ fn join_timeout_survives_collection() {
                         started: true,
                         background: false,
                         completion_index: Some(completion.index()),
-                        retained: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                        retained: StdArc::new(AtomicBool::new(true)),
                     },
                 );
                 let mut ctx = engine.ves_context(gc);
@@ -4253,7 +4253,7 @@ fn static_storage_identity_ignores_generic_argument_resolution() {
     handle_res.assembly = Some(Assembly::new("HandleSide"));
     let corlib = executor.shared.loader.register_owned_assembly(handle_res);
     let other = method.parent.resolution.clone();
-    assert!(corlib != other);
+    assert_ne!(corlib, other);
     let int_in = |res: &ResolutionS| ConcreteType::new(res.clone(), BaseType::Int32);
     let vector_in =
         |res: &ResolutionS| ConcreteType::new(res.clone(), BaseType::Vector(vec![], int_in(res)));
@@ -4269,8 +4269,8 @@ fn static_storage_identity_ignores_generic_argument_resolution() {
                 for shape in [&int_in as &dyn Fn(&ResolutionS) -> ConcreteType, &vector_in] {
                     let via_handle = lookup(shape, &corlib);
                     let via_field = lookup(shape, &other);
-                    assert!(
-                        via_handle != via_field,
+                    assert_ne!(
+                        via_handle, via_field,
                         "raw lookups must differ by resolution"
                     );
                     let statics = ctx.shared.statics.clone();

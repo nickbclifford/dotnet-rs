@@ -37,6 +37,13 @@ Known problems without a plan. Write a plan for one only when it is chosen as th
 Evidence and IDs (p01…, R01…) are defined in the
 [pointer-provenance inventory](../pointer-provenance/INVENTORY.md).
 
+- **Async build-script probe API drift:** `scripts/tests/async_dispatch_probe.rs` calls
+  `VesContext::unified_dispatch_for_engine_api` and
+  `VesContext::dispatch_resolved_method_for_engine_api`, which are absent from the current
+  VM source; the operation surface instead exposes `VmCallOps::unified_dispatch` and
+  `VesContext::dispatch_method_inline`. `./check.sh --full` fails probe 4 at its temporary
+  nextest selector with E0599 before reaching the shared feature matrix. Align this independent
+  probe with the supported API before relying on the full build-script lane.
 - **VM fuzz lockfile drift:** `crates/dotnet-vm/fuzz/Cargo.lock` lacks the VM's direct
   `dotnet-simd` dependency. A `cargo check --locked` of that manifest fails; reconcile the
   standalone fuzz lockfile with the workspace dependencies.

@@ -88,7 +88,7 @@ pub(crate) unsafe fn cross_arena_ptr_from_ptr<T>(
 impl<'gc> ManagedPtr<'gc> {
     pub(crate) fn retained_stack_value_lease(
         value: &crate::StackValue<'gc>,
-    ) -> Result<Option<dotnet_utils::gc::ArenaLease>, dotnet_types::error::ExecutionError> {
+    ) -> Result<Option<ArenaLease>, dotnet_types::error::ExecutionError> {
         let pointer = match value {
             crate::StackValue::ManagedPtr(pointer) => pointer,
             crate::StackValue::TypedRef(slot) => slot.value(),

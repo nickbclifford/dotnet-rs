@@ -913,7 +913,10 @@ pub(crate) enum FinalizeStage {
 }
 
 #[cfg(test)]
-type FinalizeHook = std::sync::Arc<dyn Fn(FinalizeStage) + Send + Sync>;
+use std::sync::Arc as StdArc;
+
+#[cfg(test)]
+type FinalizeHook = StdArc<dyn Fn(FinalizeStage) + Send + Sync>;
 
 /// Lets a test order the arenas' `Finalize` commands, which the coordinator otherwise runs
 /// concurrently. The hook runs on whichever thread executes the command and must identify

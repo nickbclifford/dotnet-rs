@@ -20,7 +20,7 @@ use dotnet_value::{
     string::CLRString,
 };
 use dotnet_vm_ops::NULL_REF_MSG;
-use dotnetdll::prelude::{BaseType, TypeSource, UserType};
+use dotnetdll::prelude::{BaseType, MethodType, TypeSource, UserType};
 
 #[dotnet_intrinsic("object System.Object::MemberwiseClone()")]
 pub fn object_memberwise_clone<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc> + MemoryOps<'gc>>(
@@ -110,14 +110,14 @@ fn integral_constant_as_i128(c: &dotnetdll::prelude::Constant) -> Option<i128> {
 fn read_enum_value(obj: &Object<'_>) -> Option<(i128, bool)> {
     let enum_type = obj.description.clone();
     let underlying = enum_type.is_enum()?;
-    let method_type: dotnetdll::prelude::MethodType = underlying.clone().into();
-    let dotnetdll::prelude::MethodType::Base(base) = method_type else {
+    let method_type: MethodType = underlying.clone().into();
+    let MethodType::Base(base) = method_type else {
         return None;
     };
 
     match &*base {
         // An enum's single instance field (ECMA-335 II.14.3) is read by its compiler-emitted name `value__`.
-        dotnetdll::prelude::BaseType::Int8 => Some((
+        BaseType::Int8 => Some((
             i128::from(
                 obj.instance_storage
                     .field::<i8>(enum_type, "value__")?
@@ -125,7 +125,7 @@ fn read_enum_value(obj: &Object<'_>) -> Option<(i128, bool)> {
             ),
             true,
         )),
-        dotnetdll::prelude::BaseType::UInt8 => Some((
+        BaseType::UInt8 => Some((
             i128::from(
                 obj.instance_storage
                     .field::<u8>(enum_type, "value__")?
@@ -133,7 +133,7 @@ fn read_enum_value(obj: &Object<'_>) -> Option<(i128, bool)> {
             ),
             false,
         )),
-        dotnetdll::prelude::BaseType::Int16 => Some((
+        BaseType::Int16 => Some((
             i128::from(
                 obj.instance_storage
                     .field::<i16>(enum_type, "value__")?
@@ -141,7 +141,7 @@ fn read_enum_value(obj: &Object<'_>) -> Option<(i128, bool)> {
             ),
             true,
         )),
-        dotnetdll::prelude::BaseType::UInt16 => Some((
+        BaseType::UInt16 => Some((
             i128::from(
                 obj.instance_storage
                     .field::<u16>(enum_type, "value__")?
@@ -149,7 +149,7 @@ fn read_enum_value(obj: &Object<'_>) -> Option<(i128, bool)> {
             ),
             false,
         )),
-        dotnetdll::prelude::BaseType::Int32 => Some((
+        BaseType::Int32 => Some((
             i128::from(
                 obj.instance_storage
                     .field::<i32>(enum_type, "value__")?
@@ -157,7 +157,7 @@ fn read_enum_value(obj: &Object<'_>) -> Option<(i128, bool)> {
             ),
             true,
         )),
-        dotnetdll::prelude::BaseType::UInt32 => Some((
+        BaseType::UInt32 => Some((
             i128::from(
                 obj.instance_storage
                     .field::<u32>(enum_type, "value__")?
@@ -165,7 +165,7 @@ fn read_enum_value(obj: &Object<'_>) -> Option<(i128, bool)> {
             ),
             false,
         )),
-        dotnetdll::prelude::BaseType::Int64 => Some((
+        BaseType::Int64 => Some((
             i128::from(
                 obj.instance_storage
                     .field::<i64>(enum_type, "value__")?
@@ -173,7 +173,7 @@ fn read_enum_value(obj: &Object<'_>) -> Option<(i128, bool)> {
             ),
             true,
         )),
-        dotnetdll::prelude::BaseType::UInt64 => Some((
+        BaseType::UInt64 => Some((
             i128::from(
                 obj.instance_storage
                     .field::<u64>(enum_type, "value__")?
@@ -181,13 +181,13 @@ fn read_enum_value(obj: &Object<'_>) -> Option<(i128, bool)> {
             ),
             false,
         )),
-        dotnetdll::prelude::BaseType::IntPtr => Some((
+        BaseType::IntPtr => Some((
             obj.instance_storage
                 .field::<isize>(enum_type, "value__")?
                 .read() as i128,
             true,
         )),
-        dotnetdll::prelude::BaseType::UIntPtr => Some((
+        BaseType::UIntPtr => Some((
             obj.instance_storage
                 .field::<usize>(enum_type, "value__")?
                 .read() as i128,
@@ -200,8 +200,8 @@ fn read_enum_value(obj: &Object<'_>) -> Option<(i128, bool)> {
 fn read_enum_bits(obj: &Object<'_>) -> Option<(TypeDescription, u128)> {
     let enum_type = obj.description.clone();
     let underlying = enum_type.is_enum()?;
-    let method_type: dotnetdll::prelude::MethodType = underlying.clone().into();
-    let dotnetdll::prelude::MethodType::Base(base) = method_type else {
+    let method_type: MethodType = underlying.clone().into();
+    let MethodType::Base(base) = method_type else {
         return None;
     };
 
@@ -336,7 +336,7 @@ pub(super) fn format_enum_value_from_type(
     }
 }
 
-pub(super) fn scalar_enum_value_from_stack<'gc>(value: StackValue<'gc>) -> Option<(i128, bool)> {
+pub(super) fn scalar_enum_value_from_stack(value: StackValue<'_>) -> Option<(i128, bool)> {
     match value.coerce_enum_to_underlying() {
         StackValue::Int32(v) => Some((i128::from(v), true)),
         StackValue::Int64(v) => Some((i128::from(v), true)),
@@ -346,7 +346,7 @@ pub(super) fn scalar_enum_value_from_stack<'gc>(value: StackValue<'gc>) -> Optio
     }
 }
 
-pub(super) fn enum_type_from_stack_value<'gc>(value: &StackValue<'gc>) -> Option<TypeDescription> {
+pub(super) fn enum_type_from_stack_value(value: &StackValue<'_>) -> Option<TypeDescription> {
     match value {
         StackValue::ValueType(vt) => Some(vt.description.clone()),
         StackValue::ObjectRef(obj_ref) => obj_ref.as_heap_storage(type_from_heap_storage),
@@ -363,7 +363,7 @@ pub(super) fn generic_enum_type(generics: &GenericLookup) -> Option<TypeDescript
         .first()
         .or_else(|| generics.type_generics.first())?;
 
-    let dotnetdll::prelude::BaseType::Type {
+    let BaseType::Type {
         source: TypeSource::User(UserType::Definition(index)),
         ..
     } = concrete.get()
@@ -441,7 +441,7 @@ pub(super) fn object_get_type<
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    fn runtime_type_from_desc(td: dotnet_types::TypeDescription) -> RuntimeType {
+    fn runtime_type_from_desc(td: TypeDescription) -> RuntimeType {
         match td.type_name().as_str() {
             "System.Boolean" => RuntimeType::Boolean,
             "System.Char" => RuntimeType::Char,

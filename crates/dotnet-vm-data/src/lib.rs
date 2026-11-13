@@ -90,7 +90,7 @@ pub struct MethodInfo<'a> {
     /// Maximum evaluation stack depth declared for this method body.
     pub max_stack: usize,
     /// Parsed protected sections (`try`/handler regions) used during SEH dispatch.
-    pub exceptions: Vec<Arc<exceptions::ProtectedSection>>,
+    pub exceptions: Vec<Arc<ProtectedSection>>,
     /// Decoded IL instruction stream for interpreter dispatch.
     pub instructions: &'a [Instruction],
     /// Method identity key used for cache lookup and intrinsic interception.

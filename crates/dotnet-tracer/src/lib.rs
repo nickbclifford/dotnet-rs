@@ -67,7 +67,7 @@ enum LogEntry {
     DumpStaticsSnapshot(String),
     DumpFullStateHeader,
     DumpGcStats(usize, usize, usize, usize, usize),
-    DumpRuntimeMetrics(u64, u64, u64, u64, Box<dotnet_metrics::CacheStats>),
+    DumpRuntimeMetrics(u64, u64, u64, u64, Box<CacheStats>),
     DroppedByBackpressure(u64),
     Flush(u64, Sender<()>),
 }
@@ -707,7 +707,7 @@ fn init_tracing() {
         // File output requires explicit Arc/Mutex wrapper if we want to use BoxMakeWriter easily
         // But File::create can fail. We must handle it.
         if let Ok(file) = File::create(&path) {
-            fmt::writer::BoxMakeWriter::new(std::sync::Arc::new(file))
+            fmt::writer::BoxMakeWriter::new(Arc::new(file))
         } else {
             // Fallback to stdout if file fails
             fmt::writer::BoxMakeWriter::new(stdout)

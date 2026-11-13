@@ -254,7 +254,7 @@ pub(crate) fn build_generic_lookup_from_runtime_type<T: LoaderOps>(
     lookup
 }
 
-pub(crate) fn string_from_heap_obj<'gc>(name_obj: ObjectRef<'gc>) -> Result<String, VmError> {
+pub(crate) fn string_from_heap_obj(name_obj: ObjectRef<'_>) -> Result<String, VmError> {
     let name = name_obj
         .try_as_heap_storage(|s| match s {
             HeapStorage::Str(s) => Ok(s.as_string()),

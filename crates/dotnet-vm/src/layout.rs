@@ -119,6 +119,7 @@ mod tests {
         reason = "the AssemblyLoader is confined to this single-threaded layout test"
     )]
     fn runtime_handle_value_slots_use_object_ref_layout() {
+        use std::mem::size_of;
         let loader = Arc::new(
             AssemblyLoader::new(
                 find_dotnet_app_path()
@@ -162,8 +163,7 @@ mod tests {
                 .gc_desc
                 .for_each_word_index(|index| traced_slots.push(index));
             assert!(
-                traced_slots
-                    .contains(&(value_field.position.as_usize() / std::mem::size_of::<usize>())),
+                traced_slots.contains(&(value_field.position.as_usize() / size_of::<usize>())),
                 "{}._value must be present in the GC descriptor",
                 handle_type.type_name()
             );

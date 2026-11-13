@@ -12,8 +12,11 @@ mod tests {
         resolution::ResolutionS,
     };
     use dotnet_utils::sync::Arc;
+    #[cfg(feature = "multithreading")]
+    use dotnet_utils::sync::AtomicBool;
     use dotnetdll::prelude::BaseType;
     use hashbrown::HashMap;
+    use std::sync::{Arc as StdArc, atomic::AtomicUsize};
 
     // Compact ObjectRef codec regressions.
     #[cfg(feature = "multithreading")]
@@ -23,10 +26,7 @@ mod tests {
     impl RecreationRegistration {
         fn new(id: u64) -> Self {
             let id = crate::ArenaId::new(id);
-            dotnet_utils::gc::register_arena(
-                id,
-                dotnet_utils::sync::Arc::new(dotnet_utils::sync::AtomicBool::new(false)),
-            );
+            dotnet_utils::gc::register_arena(id, Arc::new(AtomicBool::new(false)));
             Self(id)
         }
     }
@@ -175,7 +175,7 @@ mod tests {
 
     #[derive(gc_arena::Collect)]
     #[collect(require_static)]
-    struct RecreationWitness(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+    struct RecreationWitness(StdArc<AtomicUsize>);
 
     impl Drop for RecreationWitness {
         fn drop(&mut self) {
@@ -199,7 +199,7 @@ mod tests {
 
     fn publication_drops(barrier: bool) -> usize {
         use std::sync::atomic::Ordering;
-        let drops = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let drops = StdArc::new(AtomicUsize::new(0));
         let mut arena =
             gc_arena::Arena::<gc_arena::Rootable![RecreationPublicationRoot]>::new(|_| {
                 RecreationPublicationRoot(std::cell::Cell::new(None))

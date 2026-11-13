@@ -204,7 +204,7 @@ pub fn intrinsic_string_ctor_char_array<'gc, T: IntrinsicStringHost<'gc>>(
                         let start = offset * 2;
                         let end = start + (chunk_len * 2);
                         if let Some(chunk_bytes) = bytes.get(start..end) {
-                            crate::extend_from_utf16_ne_bytes(&mut result, chunk_bytes);
+                            extend_from_utf16_ne_bytes(&mut result, chunk_bytes);
                         }
                     });
                     offset += chunk_len;

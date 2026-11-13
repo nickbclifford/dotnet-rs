@@ -18,15 +18,18 @@ use dotnet_utils::{
     sync::{Arc, Ordering},
 };
 use dotnet_value::StackValue;
+#[cfg(feature = "multithreading")]
+use dotnet_value::object::ObjectPtr;
 #[cfg(not(feature = "fuzzing"))]
-use dotnet_value::{
-    object::{HeapStorage, ObjectRef},
-    string::CLRString,
-};
+use dotnet_value::object::ObjectRef;
+#[cfg(not(feature = "fuzzing"))]
+use dotnet_value::{object::HeapStorage, string::CLRString};
 use dotnet_vm_data::ManagedException;
 #[cfg(not(feature = "fuzzing"))]
 use dotnet_vm_ops::{LoaderOps, MemoryOps};
 use dotnetdll::prelude::{BaseType, MethodType, ParameterType};
+#[cfg(feature = "multithreading")]
+use std::sync::atomic::Ordering as StdOrdering;
 
 #[cfg(feature = "multithreading")]
 use crate::gc::arena::ArenaOwner;
@@ -477,7 +480,7 @@ impl Executor {
         if let Some(retained) = retained
             && cleanup.is_ok()
         {
-            retained.store(false, std::sync::atomic::Ordering::Release);
+            retained.store(false, StdOrdering::Release);
         }
         let result = cleanup.map_or_else(ExecutorResult::Error, |_| result);
         executor.serve_retired(worker.complete(result));
@@ -737,10 +740,8 @@ impl Executor {
                     // SAFETY: F1.GcHandleRooted — the creating and starting arenas retain these
                     // objects in traced thread records until this worker's cleanup has
                     // completed. Those arenas cannot be destroyed while this worker is running.
-                    let decode = |ptr: dotnet_value::object::ObjectPtr| unsafe {
-                        dotnet_value::object::ObjectRef::from_storage_ptr(
-                            ptr.as_ptr().cast_mut().cast(),
-                        )
+                    let decode = |ptr: ObjectPtr| unsafe {
+                        ObjectRef::from_storage_ptr(ptr.as_ptr().cast_mut().cast())
                     };
                     let thread = decode(start.thread);
                     let delegate = decode(start.delegate);

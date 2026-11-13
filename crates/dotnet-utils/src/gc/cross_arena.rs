@@ -473,7 +473,9 @@ fn drain_leases(thread_id: ArenaId, state: Arc<ArenaState>) {
 
         thread::yield_now();
         yield_count += 1;
-        spin_budget = (spin_budget.saturating_mul(2)).min(UNREGISTER_LEASE_SPIN_MAX_ITERS);
+        spin_budget = spin_budget
+            .saturating_mul(2)
+            .min(UNREGISTER_LEASE_SPIN_MAX_ITERS);
 
         let elapsed = wait_start.elapsed();
         if elapsed >= next_warn_at {
@@ -857,6 +859,7 @@ mod lease_tests {
     fn unregister_waits_for_outstanding_lease() {
         use std::sync::Arc as StdArc;
         use std::sync::atomic::AtomicBool as StdAtomicBool;
+        use std::{thread, time::Duration};
 
         let id = ArenaId::new(10_005);
         register_arena(id, stw_flag());
@@ -869,14 +872,14 @@ mod lease_tests {
         let unregister_returned = StdArc::new(StdAtomicBool::new(false));
         let unregister_returned_clone = unregister_returned.clone();
 
-        let unregister_thread = std::thread::spawn(move || {
+        let unregister_thread = thread::spawn(move || {
             // This must block until the lease is dropped.
             unregister_arena(id);
             unregister_returned_clone.store(true, Ordering::Release);
         });
 
         // Give the unregister thread time to reach the spin loop.
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        thread::sleep(Duration::from_millis(20));
 
         // unregister should NOT have returned yet because we still hold the lease.
         assert!(
@@ -1664,12 +1667,12 @@ mod tests {
         let generations = AtomicU64::new(u64::MAX - 1);
         let tokens = AtomicU32::new(u32::MAX - 1);
         let next_generation = || {
-            generations.fetch_update(StdAtomicOrdering::SeqCst, StdAtomicOrdering::SeqCst, |n| {
+            generations.try_update(StdAtomicOrdering::SeqCst, StdAtomicOrdering::SeqCst, |n| {
                 n.checked_add(1)
             })
         };
         let next_token = || {
-            tokens.fetch_update(StdAtomicOrdering::SeqCst, StdAtomicOrdering::SeqCst, |n| {
+            tokens.try_update(StdAtomicOrdering::SeqCst, StdAtomicOrdering::SeqCst, |n| {
                 n.checked_add(1)
             })
         };

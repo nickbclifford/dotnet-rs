@@ -17,7 +17,7 @@ use dotnet_value::{
     pointer::{ManagedPtr, NoManagedPtrResolver, PointerOrigin, unmanaged_ptr_from_addr},
     storage::FieldStorage,
 };
-use std::{ptr, ptr::NonNull, sync::Arc};
+use std::{mem::size_of, ptr, ptr::NonNull, sync::Arc};
 
 #[cfg(all(feature = "bench-instrumentation", feature = "multithreading"))]
 use std::time::Instant;
@@ -166,7 +166,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 let base = data.as_mut_ptr();
                 let len = data.len();
                 let ptr = base.wrapping_add(offset.as_usize());
-                self.check_bounds_internal(ptr, base, len, std::mem::size_of::<*mut u8>())?;
+                self.check_bounds_internal(ptr, base, len, size_of::<*mut u8>())?;
                 // SAFETY: F10.RawMemoryAccessValid — `check_bounds_internal` proved a pointer-sized slot inside `data`, `with_data_mut` holds the owner's write guard, and this function's `# Safety` contract says the slot holds an initialized object reference.
                 unsafe { op.execute(ptr) }.ok_or(MemoryAccessError::UnalignedAccess(ptr.addr()))
             })??;
@@ -2075,23 +2075,25 @@ mod tests {
     /// arena) so `OpaqueObjectPtr::from_raw`'s contract holds truthfully.
     #[cfg(feature = "multithreading")]
     fn dummy_wb_entry() -> crate::write_barrier::WbEntry {
-        use dotnet_value::object::{HeapStorage, ObjectInner};
-        let arena = Box::leak(Box::new(gc_arena::Arena::<gc_arena::Rootable![()]>::new(
-            |_| (),
-        )));
+        use dotnet_utils::gc::ThreadSafeLock;
+        use dotnet_value::{
+            CLRString,
+            object::{HeapStorage, ObjectInner},
+        };
+        use gc_arena::{Arena, Gc};
+
+        let arena = Box::leak(Box::new(Arena::<gc_arena::Rootable![()]>::new(|_| ())));
         let ptr = arena.mutate(|gc, _| {
-            let object = gc_arena::Gc::new(
+            let object = Gc::new(
                 gc,
-                dotnet_utils::gc::ThreadSafeLock::new(ObjectInner::new(
-                    HeapStorage::Str(dotnet_value::CLRString::from("wb-dummy")),
+                ThreadSafeLock::new(ObjectInner::new(
+                    HeapStorage::Str(CLRString::from("wb-dummy")),
                     ArenaId::new(0),
                 )),
             );
             // SAFETY: F11.ObjectPointerThreadSafe — direct `Gc::as_ptr` of the concrete
             // object type; the leaked arena keeps it live and nothing dereferences it.
-            unsafe {
-                dotnet_utils::gc::OpaqueObjectPtr::from_raw(gc_arena::Gc::as_ptr(object).cast())
-            }
+            unsafe { dotnet_utils::gc::OpaqueObjectPtr::from_raw(Gc::as_ptr(object).cast()) }
         });
         let identity = dotnet_utils::gc::ArenaIdentity {
             arena_id: ArenaId::new(0),
@@ -2168,7 +2170,7 @@ mod tests {
     use gc_arena::{Arena, Rootable};
 
     #[cfg(feature = "multithreading")]
-    fn storage_is_string<'a>(storage: &HeapStorage<'a>) -> bool {
+    fn storage_is_string(storage: &HeapStorage<'_>) -> bool {
         matches!(storage, HeapStorage::Str(_))
     }
 

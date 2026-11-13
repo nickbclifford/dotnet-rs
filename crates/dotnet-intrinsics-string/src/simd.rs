@@ -1,3 +1,5 @@
+use core::mem::size_of_val;
+
 #[inline]
 pub fn probe_sequence_equal_u16(lhs: &[u16], rhs: &[u16]) -> Option<bool> {
     if lhs.len() != rhs.len() {
@@ -7,7 +9,7 @@ pub fn probe_sequence_equal_u16(lhs: &[u16], rhs: &[u16]) -> Option<bool> {
         return None;
     }
 
-    let byte_len = core::mem::size_of_val(lhs);
+    let byte_len = size_of_val(lhs);
     // SAFETY: F10.RawMemoryAccessValid — `u16` slices are contiguous; converting to an equal-size byte view is safe.
     let lhs_bytes = unsafe { core::slice::from_raw_parts(lhs.as_ptr().cast::<u8>(), byte_len) };
     // SAFETY: F10.RawMemoryAccessValid — Same as `lhs_bytes`.

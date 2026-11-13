@@ -14,6 +14,8 @@ use super::*;
 #[cfg(feature = "multithreading")]
 use crate::test_utils::foreign_reference::{decode_reference, encode_reference};
 use dotnet_assemblies::AssemblyLoader;
+#[cfg(feature = "multithreading")]
+use dotnet_utils::{ArenaId, gc::OpaqueObjectPtr};
 use dotnet_value::object::{HeapStorage, ObjectRef};
 use dotnet_value::string::CLRString;
 #[cfg(feature = "multithreading")]
@@ -105,8 +107,7 @@ fn run_vm_collection(root_in_a: bool) -> Vec<Option<String>> {
     use std::{sync::mpsc, thread, time::Duration};
 
     let state = shared();
-    let (ptr_tx, ptr_rx) =
-        mpsc::channel::<(dotnet_utils::ArenaId, dotnet_value::storage::FieldStorage)>();
+    let (ptr_tx, ptr_rx) = mpsc::channel::<(ArenaId, dotnet_value::storage::FieldStorage)>();
     let (collected_tx, collected_rx) = mpsc::channel::<()>();
     let (probe_tx, probe_rx) = mpsc::channel::<Option<String>>();
     let b_state = Arc::clone(&state);
@@ -300,14 +301,14 @@ fn arena_lifetime_vm_collection_fixed_point_payload_and_reclamation() {
     }
 
     type OwnerHandoff = (
-        dotnet_utils::ArenaId,
+        ArenaId,
         Handoff,
         Worker<(), mpsc::Sender<Cmd>>,
         mpsc::Receiver<Option<String>>,
     );
 
     fn spawn_owner(state: &Arc<SharedGlobalState>, vector: bool) -> OwnerHandoff {
-        let (ptr_tx, ptr_rx) = mpsc::channel::<(dotnet_utils::ArenaId, Handoff)>();
+        let (ptr_tx, ptr_rx) = mpsc::channel::<(ArenaId, Handoff)>();
         let (cmd_tx, cmd_rx) = mpsc::channel::<Cmd>();
         let (reply_tx, reply_rx) = mpsc::channel::<Option<String>>();
         let owner_state = Arc::clone(state);
@@ -562,7 +563,7 @@ fn arena_lifetime_mark_command_rejects_stale_registration() {
         );
         // SAFETY: F11.ObjectPointerThreadSafe — this pointer is directly from
         // the live replacement arena's Gc allocation of the concrete pointee.
-        unsafe { dotnet_utils::gc::OpaqueObjectPtr::from_raw(Gc::as_ptr(object).cast()) }
+        unsafe { OpaqueObjectPtr::from_raw(Gc::as_ptr(object).cast()) }
     });
     // SAFETY: F1.ArenaGenerationMatch — this object belongs to the replacement
     // arena under the new registration, which remains live through the command.
@@ -570,7 +571,7 @@ fn arena_lifetime_mark_command_rejects_stale_registration() {
         unsafe { dotnet_utils::gc::CrossArenaRef::new(new_identity, replacement_ptr) };
 
     // Also carry a valid pointer owned by a different ID to this destination.
-    let foreign_id = dotnet_utils::ArenaId::new(8_001_042);
+    let foreign_id = ArenaId::new(8_001_042);
     register_arena(foreign_id, Arc::new(AtomicBool::new(true)));
     let foreign_identity = try_acquire_lease(foreign_id).unwrap().identity();
     let foreign_arena = gc_arena::Arena::<gc_arena::Rootable![()]>::new(|_| ());
@@ -584,7 +585,7 @@ fn arena_lifetime_mark_command_rejects_stale_registration() {
         );
         // SAFETY: F11.ObjectPointerThreadSafe — direct pointer to this live
         // foreign arena's concrete Gc allocation; no access is performed.
-        unsafe { dotnet_utils::gc::OpaqueObjectPtr::from_raw(Gc::as_ptr(object).cast()) }
+        unsafe { OpaqueObjectPtr::from_raw(Gc::as_ptr(object).cast()) }
     });
     // SAFETY: F1.ArenaGenerationMatch — this live foreign allocation was made
     // under the foreign registration, which stays live through the command.

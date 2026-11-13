@@ -2,7 +2,7 @@ use crate::{
     is_ptr_aligned_to_field,
     sync::{AtomicPtr, Ordering},
 };
-use std::ptr;
+use std::{mem::align_of, ptr};
 
 #[cfg(feature = "multithreading")]
 use std::sync::atomic::{AtomicU8, AtomicU16, AtomicU32, AtomicU64};
@@ -333,7 +333,7 @@ impl PointerAtomicOp {
     /// `slot` must be valid for a pointer-sized access, initialized as a
     /// pointer slot, and synchronized against conflicting non-atomic accesses.
     pub unsafe fn execute(self, slot: *mut u8) -> Option<(*mut u8, bool)> {
-        let aligned = is_ptr_aligned_to_field(slot, std::mem::align_of::<AtomicPtr<u8>>());
+        let aligned = is_ptr_aligned_to_field(slot, align_of::<AtomicPtr<u8>>());
         if !aligned {
             validate_atomic_access(slot, false);
             return match self {
@@ -344,7 +344,7 @@ impl PointerAtomicOp {
                 Self::Store(value, _) => {
                     // SAFETY: F10.RawMemoryAccessValid — `slot` is a valid, synchronized pointer slot per this function's `# Safety` contract; `write_unaligned` needs no alignment.
                     unsafe { slot.cast::<*mut u8>().write_unaligned(value) };
-                    Some((std::ptr::null_mut(), true))
+                    Some((ptr::null_mut(), true))
                 }
                 _ => None,
             };
@@ -356,7 +356,7 @@ impl PointerAtomicOp {
             Self::Load(order) => (atomic.load(order), false),
             Self::Store(value, order) => {
                 atomic.store(value, order);
-                (std::ptr::null_mut(), true)
+                (ptr::null_mut(), true)
             }
             Self::Exchange(value, order) => (atomic.swap(value, order), true),
             Self::CompareExchange(expected, value, success, failure) => {
@@ -372,6 +372,7 @@ impl PointerAtomicOp {
 #[cfg(test)]
 mod pointer_atomic_tests {
     use super::{Ordering, PointerAtomicOp};
+    use std::ptr;
 
     #[test]
     #[expect(
@@ -406,7 +407,7 @@ mod pointer_atomic_tests {
                     .unwrap();
             assert!(changed);
             assert_eq!(*previous.cast::<u32>(), 11);
-            let (previous, _) = PointerAtomicOp::Exchange(std::ptr::null_mut(), Ordering::SeqCst)
+            let (previous, _) = PointerAtomicOp::Exchange(ptr::null_mut(), Ordering::SeqCst)
                 .execute(ptr)
                 .unwrap();
             assert_eq!(*previous.cast::<u32>(), 22);
@@ -926,7 +927,7 @@ mod tests {
     #[test]
     fn test_orderings() {
         let mut val = 0u64;
-        let ptr = std::ptr::from_mut(&mut val).cast::<u8>();
+        let ptr = ptr::from_mut(&mut val).cast::<u8>();
 
         // Valid load orderings.
         for ord in [Ordering::Relaxed, Ordering::Acquire, Ordering::SeqCst] {
@@ -958,7 +959,7 @@ mod tests {
     #[should_panic(expected = "Invalid store ordering")]
     fn test_invalid_store_ordering() {
         let mut val = 0u64;
-        let ptr = std::ptr::from_mut(&mut val).cast::<u8>();
+        let ptr = ptr::from_mut(&mut val).cast::<u8>();
         // SAFETY: F4.WidthAligned — `ptr` points to the live local `u64` used by this test.
         unsafe {
             StandardAtomicAccess::store_atomic_sized(ptr, 8, 42, Ordering::Acquire);
@@ -969,7 +970,7 @@ mod tests {
     #[cfg(feature = "memory-validation")]
     fn test_mixed_access_validation() {
         let mut val = 0u64;
-        let ptr = std::ptr::from_mut(&mut val).cast::<u8>();
+        let ptr = ptr::from_mut(&mut val).cast::<u8>();
         // SAFETY: F4.WidthAligned — `ptr` points to the live local `u64` used by this test.
         unsafe {
             // This should not panic, but it will populate ATOMIC_LOCATIONS

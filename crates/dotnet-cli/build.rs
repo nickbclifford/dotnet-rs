@@ -213,10 +213,23 @@ fn main() {
         let uses_console_in_fuzzing = is_fuzzing_enabled
             && (test_name.starts_with("delegates_delegate_multicast_")
                 || test_name.starts_with("exceptions_nested_filter_")
-                || test_name == "statics_cctor_filter_42"
                 || matches!(
                     test_name.as_str(),
-                    "strings_substring_fallback_42"
+                    "statics_cctor_filter_42"
+                        | "statics_cctor_filter_call_42"
+                        | "statics_cctor_filter_delegate_42"
+                        | "statics_cctor_filter_delegate_multicast_42"
+                        | "statics_cctor_filter_newobj_42"
+                        | "statics_cctor_filter_reflection_42"
+                        | "statics_cctor_filter_run_class_constructor_42"
+                        | "statics_cctor_run_class_constructor_42"
+                        | "gc_finalizer_allocation_42"
+                        | "gc_finalizer_cctor_self_wait_42"
+                        | "gc_finalizer_self_wait_42"
+                        | "reflection_invoke_byref_like_42"
+                        | "reflection_invoke_collect_42"
+                        | "reflection_invoke_values_42"
+                        | "strings_substring_fallback_42"
                         | "strings_substring_chunks_42"
                         | "gc_weak_reference_liveness_42"
                 ))

@@ -27,7 +27,7 @@ use std::collections::{HashSet, VecDeque};
 
 fn resolve_base_runtime_type(
     loader: &impl TypeResolver,
-    curr_td: &dotnet_types::TypeDescription,
+    curr_td: &TypeDescription,
     curr_lookup: &GenericLookup,
 ) -> Option<RuntimeType> {
     let base_source = curr_td.definition().extends.as_ref()?;
@@ -366,7 +366,7 @@ pub fn intrinsic_type_get_enum_underlying_type<'gc, T: ReflectionIntrinsicHost<'
     };
     // The enum's underlying type (e.g. `Int32`) is a non-generic primitive, so an
     // empty generic lookup is sufficient to resolve it.
-    let method_type: dotnetdll::prelude::MethodType = member.into();
+    let method_type: MethodType = member.into();
     let lookup = ctx.reflection_empty_generics();
     let Some(underlying_rt) = runtime_type_from_method_type(
         ctx.loader().as_ref(),

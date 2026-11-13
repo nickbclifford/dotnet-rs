@@ -305,7 +305,7 @@ impl<'gc> Default for HeapManager<'gc> {
     }
 }
 
-fn object_size<'gc>(obj: ObjectRef<'gc>) -> Option<usize> {
+fn object_size(obj: ObjectRef<'_>) -> Option<usize> {
     let inner_gc = obj.0?;
     let inner = inner_gc.borrow();
     Some(match &inner.storage {

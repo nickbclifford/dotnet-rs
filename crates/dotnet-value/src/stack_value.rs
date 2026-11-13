@@ -231,7 +231,7 @@ fn extract_shift_amount(v: StackValue<'_>) -> Result<u32, ExecutionError> {
 
 /// Observes an address without rooting the owner, retaining a borrow, or granting access.
 #[inline]
-fn managed_ptr_to_raw<'gc>(m: &StackManagedPtr<'gc>) -> *mut u8 {
+fn managed_ptr_to_raw(m: &StackManagedPtr<'_>) -> *mut u8 {
     m.observe_address()
         .map_or(std::ptr::null_mut(), NonNull::as_ptr)
 }
@@ -1137,6 +1137,7 @@ impl<'gc> Neg for StackValue<'gc> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pointer::FrameHomeSerial;
 
     #[test]
     fn test_stack_value_arithmetic() {
@@ -1185,9 +1186,7 @@ mod tests {
             false,
             Some(ByteOffset::new(3)),
         )
-        .with_origin(PointerOrigin::FrameHome(
-            crate::pointer::FrameHomeSerial::new(1),
-        ));
+        .with_origin(PointerOrigin::FrameHome(FrameHomeSerial::new(1)));
         let managed = StackValue::ManagedPtr(ptr.into());
         let numeric = StackValue::NativeInt(address.as_ptr().addr() as isize);
 
@@ -1201,7 +1200,7 @@ mod tests {
     #[test]
     fn typed_reference_slot_copy_retains_type_lifetime_and_pointer_origin() {
         let type_desc = Arc::new(TypeDescription::NULL);
-        let origin = PointerOrigin::FrameHome(crate::pointer::FrameHomeSerial::new(7));
+        let origin = PointerOrigin::FrameHome(FrameHomeSerial::new(7));
         let ptr = ManagedPtr::new(
             Some(NonNull::dangling()),
             TypeDescription::NULL,

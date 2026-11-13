@@ -21,7 +21,7 @@ static NEXT_MANAGED_ID: AtomicI32 = AtomicI32::new(1);
 
 pub(crate) fn next_managed_id() -> i32 {
     NEXT_MANAGED_ID
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
         .expect("managed thread ID exhaustion")
 }
 

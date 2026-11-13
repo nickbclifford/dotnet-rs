@@ -1,3 +1,4 @@
+use crate::stack::ops::StaticFieldAction;
 use crate::{
     MethodInfo, ResolutionContext, StepResult,
     resolution::{TypeResolutionExt, ValueResolution},
@@ -8,7 +9,7 @@ use crate::{
 use dotnet_tracer::Tracer;
 use dotnet_types::{
     TypeDescription,
-    error::{ExecutionError, TypeResolutionError},
+    error::{ExecutionError, TypeResolutionError, VmError},
     generics::GenericLookup,
     members::MethodDescription,
 };
@@ -85,7 +86,7 @@ pub(crate) struct NativeActivation<'gc> {
 #[collect(no_drop, gc_lifetime = 'gc)]
 pub(crate) struct InstructionCompletion<'gc> {
     #[collect(require_static)]
-    pub action: super::ops::StaticFieldAction,
+    pub action: StaticFieldAction,
     // INVARIANT: F1.GcHandleRooted — the traced activation retains a store value until completion.
     pub operand: Option<StackValue<'gc>>,
 }
@@ -298,15 +299,12 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
     }
 
     #[inline]
-    pub(crate) fn on_pop_safe(&mut self) -> Result<(), crate::error::VmError> {
+    pub(crate) fn on_pop_safe(&mut self) -> Result<(), VmError> {
         if let Some(frame) = self.frame_stack.current_frame_opt_mut() {
-            frame.stack_height =
-                frame
-                    .stack_height
-                    .checked_sub(1usize)
-                    .ok_or(crate::error::VmError::Execution(
-                        crate::error::ExecutionError::StackUnderflow,
-                    ))?;
+            frame.stack_height = frame
+                .stack_height
+                .checked_sub(1usize)
+                .ok_or(VmError::Execution(ExecutionError::StackUnderflow))?;
         }
         Ok(())
     }

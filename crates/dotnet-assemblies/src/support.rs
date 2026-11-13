@@ -241,7 +241,7 @@ impl AssemblyLoader {
                 }
 
                 let data = attribute
-                    .instantiation_data(&(self as &AssemblyLoader), support_res)
+                    .instantiation_data(&self, support_res)
                     .map_err(|e| {
                         AssemblyLoadError::InvalidFormat(
                             format!("failed to parse [Stub] metadata on {type_name}: {e}").into(),
@@ -439,14 +439,14 @@ impl AssemblyLoader {
                                 .into(),
                         });
                     }
-                    let data = a
-                        .instantiation_data(&(self as &AssemblyLoader), support_res)
-                        .map_err(|e| AssemblyLoadError::SupportContractViolation {
+                    let data = a.instantiation_data(&self, support_res).map_err(|e| {
+                        AssemblyLoadError::SupportContractViolation {
                             type_name: type_name.into(),
                             field_name: field_name.into(),
                             reason: format!("failed to parse RuntimeSlot attribute data: {e}")
                                 .into(),
-                        })?;
+                        }
+                    })?;
                     let id = parse_runtime_slot_id(&data.constructor_args).map_err(|reason| {
                         AssemblyLoadError::SupportContractViolation {
                             type_name: type_name.into(),

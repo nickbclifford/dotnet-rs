@@ -1439,7 +1439,7 @@ mod tests {
     fn snapshot_includes_always_on_gc_pause_percentiles() {
         let metrics = RuntimeMetrics::new();
         for micros in [10_u64, 20, 30, 40, 50] {
-            metrics.record_gc_pause(std::time::Duration::from_micros(micros));
+            metrics.record_gc_pause(Duration::from_micros(micros));
         }
 
         let cache_sizes = empty_cache_sizes();

@@ -654,7 +654,7 @@ impl<'gc> FieldType for ManagedPtr<'gc> {
             ManagedPtr::read_resolved_unchecked(bytes, &crate::pointer::NoManagedPtrResolver)
                 .expect("bytes were written by ManagedPtr::write_to for this same field")
         };
-        ManagedPtr::from_info_full(info, dotnet_types::TypeDescription::NULL, false)
+        ManagedPtr::from_info_full(info, TypeDescription::NULL, false)
     }
     fn write_to(&self, bytes: &mut [u8]) {
         // FieldType is infallible, so a Transient pointer is written even though its

@@ -15,6 +15,7 @@ use dotnet_value::{StackValue, object::ObjectRef, pointer::ManagedPtr};
 use dotnet_vm_data::StepResult;
 use dotnet_vm_ops::ops::RawMemoryOps;
 use dotnetdll::prelude::BaseType;
+use std::mem::size_of;
 
 /// `System.Threading.Volatile::Read<T>(ref T location)`
 #[dotnet_intrinsic("static T System.Threading.Volatile::Read<T>(T&)")]
@@ -39,7 +40,7 @@ pub fn intrinsic_volatile_read<'gc, T: ThreadingIntrinsicHost<'gc>>(
     let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     debug_assert_eq!(
         ObjectRef::SIZE,
-        std::mem::size_of::<usize>(),
+        size_of::<usize>(),
         "ObjectRef must be pointer-sized for atomic pointer loads"
     );
     let target_type = dotnet_vm_ops::vm_try!(resolve_atomic_ref_target_type(
@@ -238,7 +239,7 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
     let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     debug_assert_eq!(
         ObjectRef::SIZE,
-        std::mem::size_of::<usize>(),
+        size_of::<usize>(),
         "ObjectRef must be pointer-sized for atomic pointer stores"
     );
     let value = ctx.pop();

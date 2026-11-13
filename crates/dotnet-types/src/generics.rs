@@ -186,7 +186,7 @@ impl ConcreteType {
                 {
                     let desc = crate::members::MethodDescription::new(
                         td.clone(),
-                        crate::generics::GenericLookup::default(),
+                        GenericLookup::default(),
                         td.resolution.clone(),
                         dotnetdll::prelude::MethodMemberIndex::Method(idx),
                     );

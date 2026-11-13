@@ -63,13 +63,13 @@ pub trait VmStackOps<'gc>: StackOps<'gc> {
     fn local_address(
         &self,
         index: crate::LocalIndex,
-    ) -> Result<StackValue<'gc>, crate::error::TypeResolutionError>;
+    ) -> Result<StackValue<'gc>, TypeResolutionError>;
     /// A byref to argument `index`: into its stable frame home. Unsupported address-taking
     /// returns an error.
     fn argument_address(
         &self,
         index: crate::ArgumentIndex,
-    ) -> Result<StackValue<'gc>, crate::error::TypeResolutionError>;
+    ) -> Result<StackValue<'gc>, TypeResolutionError>;
 }
 
 pub trait VmRawMemoryOps<'gc>: RawMemoryOps<'gc> {

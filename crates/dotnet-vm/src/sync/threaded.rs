@@ -100,7 +100,7 @@ impl SyncBlock {
     }
 }
 
-impl super::SyncBlockOps for SyncBlock {
+impl SyncBlockOps for SyncBlock {
     fn try_enter(&self, thread_id: ArenaId) -> bool {
         let mut state = self.state.lock();
         if state.owner_thread_id == ArenaId::INVALID {
@@ -141,7 +141,7 @@ impl super::SyncBlockOps for SyncBlock {
         use std::time::{Duration, Instant};
 
         if timeout_ms == 0 {
-            return super::SyncBlockOps::try_enter(self, thread_id);
+            return SyncBlockOps::try_enter(self, thread_id);
         }
 
         let mut state = match self.lock_and_try_enter(thread_id) {

@@ -8,6 +8,8 @@ use dotnet_value::object::ObjectPtr;
 #[cfg(feature = "multithreading")]
 use std::collections::HashMap;
 #[cfg(feature = "multithreading")]
+use std::sync::{Arc as StdArc, Condvar as StdCondvar, Mutex as StdMutex, atomic::AtomicBool};
+#[cfg(feature = "multithreading")]
 use std::thread::JoinHandle;
 
 type Outcome = std::thread::Result<ExecutorResult>;
@@ -34,7 +36,7 @@ struct Entry {
 #[derive(Default)]
 struct RegistryState {
     entries: Vec<Entry>,
-    completion_signal: std::sync::Arc<(std::sync::Mutex<()>, std::sync::Condvar)>,
+    completion_signal: StdArc<(StdMutex<()>, StdCondvar)>,
     // Keys and delegate pointers are inert: their allocations remain rooted by arena-local
     // records while the worker can use them, and the registry never dereferences them.
     // Completed entries may outlive their allocations and are replaced on address reuse.
@@ -50,7 +52,7 @@ pub(crate) struct ManagedThreadMetadata {
     pub(crate) started: bool,
     pub(crate) background: bool,
     pub(crate) completion_index: Option<usize>,
-    pub(crate) retained: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub(crate) retained: StdArc<AtomicBool>,
 }
 
 /// The completion and the handle share one lifecycle lock, but only the registry owns handles.
@@ -384,7 +386,7 @@ impl RunningWorker {
 }
 
 #[cfg(feature = "multithreading")]
-fn notify_completion(signal: &(std::sync::Mutex<()>, std::sync::Condvar)) {
+fn notify_completion(signal: &(StdMutex<()>, StdCondvar)) {
     // Check completion while holding this same lock, so notification cannot be lost
     // between the check and parking on the condition variable.
     let _guard = signal.0.lock().unwrap_or_else(|e| e.into_inner());

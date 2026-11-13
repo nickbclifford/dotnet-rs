@@ -15,7 +15,7 @@ use dotnet_value::{
     },
     object::ObjectRef,
 };
-use dotnetdll::prelude::*;
+use dotnetdll::{binary::signature::attribute::IntegralParam, prelude::*};
 use std::sync::Arc;
 use tracing::trace;
 
@@ -30,9 +30,7 @@ impl LayoutFactory {
         C: crate::ResolverCacheAdapter,
         L: crate::ResolverLayoutAdapter,
     {
-        fn integral_to_usize(
-            value: &dotnetdll::binary::signature::attribute::IntegralParam,
-        ) -> Option<usize> {
+        fn integral_to_usize(value: &IntegralParam) -> Option<usize> {
             use dotnetdll::binary::signature::attribute::IntegralParam;
             let signed = match value {
                 IntegralParam::Int8(v) => i64::from(*v),

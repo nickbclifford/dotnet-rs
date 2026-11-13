@@ -14,8 +14,8 @@ mod tests {
     use dotnetdll::{
         prelude::*,
         resolved::{
-            self as resolved_mod,
-            members::{Field, Method},
+            Accessibility as ResolvedAccessibility,
+            members::{Accessibility as MemberAccessibility, Field, Method},
             types::{BaseType, TypeDefinition},
         },
     };
@@ -116,9 +116,7 @@ mod tests {
             type_modifiers: vec![],
             by_ref: false,
             return_type,
-            accessibility: resolved_mod::members::Accessibility::Access(
-                resolved_mod::Accessibility::Public,
-            ),
+            accessibility: MemberAccessibility::Access(ResolvedAccessibility::Public),
             static_member: true,
             init_only: false,
             literal: false,

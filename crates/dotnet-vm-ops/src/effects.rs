@@ -3,7 +3,7 @@ use std::{
     cell::{Cell, RefCell},
     future::Future,
     pin::Pin,
-    ptr,
+    ptr::{self, NonNull},
     rc::Rc,
     task::{Context, Poll, Waker},
 };
@@ -52,7 +52,7 @@ enum RootCellValue<'gc> {
         offset: ByteOffset,
         pinned: bool,
         #[collect(require_static)]
-        unmanaged_address: Option<std::ptr::NonNull<u8>>,
+        unmanaged_address: Option<NonNull<u8>>,
     },
 }
 
@@ -179,7 +179,7 @@ impl RootedValue {
                         if offset.as_usize() > length {
                             return Err(internal("native frame home offset out of range"));
                         }
-                        std::ptr::NonNull::new(base.as_ptr().wrapping_add(offset.as_usize()))
+                        NonNull::new(base.as_ptr().wrapping_add(offset.as_usize()))
                     } else {
                         let pointer = ManagedPtr::from_info_full(
                             ManagedPtrInfo {
@@ -383,7 +383,7 @@ pub trait NativeBackend<'gc> {
     }
     fn operands(&mut self) -> &mut Vec<StackValue<'gc>>;
     fn push_new_string(&mut self, chars: Vec<u16>) -> Result<(), VmError>;
-    fn frame_home_block(&self, _serial: FrameHomeSerial) -> Option<(std::ptr::NonNull<u8>, usize)> {
+    fn frame_home_block(&self, _serial: FrameHomeSerial) -> Option<(NonNull<u8>, usize)> {
         None
     }
     fn multicast_target(
@@ -1289,15 +1289,15 @@ impl VmEffects {
                 let value = match value {
                     Ok(value) => value,
                     Err(exception) if capture => {
-                        match self
-                            .control
-                            .enter(|region| region.fetch(&exception).map(|_| ()))
-                        {
-                            Ok(Ok(())) => {
-                                return Poll::Ready(Err(NativeFailure::Managed(exception)));
-                            }
-                            Ok(Err(error)) | Err(error) => return Poll::Ready(Err(error.into())),
-                        }
+                        return Poll::Ready(
+                            match self
+                                .control
+                                .enter(|region| region.fetch(&exception).map(|_| ()))
+                            {
+                                Ok(Ok(())) => Err(NativeFailure::Managed(exception)),
+                                Ok(Err(error)) | Err(error) => Err(error.into()),
+                            },
+                        );
                     }
                     Err(_) => {
                         return Poll::Ready(Err(
@@ -1350,27 +1350,27 @@ impl VmEffects {
                     };
                     return Err(NativeFailure::Managed(exception));
                 }
-                RootedInitProbe::Execute(call, mut claim) => match self.try_call(call).await {
-                    Ok(NativeValue::Void) => {
-                        claim.succeed();
-                        return Ok(());
-                    }
-                    Ok(_) => return Err(internal("initializer returned a value").into()),
-                    Err(NativeFailure::Host(error)) => return Err(error.into()),
-                    Err(NativeFailure::Managed(inner)) => {
-                        let exception = {
+                RootedInitProbe::Execute(call, mut claim) => {
+                    return match self.try_call(call).await {
+                        Ok(NativeValue::Void) => {
+                            claim.succeed();
+                            Ok(())
+                        }
+                        Ok(_) => Err(internal("initializer returned a value").into()),
+                        Err(NativeFailure::Host(error)) => Err(error.into()),
+                        Err(NativeFailure::Managed(inner)) => {
                             let mut vm = self.vm().await?;
-                            vm.with(|region| {
+                            let exception = vm.with(|region| {
                                 region.wrap_initializer_failure(
                                     &description,
                                     Some(&inner),
                                     Some(claim.as_mut()),
                                 )
-                            })??
-                        };
-                        return Err(NativeFailure::Managed(exception));
-                    }
-                },
+                            })??;
+                            Err(NativeFailure::Managed(exception))
+                        }
+                    };
+                }
                 RootedInitProbe::Waiting(wait) => self.wait_initializer(wait).await?,
             }
         }
@@ -1762,7 +1762,7 @@ impl VmString<'_, '_> {
                 return Err(internal("native string output exceeds range"));
             }
             let end = offset
-                .checked_add((length.saturating_sub(offset)).min(64 * 1024))
+                .checked_add(length.saturating_sub(offset).min(64 * 1024))
                 .and_then(|n| start.checked_add(n))
                 .ok_or_else(|| internal("native string range overflow"))?;
             let from = start
@@ -2799,7 +2799,7 @@ mod tests {
         struct HomeBackend<'gc> {
             mock: Mock<'gc>,
             serial: FrameHomeSerial,
-            block: Option<(std::ptr::NonNull<u8>, usize)>,
+            block: Option<(NonNull<u8>, usize)>,
         }
         impl<'gc> NativeBackend<'gc> for HomeBackend<'gc> {
             fn stop_requested(&self) -> bool {
@@ -2814,10 +2814,7 @@ mod tests {
             fn push_new_string(&mut self, _: Vec<u16>) -> Result<(), VmError> {
                 unreachable!()
             }
-            fn frame_home_block(
-                &self,
-                serial: FrameHomeSerial,
-            ) -> Option<(std::ptr::NonNull<u8>, usize)> {
+            fn frame_home_block(&self, serial: FrameHomeSerial) -> Option<(NonNull<u8>, usize)> {
                 (serial == self.serial).then_some(self.block).flatten()
             }
         }
@@ -2825,8 +2822,8 @@ mod tests {
         arena.mutate(|mc, _| {
             let mut bytes = [0u8; 8];
             let serial = FrameHomeSerial::new(7);
-            let base = std::ptr::NonNull::from(&mut bytes[0]);
-            let address = std::ptr::NonNull::from(&mut bytes[2]);
+            let base = NonNull::from(&mut bytes[0]);
+            let address = NonNull::from(&mut bytes[2]);
             let pointer = ManagedPtr::new_frame_home(
                 address,
                 dotnet_types::TypeDescription::NULL,

@@ -16,12 +16,17 @@ use dotnet_types::{
 use dotnet_utils::{BorrowScopeOps, gc::GCHandle};
 use dotnet_value::{
     StackValue,
+    layout::LayoutManager,
     object::{HeapStorage, Object, ObjectRef},
     pointer::{ManagedPtrResolver, StaticMetadata},
 };
 use dotnet_vm_ops::MemoryOps;
+use dotnet_vm_ops::ops::StackOps;
 use dotnetdll::prelude::{MethodMemberIndex, MethodType};
-use std::ptr::NonNull;
+use std::{
+    ptr::NonNull,
+    sync::{Arc as StdArc, atomic::AtomicBool},
+};
 
 impl<'a, 'gc> VesContext<'a, 'gc> {
     /// Save the executing handler before starting nested exception control flow.
@@ -162,7 +167,7 @@ impl<'a, 'gc> ResolutionOps<'gc> for VesContext<'a, 'gc> {
     }
 }
 
-impl<'a, 'gc> dotnet_vm_ops::ops::StackOps<'gc> for VesContext<'a, 'gc> {}
+impl<'a, 'gc> StackOps<'gc> for VesContext<'a, 'gc> {}
 
 impl<'a, 'gc> dotnet_runtime_memory::ops::BaseMemoryOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
@@ -190,10 +195,7 @@ impl<'a, 'gc> dotnet_runtime_memory::ops::BaseMemoryOps<'gc> for VesContext<'a, 
     }
 
     #[inline]
-    fn new_object(
-        &self,
-        td: TypeDescription,
-    ) -> Result<dotnet_value::object::Object<'gc>, TypeResolutionError> {
+    fn new_object(&self, td: TypeDescription) -> Result<Object<'gc>, TypeResolutionError> {
         self.resolver().new_object(td, &self.current_context())
     }
 
@@ -202,7 +204,7 @@ impl<'a, 'gc> dotnet_runtime_memory::ops::BaseMemoryOps<'gc> for VesContext<'a, 
         &self,
         td: TypeDescription,
         lookup: &GenericLookup,
-    ) -> Result<dotnet_value::object::Object<'gc>, TypeResolutionError> {
+    ) -> Result<Object<'gc>, TypeResolutionError> {
         let ctx = self.current_context().with_generics(lookup);
         self.resolver().new_object(td, &ctx)
     }
@@ -366,9 +368,9 @@ impl<'a, 'gc> dotnet_intrinsics_string::IntrinsicStringHost<'gc> for VesContext<
     }
 
     #[inline]
-    fn string_with_span_data<'span, R, F: FnOnce(&[u8]) -> R>(
+    fn string_with_span_data<R, F: FnOnce(&[u8]) -> R>(
         &self,
-        span: Object<'span>,
+        span: Object<'_>,
         element_type: TypeDescription,
         element_size: usize,
         f: F,
@@ -379,10 +381,7 @@ impl<'a, 'gc> dotnet_intrinsics_string::IntrinsicStringHost<'gc> for VesContext<
 
 impl<'a, 'gc> dotnet_vm_ops::ops::TypeLayoutOps for VesContext<'a, 'gc> {
     #[inline]
-    fn type_layout(
-        &self,
-        t: ConcreteType,
-    ) -> Result<std::sync::Arc<dotnet_value::layout::LayoutManager>, TypeResolutionError> {
+    fn type_layout(&self, t: ConcreteType) -> Result<StdArc<LayoutManager>, TypeResolutionError> {
         crate::layout::type_layout(t, &self.current_context())
     }
 }
@@ -553,7 +552,7 @@ impl<'a, 'gc> dotnet_intrinsics_threading::ManagedThreadHost<'gc> for VesContext
                         started: true,
                         background: false,
                         completion_index: None,
-                        retained: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                        retained: StdArc::new(AtomicBool::new(true)),
                     },
                 );
                 thread
@@ -579,7 +578,7 @@ impl<'a, 'gc> dotnet_intrinsics_threading::ManagedThreadHost<'gc> for VesContext
         let thread = dotnet_vm_ops::vm_try!(self.new_object(thread_type));
         let thread = ObjectRef::new(self.gc, HeapStorage::Obj(Box::new(thread)));
         self.register_new_object(&thread);
-        let retained = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let retained = StdArc::new(AtomicBool::new(true));
         self.local.managed_threads.records_write().insert(
             thread,
             crate::threading::local::ManagedThreadRecord::new(thread_start, retained.clone()),

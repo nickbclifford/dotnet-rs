@@ -523,10 +523,10 @@ fn classify_entry_bytes(bytes: &[u8]) -> EntryKind {
     // (COM descriptor, data directory index 14) header. Any parse uncertainty
     // falls through to Managed.
     if bytes.len() >= 2 && &bytes[0..2] == b"MZ" {
-        match pe_has_cli_header(bytes) {
-            Some(false) => return EntryKind::NativeAot,
-            Some(true) | None => return EntryKind::Managed,
-        }
+        return match pe_has_cli_header(bytes) {
+            Some(false) => EntryKind::NativeAot,
+            Some(true) | None => EntryKind::Managed,
+        };
     }
 
     // Unknown/short: be conservative — let the loader speak.

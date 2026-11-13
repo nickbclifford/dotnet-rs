@@ -77,7 +77,7 @@ pub(crate) fn ptr_info<'gc, T: dotnet_vm_ops::ops::ExceptionOps<'gc>>(
     match val {
         dotnet_value::StackValue::ObjectRef(o) => Ok((
             o.0.map_or(PointerOrigin::Unmanaged, |h| {
-                PointerOrigin::Heap(dotnet_value::object::ObjectRef(Some(h)))
+                PointerOrigin::Heap(ObjectRef(Some(h)))
             }),
             dotnet_utils::ByteOffset::new(0),
         )),

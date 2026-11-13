@@ -20,6 +20,7 @@ use dotnet_vm::{
 };
 use dotnetdll::prelude::BaseType;
 use gc_arena::{Collect, Gc, GcWeak, collect::Trace};
+use std::mem::size_of;
 
 const PRIMITIVE_VECTOR_LENGTH: usize = 64 * 1024;
 
@@ -52,7 +53,7 @@ fn primitive_i32_vector() -> Vector<'static> {
             element_layout: Arc::new(LayoutManager::Scalar(Scalar::Int32)),
             length: PRIMITIVE_VECTOR_LENGTH,
         },
-        vec![0; PRIMITIVE_VECTOR_LENGTH * std::mem::size_of::<i32>()],
+        vec![0; PRIMITIVE_VECTOR_LENGTH * size_of::<i32>()],
         vec![PRIMITIVE_VECTOR_LENGTH],
     )
 }

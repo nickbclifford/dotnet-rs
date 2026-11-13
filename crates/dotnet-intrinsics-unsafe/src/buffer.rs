@@ -16,7 +16,7 @@ use dotnet_vm_ops::effects::{
 use dotnet_vm_ops::ops::{EvalStackOps, ExceptionOps, LoaderOps, TypedStackOps};
 
 #[inline]
-fn stack_value_to_byte<'gc>(value: &StackValue<'gc>) -> Option<u8> {
+fn stack_value_to_byte(value: &StackValue<'_>) -> Option<u8> {
     match value {
         StackValue::Int32(v) => Some(*v as u8),
         StackValue::Int64(v) => Some(*v as u8),

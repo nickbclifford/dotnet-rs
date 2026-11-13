@@ -45,16 +45,16 @@ The generated table below partitions each problem into **fix / refute / keep / d
 | CargoUnusedDependency | 4 | dotnet-benchmarks (2), dotnet-cli (1), dotnet-value (1) | 4 / 0 / 0 / 0 | F-DEP-001 |
 | DuplicatedCode | 70 | dotnet-intrinsics-core (2), dotnet-intrinsics-reflection (3), dotnet-intrinsics-span (8), dotnet-intrinsics-string (4), dotnet-simd (2), dotnet-utils (2), dotnet-value (1), dotnet-vm (48) | 29 (29 resolved) / 0 / 41 / 0 | F-DUP-001 / F-DUP-002 / F-DUP-003 / F-DUP-004 / F-DUP-005 |
 | NewCrateVersionAvailable | 12 | Cargo.toml (3), dotnet-benchmarks (1), dotnet-macros (1), dotnet-macros-core (1), dotnet-value (1), dotnet-vm (4), xtask (1) | 0 / 0 / 0 / 12 | F-DEP-002 |
-| RsAssertEqual | 19 | dotnet-value (17), dotnet-vm (2) | 19 / 0 / 0 / 0 | F-IDIOM-002 |
-| RsDeprecation | 4 | dotnet-utils (2), dotnet-vm (2) | 3 / 0 / 1 / 0 | F-DEPR-001 |
+| RsAssertEqual | 19 | dotnet-value (17), dotnet-vm (2) | 19 (19 resolved) / 0 / 0 / 0 | F-IDIOM-002 |
+| RsDeprecation | 4 | dotnet-utils (2), dotnet-vm (2) | 3 (3 resolved) / 0 / 1 / 0 | F-DEPR-001 |
 | RsDetachedFile | 33 | dotnet-value (7), dotnet-vm (26) | 0 / 33 / 0 / 0 | F-INFRA-001 |
-| RsLift | 4 | dotnet-assemblies (1), dotnet-vm (1), dotnet-vm-ops (2) | 4 / 0 / 0 / 0 | F-IDIOM-002 |
-| RsNeedlessLifetimes | 22 | dotnet-intrinsics-reflection (3), dotnet-intrinsics-string (1), dotnet-intrinsics-unsafe (2), dotnet-runtime-memory (3), dotnet-value (9), dotnet-vm (4) | 11 / 0 / 11 / 0 | F-IDIOM-002 |
+| RsLift | 4 | dotnet-assemblies (1), dotnet-vm (1), dotnet-vm-ops (2) | 4 (4 resolved) / 0 / 0 / 0 | F-IDIOM-002 |
+| RsNeedlessLifetimes | 22 | dotnet-intrinsics-reflection (3), dotnet-intrinsics-string (1), dotnet-intrinsics-unsafe (2), dotnet-runtime-memory (3), dotnet-value (9), dotnet-vm (4) | 11 (11 resolved) / 0 / 11 / 0 | F-IDIOM-002 |
 | RsSortImplTraitMembers | 11 | dotnet-benchmarks (1), dotnet-cli (3), dotnet-vm (6), xtask (1) | 0 / 0 / 11 / 0 | F-IDIOM-003 |
 | RsThreadLocalStableMethodCanBeUsed | 75 | dotnet-benchmarks (1), dotnet-utils (2), dotnet-value (4), dotnet-vm (64), dotnet-vm-data (4) | 71 (71 resolved) / 0 / 4 / 0 | F-IDIOM-001 |
-| RsUnnecessaryCast | 2 | dotnet-assemblies (2) | 2 / 0 / 0 / 0 | F-IDIOM-002 |
-| RsUnnecessaryParentheses | 4 | dotnet-utils (2), dotnet-vm-ops (2) | 4 / 0 / 0 / 0 | F-IDIOM-002 |
-| RsUnnecessaryQualifications | 296 | dotnet-benchmarks (1), dotnet-intrinsics-reflection (2), dotnet-intrinsics-string (2), dotnet-intrinsics-threading (2), dotnet-intrinsics-unsafe (4), dotnet-macros (2), dotnet-macros-core (11), dotnet-metrics (1), dotnet-pinvoke (4), dotnet-runtime-memory (4), dotnet-runtime-resolver (3), dotnet-tracer (2), dotnet-types (4), dotnet-utils (10), dotnet-value (23), dotnet-vm (209), dotnet-vm-data (1), dotnet-vm-ops (11) | 279 (64 resolved) / 0 / 17 / 0 | F-QUAL-001 |
+| RsUnnecessaryCast | 2 | dotnet-assemblies (2) | 2 (2 resolved) / 0 / 0 / 0 | F-IDIOM-002 |
+| RsUnnecessaryParentheses | 4 | dotnet-utils (2), dotnet-vm-ops (2) | 4 (4 resolved) / 0 / 0 / 0 | F-IDIOM-002 |
+| RsUnnecessaryQualifications | 296 | dotnet-benchmarks (1), dotnet-intrinsics-reflection (2), dotnet-intrinsics-string (2), dotnet-intrinsics-threading (2), dotnet-intrinsics-unsafe (4), dotnet-macros (2), dotnet-macros-core (11), dotnet-metrics (1), dotnet-pinvoke (4), dotnet-runtime-memory (4), dotnet-runtime-resolver (3), dotnet-tracer (2), dotnet-types (4), dotnet-utils (10), dotnet-value (23), dotnet-vm (209), dotnet-vm-data (1), dotnet-vm-ops (11) | 277 (277 resolved) / 0 / 19 / 0 | F-QUAL-001 |
 | RsUnusedMut | 1 | dotnet-vm (1) | 0 / 1 / 0 / 0 | F-IDIOM-002 |
 | UndefinedParamsPresent | 109 | .github (109) | 0 / 109 / 0 / 0 | F-CI-001 |
 
@@ -132,11 +132,9 @@ Trivial `LocalKey<Cell>` operations use `get`, `set`, or `replace`; managed-thre
 <a id="F-IDIOM-002"></a>
 #### F-IDIOM-002 — Better assertions and simpler signatures/control flow
 
-**Low; default effort.** All 19 assertions compare values: `dotnet-value/src/pointer/tests.rs:1627–1901` and VM condition_wait_tests.rs:4256,4272. Use assert_eq/ne, retain messages, both directional equality witnesses and evaluation count. Existing types provide debugging/comparison support; compile every enabled configuration to confirm.
+**Resolved.** All 19 value comparisons use `assert_eq!` or `assert_ne!`; custom messages, both directional equality witnesses, and operand evaluation are retained. The two receiver casts are removed while `instantiation_data` still receives its reference-shaped resolver argument. Redundant arithmetic parentheses are removed. PE classification, nullable unboxing and native-effect branches return their simple match/if expressions; the same exception rooting, nullable construction, claim completion, and early exits remain.
 
-Remove redundant self-as-AssemblyLoader casts at assemblies/src/support.rs:244,443 in instantiation_data calls, retaining the callee's reference shape. Remove extra receiver parentheses at utils/src/gc/cross_arena.rs:476 and vm-ops/src/effects.rs:1765: four diagnostic tokens, two edits. Lift simple result expressions in assemblies/src/host.rs around :526, VM objects/boxing.rs:80 and vm-ops effects.rs:1292,1353 only with unchanged claim completion, destructor and early-exit behavior. Preserve ECMA null Nullable unboxing semantics.
-
-For 22 lifetimes, elide uninformative names on byte/string/size queries and raw-address observation and independent consumed span brands. Keep named arena input/output conversion, pointer offset and decoding relationships; keep the deliberately named short-lifetime witness in runtime-memory::access. The ledger assigns each site. Elision must not imply `'static` or relax invariant branding.
+Eleven uninformative lifetime names are elided on byte/string/size queries, raw-address observation and independent span-input methods. Named arena input/output conversions, pointer offset and decode relationships, and the short-lifetime witness remain named. Elision does not imply `'static` or relax arena branding. The existing `bit_index` mutation remains because the following `record_bit!` expansion increments it; its ledger row records the source evidence.
 
 **Refute RsUnusedMut:** VM pointer_provenance_tests.rs:2346 bit_index is incremented by following record_bit! expansion. Removing mut breaks enabled compilation. No allow required.
 
@@ -150,22 +148,20 @@ Risk: low for syntax, moderate for future/control-flow/lifetime edits. Verify fu
 <a id="F-QUAL-001"></a>
 #### F-QUAL-001 — Imports should expose the domain, not maximize short names
 
-**Low; default effort after structural edits.** 209 of 296 sites are in VM; raw_memory_ops_impl has 54, condition_wait_tests 48, native_substring_tests 38. The 54 raw-memory entries now use scoped imports; other recurring errors, metadata constructors and test helpers should use an existing scoped import or one concise explicit import. Structural slices own their touched imports first; sweep remaining files afterward. Avoid wildcard imports or global prelude expansion.
+**Resolved.** Recurring runtime, metadata, pointer and test-domain names use explicit imports at their owning module or test boundary; the raw-memory implementation's imports remain scoped. The sweep adds no wildcard imports or lint allowances. The standard-atomic changes retain the standard types, and runtime lock/atomic imports continue to identify `dotnet_utils::sync` explicitly.
 
-Keep macro/core paths conservatively: an import in the generator does not resolve emitted code in consumers. Preserve explicit sync identity and the stack-module intra-doc target. Generic names such as Error/Ordering may need ownership visible; if current cfg shows a proposed shortening is worse or invalid, correct that ledger row with the evidence. “Fix” is an intended readable resolution, not permission to replace every path mechanically.
+Nineteen qualifications remain for stated reasons: syntax-tree paths in macro/core code preserve expansion context; three parent-qualified lock-order traits make the bound's owner clear; two `Ordering` paths identify the sync facade; and the stack-module intra-doc target resolves the intended `ExecutionEngine` link. These decisions are per-entry in the ledger. Generic names remain unqualified only where a specific import makes their domain visible.
 
-Inspect cfg around uses, crate features, release-only and Loom branches, and expansion ownership. Runtime lock/atomic types must remain dotnet_utils::sync; test-only std synchronization is allowed. Risk: hidden cfg unused imports, semantic ambiguity, macro hygiene. Verify every shared matrix row, optional guards, release clippy and generation probes when relevant.
+Cfg-sensitive test imports are gated at module/item boundaries. Clippy and nextest pass every shared row. Under fuzzing, native-dependent fixtures are skipped and the reflection path test retains its other cases; those fixtures pass without fuzzing. Optional diagnostic/instrumentation guards pass. The full check's separate async build-script probe refers to absent VM API methods and is recorded under Not yet planned; this sweep changes no macro output. See AGENT_MEMORY.md for the validation record.
 
 Existing workspace clippy denies undocumented unsafe blocks and multiple unsafe ops per block. Rust warnings already cover unused mut/parentheses; clippy covers needless lifetimes/unnecessary casts. bool_assert_comparison is closer to comparison assertions than manual_assert, which concerns panic branches. No new global unused_qualifications, needless_lifetimes or pedantic deny is recommended without a full-matrix clean run and no noisy allows. The planning baseline is insufficient evidence for new lint policy.
 
 <a id="F-DEPR-001"></a>
 #### F-DEPR-001 — try_update is stable on the pin, not on all backends
 
-**Low; default effort.** A compiler probe and local std docs verify try_update since Rust 1.95.0. Future 1.99 deprecation is not a current compiler warning. utils/src/gc/cross_arena.rs:1667,1672 are test-only std AtomicU64/U32 checked-counter controls; VM threading/local.rs:24 next_managed_id uses std AtomicI32. Rename those three calls without changing checked-add/exhaustion semantics.
+**Resolved.** The two checked-counter controls in `dotnet-utils` and `threading/local::next_managed_id` use standard-atomic `try_update`, preserving checked-add overflow and exhaustion behavior. The runtime allocation path `threading/basic::allocate_managed_thread_id` retains the facade's `fetch_update`: `dotnet_utils::sync` reexports Loom atomics under `cfg(loom)`, and Loom 0.7.2 has no `try_update`. Its 1..=65535 bound and backend identity remain unchanged.
 
-VM threading/basic.rs:186 allocate_managed_thread_id uses dotnet_utils::sync::AtomicU64. The facade at utils/src/sync.rs:406–416 reexports Loom atomics under cfg(loom), and loom 0.7.2 exposes fetch_update but no try_update. **Keep this call** for backend portability; reject needless cfg spelling branches or a helper merely hiding the name. Preserve the compact 1..=65535 bound.
-
-Contrary to the prompt's tentative assumption, not all sites use the facade. Record threading/local.rs's production std atomics separately under Not yet planned: changing static atomics/retained Arc flags to Loom is a synchronization-model change, not a method rename. Verify std counter tests and VM core-feature tests/clippy; Loom lane confirms retained backend compatibility.
+The other standard production atomics remain separate from this method rename; changing their backend is a synchronization-model decision. The individual ledger rows distinguish the three standard sites from the retained Loom-compatible facade site.
 
 <a id="F-DEP-001"></a>
 #### F-DEP-001 — Remove unused direct dependency edges, preserve feature routes
@@ -584,25 +580,25 @@ Each row is one exported problem, identified by inspection and one-based XML ord
 
 | Entry | Snapshot site and nearby symbol | Decision | Reason / finding |
 |---|---|---|---|
-| 1 | `crates/dotnet-value/src/pointer/tests.rs:1627` — `ptr_arith_unmanaged_arithmetic_wraps_to_explicit_null` | fix | F-IDIOM-002; `assert!(zero == crate::StackValue::NativeInt(0))` |
-| 2 | `crates/dotnet-value/src/pointer/tests.rs:1633` — `ptr_arith_unmanaged_arithmetic_wraps_to_explicit_null` | fix | F-IDIOM-002; `assert!(wrapped_from_max == crate::StackValue::NativeInt(0))` |
-| 3 | `crates/dotnet-value/src/pointer/tests.rs:1638` — `ptr_arith_unmanaged_arithmetic_wraps_to_explicit_null` | fix | F-IDIOM-002; `assert!(wrapped_from_one == crate::StackValue::NativeInt(0))` |
-| 4 | `crates/dotnet-value/src/pointer/tests.rs:1696` — `ptr_arith_pointer_comparisons_are_value_bearing` | fix | F-IDIOM-002; `assert!( base == base.clone(), "an unmanaged pointer must equal itself" )` |
-| 5 | `crates/dotnet-value/src/pointer/tests.rs:1719` — `ptr_arith_pointer_comparisons_are_value_bearing` | fix | F-IDIOM-002; `assert!(base == base_integer.clone())` |
-| 6 | `crates/dotnet-value/src/pointer/tests.rs:1720` — `ptr_arith_pointer_comparisons_are_value_bearing` | fix | F-IDIOM-002; `assert!(base_integer == base)` |
-| 7 | `crates/dotnet-value/src/pointer/tests.rs:1771` — `ptr_arith_pointer_comparisons_are_value_bearing` | fix | F-IDIOM-002; `assert!(null_managed == zero)` |
-| 8 | `crates/dotnet-value/src/pointer/tests.rs:1772` — `ptr_arith_pointer_comparisons_are_value_bearing` | fix | F-IDIOM-002; `assert!(zero == null_managed)` |
-| 9 | `crates/dotnet-value/src/pointer/tests.rs:1773` — `ptr_arith_pointer_comparisons_are_value_bearing` | fix | F-IDIOM-002; `assert!(base != zero)` |
-| 10 | `crates/dotnet-value/src/pointer/tests.rs:1774` — `ptr_arith_pointer_comparisons_are_value_bearing` | fix | F-IDIOM-002; `assert!(zero != base)` |
-| 11 | `crates/dotnet-value/src/pointer/tests.rs:1775` — `ptr_arith_pointer_comparisons_are_value_bearing` | fix | F-IDIOM-002; `assert!(managed_value != zero)` |
-| 12 | `crates/dotnet-value/src/pointer/tests.rs:1776` — `ptr_arith_pointer_comparisons_are_value_bearing` | fix | F-IDIOM-002; `assert!(managed_value == base)` |
-| 13 | `crates/dotnet-value/src/pointer/tests.rs:1777` — `ptr_arith_pointer_comparisons_are_value_bearing` | fix | F-IDIOM-002; `assert!(base == managed_value)` |
-| 14 | `crates/dotnet-value/src/pointer/tests.rs:1778` — `ptr_arith_pointer_comparisons_are_value_bearing` | fix | F-IDIOM-002; `assert!(managed_value == base_integer)` |
-| 15 | `crates/dotnet-value/src/pointer/tests.rs:1779` — `ptr_arith_pointer_comparisons_are_value_bearing` | fix | F-IDIOM-002; `assert!(base_integer == managed_value)` |
-| 16 | `crates/dotnet-value/src/pointer/tests.rs:1887` — `ptr_arith_managed_ptr_far_oob_compare_and_difference` | fix | F-IDIOM-002; `assert!(far_value == crate::StackValue::NativeInt(observed_far.addr().get() as isize))` |
-| 17 | `crates/dotnet-value/src/pointer/tests.rs:1901` — `ptr_arith_managed_ptr_far_oob_compare_and_difference` | fix | F-IDIOM-002; `assert!(far_max_value == crate::StackValue::NativeInt(observed_max.addr().get() as isize))` |
-| 18 | `crates/dotnet-vm/src/condition_wait_tests.rs:4256` — `static_storage_identity_ignores_generic_argument_resolution` | fix | F-IDIOM-002; `assert!(corlib != other)` |
-| 19 | `crates/dotnet-vm/src/condition_wait_tests.rs:4272` — `static_storage_identity_ignores_generic_argument_resolution` | fix | F-IDIOM-002; `assert!( via_handle != via_field, "raw lookups must ...` |
+| 1 | `crates/dotnet-value/src/pointer/tests.rs:1627` — `ptr_arith_unmanaged_arithmetic_wraps_to_explicit_null` | fix (resolved) | F-IDIOM-002; `assert!(zero == crate::StackValue::NativeInt(0))` |
+| 2 | `crates/dotnet-value/src/pointer/tests.rs:1633` — `ptr_arith_unmanaged_arithmetic_wraps_to_explicit_null` | fix (resolved) | F-IDIOM-002; `assert!(wrapped_from_max == crate::StackValue::NativeInt(0))` |
+| 3 | `crates/dotnet-value/src/pointer/tests.rs:1638` — `ptr_arith_unmanaged_arithmetic_wraps_to_explicit_null` | fix (resolved) | F-IDIOM-002; `assert!(wrapped_from_one == crate::StackValue::NativeInt(0))` |
+| 4 | `crates/dotnet-value/src/pointer/tests.rs:1696` — `ptr_arith_pointer_comparisons_are_value_bearing` | fix (resolved) | F-IDIOM-002; `assert!( base == base.clone(), "an unmanaged pointer must equal itself" )` |
+| 5 | `crates/dotnet-value/src/pointer/tests.rs:1719` — `ptr_arith_pointer_comparisons_are_value_bearing` | fix (resolved) | F-IDIOM-002; `assert!(base == base_integer.clone())` |
+| 6 | `crates/dotnet-value/src/pointer/tests.rs:1720` — `ptr_arith_pointer_comparisons_are_value_bearing` | fix (resolved) | F-IDIOM-002; `assert!(base_integer == base)` |
+| 7 | `crates/dotnet-value/src/pointer/tests.rs:1771` — `ptr_arith_pointer_comparisons_are_value_bearing` | fix (resolved) | F-IDIOM-002; `assert!(null_managed == zero)` |
+| 8 | `crates/dotnet-value/src/pointer/tests.rs:1772` — `ptr_arith_pointer_comparisons_are_value_bearing` | fix (resolved) | F-IDIOM-002; `assert!(zero == null_managed)` |
+| 9 | `crates/dotnet-value/src/pointer/tests.rs:1773` — `ptr_arith_pointer_comparisons_are_value_bearing` | fix (resolved) | F-IDIOM-002; `assert!(base != zero)` |
+| 10 | `crates/dotnet-value/src/pointer/tests.rs:1774` — `ptr_arith_pointer_comparisons_are_value_bearing` | fix (resolved) | F-IDIOM-002; `assert!(zero != base)` |
+| 11 | `crates/dotnet-value/src/pointer/tests.rs:1775` — `ptr_arith_pointer_comparisons_are_value_bearing` | fix (resolved) | F-IDIOM-002; `assert!(managed_value != zero)` |
+| 12 | `crates/dotnet-value/src/pointer/tests.rs:1776` — `ptr_arith_pointer_comparisons_are_value_bearing` | fix (resolved) | F-IDIOM-002; `assert!(managed_value == base)` |
+| 13 | `crates/dotnet-value/src/pointer/tests.rs:1777` — `ptr_arith_pointer_comparisons_are_value_bearing` | fix (resolved) | F-IDIOM-002; `assert!(base == managed_value)` |
+| 14 | `crates/dotnet-value/src/pointer/tests.rs:1778` — `ptr_arith_pointer_comparisons_are_value_bearing` | fix (resolved) | F-IDIOM-002; `assert!(managed_value == base_integer)` |
+| 15 | `crates/dotnet-value/src/pointer/tests.rs:1779` — `ptr_arith_pointer_comparisons_are_value_bearing` | fix (resolved) | F-IDIOM-002; `assert!(base_integer == managed_value)` |
+| 16 | `crates/dotnet-value/src/pointer/tests.rs:1887` — `ptr_arith_managed_ptr_far_oob_compare_and_difference` | fix (resolved) | F-IDIOM-002; `assert!(far_value == crate::StackValue::NativeInt(observed_far.addr().get() as isize))` |
+| 17 | `crates/dotnet-value/src/pointer/tests.rs:1901` — `ptr_arith_managed_ptr_far_oob_compare_and_difference` | fix (resolved) | F-IDIOM-002; `assert!(far_max_value == crate::StackValue::NativeInt(observed_max.addr().get() as isize))` |
+| 18 | `crates/dotnet-vm/src/condition_wait_tests.rs:4256` — `static_storage_identity_ignores_generic_argument_resolution` | fix (resolved) | F-IDIOM-002; `assert!(corlib != other)` |
+| 19 | `crates/dotnet-vm/src/condition_wait_tests.rs:4272` — `static_storage_identity_ignores_generic_argument_resolution` | fix (resolved) | F-IDIOM-002; `assert!( via_handle != via_field, "raw lookups must ...` |
 
 ### RsDeprecation — 4 entries
 
@@ -610,10 +606,10 @@ Each row is one exported problem, identified by inspection and one-based XML ord
 
 | Entry | Snapshot site and nearby symbol | Decision | Reason / finding |
 |---|---|---|---|
-| 1 | `crates/dotnet-utils/src/gc/cross_arena.rs:1667` — `arena_identity_registry_checked_counter_control` | fix | F-DEPR-001: std method verified on pin; `fetch_update` |
-| 2 | `crates/dotnet-utils/src/gc/cross_arena.rs:1672` — `arena_identity_registry_checked_counter_control` | fix | F-DEPR-001: std method verified on pin; `fetch_update` |
+| 1 | `crates/dotnet-utils/src/gc/cross_arena.rs:1667` — `arena_identity_registry_checked_counter_control` | fix (resolved) | F-DEPR-001: std method verified on pin; `fetch_update` |
+| 2 | `crates/dotnet-utils/src/gc/cross_arena.rs:1672` — `arena_identity_registry_checked_counter_control` | fix (resolved) | F-DEPR-001: std method verified on pin; `fetch_update` |
 | 3 | `crates/dotnet-vm/src/threading/basic.rs:186` — `allocate_managed_thread_id` | keep | F-DEPR-001: Loom lacks try_update; `fetch_update` |
-| 4 | `crates/dotnet-vm/src/threading/local.rs:24` — `next_managed_id` | fix | F-DEPR-001: std method verified on pin; `fetch_update` |
+| 4 | `crates/dotnet-vm/src/threading/local.rs:24` — `next_managed_id` | fix (resolved) | F-DEPR-001: std method verified on pin; `fetch_update` |
 
 ### RsDetachedFile — 33 entries
 
@@ -661,10 +657,10 @@ Each row is one exported problem, identified by inspection and one-based XML ord
 
 | Entry | Snapshot site and nearby symbol | Decision | Reason / finding |
 |---|---|---|---|
-| 1 | `crates/dotnet-assemblies/src/host.rs:526` — `classify_entry_bytes` | fix | F-IDIOM-002; `match` |
-| 2 | `crates/dotnet-vm/src/instructions/objects/boxing.rs:80` — `unbox_any` | fix | F-IDIOM-002; `if` |
-| 3 | `crates/dotnet-vm-ops/src/effects.rs:1292` — `call_inner` | fix | F-IDIOM-002; `match` |
-| 4 | `crates/dotnet-vm-ops/src/effects.rs:1353` — `ensure_initialized` | fix | F-IDIOM-002; `match` |
+| 1 | `crates/dotnet-assemblies/src/host.rs:526` — `classify_entry_bytes` | fix (resolved) | F-IDIOM-002; `match` |
+| 2 | `crates/dotnet-vm/src/instructions/objects/boxing.rs:80` — `unbox_any` | fix (resolved) | F-IDIOM-002; `if` |
+| 3 | `crates/dotnet-vm-ops/src/effects.rs:1292` — `call_inner` | fix (resolved) | F-IDIOM-002; `match` |
+| 4 | `crates/dotnet-vm-ops/src/effects.rs:1353` — `ensure_initialized` | fix (resolved) | F-IDIOM-002; `match` |
 
 ### RsNeedlessLifetimes — 22 entries
 
@@ -672,27 +668,27 @@ Each row is one exported problem, identified by inspection and one-based XML ord
 
 | Entry | Snapshot site and nearby symbol | Decision | Reason / finding |
 |---|---|---|---|
-| 1 | `crates/dotnet-intrinsics-reflection/src/fields.rs:427` — `read_instance_field_bytes` | fix | F-IDIOM-002: no informative input/output brand relation; `fn read_instance_field_bytes<'gc>( target_obj: ObjectRef<'gc>, field_parent: TypeDescripti` |
+| 1 | `crates/dotnet-intrinsics-reflection/src/fields.rs:427` — `read_instance_field_bytes` | fix (resolved) | F-IDIOM-002: no informative input/output brand relation; `fn read_instance_field_bytes<'gc>( target_obj: ObjectRef<'gc>, field_parent: TypeDescripti` |
 | 2 | `crates/dotnet-intrinsics-reflection/src/invoke_args.rs:390` — `widen_boxed` | keep | F-IDIOM-002: preserve named arena transfer/short-lifetime witness; `fn widen_boxed<'gc>( arg: ObjectRef<'gc>, from: Prim, to: Prim, ) -> Option<StackValue<'..` |
-| 3 | `crates/dotnet-intrinsics-reflection/src/types/mod.rs:257` — `string_from_heap_obj` | fix | F-IDIOM-002: no informative input/output brand relation; `fn string_from_heap_obj<'gc>(name_obj: ObjectRef<'gc>) -> Result<String, VmError>` |
-| 4 | `crates/dotnet-intrinsics-string/src/lib.rs:42` — `string_with_span_data` | fix | F-IDIOM-002: no informative input/output brand relation; `fn string_with_span_data` |
-| 5 | `crates/dotnet-intrinsics-unsafe/src/buffer.rs:19` — `stack_value_to_byte` | fix | F-IDIOM-002: no informative input/output brand relation; `fn stack_value_to_byte<'gc>(value: &StackValue<'gc>) -> Option<u8>` |
+| 3 | `crates/dotnet-intrinsics-reflection/src/types/mod.rs:257` — `string_from_heap_obj` | fix (resolved) | F-IDIOM-002: no informative input/output brand relation; `fn string_from_heap_obj<'gc>(name_obj: ObjectRef<'gc>) -> Result<String, VmError>` |
+| 4 | `crates/dotnet-intrinsics-string/src/lib.rs:42` — `string_with_span_data` | fix (resolved) | F-IDIOM-002: no informative input/output brand relation; `fn string_with_span_data` |
+| 5 | `crates/dotnet-intrinsics-unsafe/src/buffer.rs:19` — `stack_value_to_byte` | fix (resolved) | F-IDIOM-002: no informative input/output brand relation; `fn stack_value_to_byte<'gc>(value: &StackValue<'gc>) -> Option<u8>` |
 | 6 | `crates/dotnet-intrinsics-unsafe/src/marshal.rs:16` — `offset_ptr` | keep | F-IDIOM-002: preserve named arena transfer/short-lifetime witness; `fn offset_ptr<'gc>( val: StackValue<'gc>, byte_offset: isize, ) -> Result<StackValue<'gc>,` |
-| 7 | `crates/dotnet-runtime-memory/src/access.rs:2171` — `storage_is_string` | fix | F-IDIOM-002: no informative input/output brand relation; `fn storage_is_string<'a>(storage: &HeapStorage<'a>) -> bool` |
+| 7 | `crates/dotnet-runtime-memory/src/access.rs:2171` — `storage_is_string` | fix (resolved) | F-IDIOM-002: no informative input/output brand relation; `fn storage_is_string<'a>(storage: &HeapStorage<'a>) -> bool` |
 | 8 | `crates/dotnet-runtime-memory/src/access.rs:2176` — `cross_arena_with_short_lifetime` | keep | F-IDIOM-002: preserve named arena transfer/short-lifetime witness; `fn cross_arena_with_short_lifetime<'short>( gc: GCHandle<'short>, origin: dotnet_val...` |
-| 9 | `crates/dotnet-runtime-memory/src/heap.rs:308` — `object_size` | fix | F-IDIOM-002: no informative input/output brand relation; `fn object_size<'gc>(obj: ObjectRef<'gc>) -> Option<usize>` |
+| 9 | `crates/dotnet-runtime-memory/src/heap.rs:308` — `object_size` | fix (resolved) | F-IDIOM-002: no informative input/output brand relation; `fn object_size<'gc>(obj: ObjectRef<'gc>) -> Option<usize>` |
 | 10 | `crates/dotnet-value/src/cts_cli_conversion.rs:154` — `widen` | keep | F-IDIOM-002: preserve named arena transfer/short-lifetime witness; `fn widen<'gc>(value: CTSValue<'gc>) -> StackValue<'gc>` |
 | 11 | `crates/dotnet-value/src/cts_cli_conversion.rs:161` — `widen_value_type` | keep | F-IDIOM-002: preserve named arena transfer/short-lifetime witness; `fn widen_value_type<'gc>(value: ValueType<'gc>) -> StackValue<'gc>` |
 | 12 | `crates/dotnet-value/src/cts_cli_conversion.rs:212` — `narrow_scalar_value` | keep | F-IDIOM-002: preserve named arena transfer/short-lifetime witness; `fn narrow_scalar_value<'gc>( data: StackValue<'gc>, target: CtsScalarKind, ) -> ...` |
 | 13 | `crates/dotnet-value/src/cts_cli_conversion.rs:237` — `narrow_float32` | keep | F-IDIOM-002: preserve named arena transfer/short-lifetime witness; `fn narrow_float32<'gc>( data: StackValue<'gc>, ) -> Result<ValueType<'gc>, TypeResolutio..` |
 | 14 | `crates/dotnet-value/src/cts_cli_conversion.rs:248` — `narrow_float64` | keep | F-IDIOM-002: preserve named arena transfer/short-lifetime witness; `fn narrow_float64<'gc>( data: StackValue<'gc>, ) -> Result<ValueType<'gc>, TypeResolutio..` |
-| 15 | `crates/dotnet-value/src/object/mod.rs:235` — `from_handle` | fix | F-IDIOM-002: no informative input/output brand relation; `fn from_handle<'gc>(handle: ObjectHandle<'gc>) -> Self` |
+| 15 | `crates/dotnet-value/src/object/mod.rs:235` — `from_handle` | fix (resolved) | F-IDIOM-002: no informative input/output brand relation; `fn from_handle<'gc>(handle: ObjectHandle<'gc>) -> Self` |
 | 16 | `crates/dotnet-value/src/pointer/tests.rs:68` — `managed_ptr_to_heap_object_start` | keep | F-IDIOM-002: preserve named arena transfer/short-lifetime witness; `fn managed_ptr_to_heap_object_start<'gc>(obj: ObjectRef<'gc>) -> ManagedPtr<'gc>` |
-| 17 | `crates/dotnet-value/src/stack_value.rs:234` — `managed_ptr_to_raw` | fix | F-IDIOM-002: no informative input/output brand relation; `fn managed_ptr_to_raw<'gc>(m: &StackManagedPtr<'gc>) -> *mut u8` |
+| 17 | `crates/dotnet-value/src/stack_value.rs:234` — `managed_ptr_to_raw` | fix (resolved) | F-IDIOM-002: no informative input/output brand relation; `fn managed_ptr_to_raw<'gc>(m: &StackManagedPtr<'gc>) -> *mut u8` |
 | 18 | `crates/dotnet-value/src/stack_value.rs:982` — `managed_offset` | keep | F-IDIOM-002: preserve named arena transfer/short-lifetime witness; `fn managed_offset<'gc>( m: StackManagedPtr<'gc>, bytes: isize, ) -> Result<StackValue<'gc>` |
-| 19 | `crates/dotnet-vm/src/intrinsics/object_ops.rs:339` — `scalar_enum_value_from_stack` | fix | F-IDIOM-002: no informative input/output brand relation; `fn scalar_enum_value_from_stack<'gc>(value: StackValue<'gc>) -> Option<(i128, bool)>` |
-| 20 | `crates/dotnet-vm/src/intrinsics/object_ops.rs:349` — `enum_type_from_stack_value` | fix | F-IDIOM-002: no informative input/output brand relation; `fn enum_type_from_stack_value<'gc>(value: &StackValue<'gc>) -> Option<TypeDescription>` |
-| 21 | `crates/dotnet-vm/src/stack/context_ops.rs:369` — `string_with_span_data` | fix | F-IDIOM-002: no informative input/output brand relation; `fn string_with_span_data<'span, R, F: FnOnce(&[u8]) -> R>( &self, span: Object<'span...` |
+| 19 | `crates/dotnet-vm/src/intrinsics/object_ops.rs:339` — `scalar_enum_value_from_stack` | fix (resolved) | F-IDIOM-002: no informative input/output brand relation; `fn scalar_enum_value_from_stack<'gc>(value: StackValue<'gc>) -> Option<(i128, bool)>` |
+| 20 | `crates/dotnet-vm/src/intrinsics/object_ops.rs:349` — `enum_type_from_stack_value` | fix (resolved) | F-IDIOM-002: no informative input/output brand relation; `fn enum_type_from_stack_value<'gc>(value: &StackValue<'gc>) -> Option<TypeDescription>` |
+| 21 | `crates/dotnet-vm/src/stack/context_ops.rs:369` — `string_with_span_data` | fix (resolved) | F-IDIOM-002: no informative input/output brand relation; `fn string_with_span_data<'span, R, F: FnOnce(&[u8]) -> R>( &self, span: Object<'span...` |
 | 22 | `crates/dotnet-vm/src/test_utils/foreign_reference.rs:38` — `decode_reference` | keep | F-IDIOM-002: preserve named arena transfer/short-lifetime witness; `fn decode_reference<'gc>( storage: dotnet_value::storage::FieldStorage, handle: dotnet_uti` |
 
 ### RsSortImplTraitMembers — 11 entries
@@ -801,8 +797,8 @@ Each row is one exported problem, identified by inspection and one-based XML ord
 
 | Entry | Snapshot site and nearby symbol | Decision | Reason / finding |
 |---|---|---|---|
-| 1 | `crates/dotnet-assemblies/src/support.rs:244` — `collect_stub_candidates` | fix | F-IDIOM-002; `as &AssemblyLoader` |
-| 2 | `crates/dotnet-assemblies/src/support.rs:443` — `validate_support_contract` | fix | F-IDIOM-002; `as &AssemblyLoader` |
+| 1 | `crates/dotnet-assemblies/src/support.rs:244` — `collect_stub_candidates` | fix (resolved) | F-IDIOM-002; `as &AssemblyLoader` |
+| 2 | `crates/dotnet-assemblies/src/support.rs:443` — `validate_support_contract` | fix (resolved) | F-IDIOM-002; `as &AssemblyLoader` |
 
 ### RsUnnecessaryParentheses — 4 entries
 
@@ -810,10 +806,10 @@ Each row is one exported problem, identified by inspection and one-based XML ord
 
 | Entry | Snapshot site and nearby symbol | Decision | Reason / finding |
 |---|---|---|---|
-| 1 | `crates/dotnet-utils/src/gc/cross_arena.rs:476` — `drain_leases` | fix | F-IDIOM-002; `(` |
-| 2 | `crates/dotnet-utils/src/gc/cross_arena.rs:476` — `drain_leases` | fix | F-IDIOM-002; `)` |
-| 3 | `crates/dotnet-vm-ops/src/effects.rs:1765` — `copy_chunk` | fix | F-IDIOM-002; `(` |
-| 4 | `crates/dotnet-vm-ops/src/effects.rs:1765` — `copy_chunk` | fix | F-IDIOM-002; `)` |
+| 1 | `crates/dotnet-utils/src/gc/cross_arena.rs:476` — `drain_leases` | fix (resolved) | F-IDIOM-002; `(` |
+| 2 | `crates/dotnet-utils/src/gc/cross_arena.rs:476` — `drain_leases` | fix (resolved) | F-IDIOM-002; `)` |
+| 3 | `crates/dotnet-vm-ops/src/effects.rs:1765` — `copy_chunk` | fix (resolved) | F-IDIOM-002; `(` |
+| 4 | `crates/dotnet-vm-ops/src/effects.rs:1765` — `copy_chunk` | fix (resolved) | F-IDIOM-002; `)` |
 
 ### RsUnnecessaryQualifications — 296 entries
 
@@ -821,17 +817,17 @@ Each row is one exported problem, identified by inspection and one-based XML ord
 
 | Entry | Snapshot site and nearby symbol | Decision | Reason / finding |
 |---|---|---|---|
-| 1 | `crates/dotnet-benchmarks/benches/runtime_primitives.rs:55` — `primitive_i32_vector` | fix | F-QUAL-001; `std::mem::` |
-| 2 | `crates/dotnet-intrinsics-reflection/src/types/type_queries.rs:30` — `resolve_base_runtime_type` | fix | F-QUAL-001; `dotnet_types::` |
-| 3 | `crates/dotnet-intrinsics-reflection/src/types/type_queries.rs:369` — `intrinsic_type_get_enum_underlying_type` | fix | F-QUAL-001; `dotnetdll::prelude::` |
-| 4 | `crates/dotnet-intrinsics-string/src/constructors.rs:207` — `intrinsic_string_ctor_char_array` | fix | F-QUAL-001; `crate::` |
-| 5 | `crates/dotnet-intrinsics-string/src/simd.rs:10` — `probe_sequence_equal_u16` | fix | F-QUAL-001; `core::mem::` |
-| 6 | `crates/dotnet-intrinsics-threading/src/volatile.rs:42` — `intrinsic_volatile_read` | fix | F-QUAL-001; `std::mem::` |
-| 7 | `crates/dotnet-intrinsics-threading/src/volatile.rs:241` — `intrinsic_volatile_write` | fix | F-QUAL-001; `std::mem::` |
-| 8 | `crates/dotnet-intrinsics-unsafe/src/lib.rs:80` — `ptr_info` | fix | F-QUAL-001; `dotnet_value::object::` |
-| 9 | `crates/dotnet-intrinsics-unsafe/src/unsafe_ptr.rs:104` — `intrinsic_unsafe_null_ref` | fix | F-QUAL-001; `std::` |
-| 10 | `crates/dotnet-intrinsics-unsafe/src/unsafe_ptr.rs:446` — `intrinsic_unsafe_bitcast` | fix | F-QUAL-001; `std::mem::` |
-| 11 | `crates/dotnet-intrinsics-unsafe/src/unsafe_ptr.rs:507` — `intrinsic_unsafe_bitcast` | fix | F-QUAL-001; `std::mem::` |
+| 1 | `crates/dotnet-benchmarks/benches/runtime_primitives.rs:55` — `primitive_i32_vector` | fix (resolved) | F-QUAL-001; `std::mem::` |
+| 2 | `crates/dotnet-intrinsics-reflection/src/types/type_queries.rs:30` — `resolve_base_runtime_type` | fix (resolved) | F-QUAL-001; `dotnet_types::` |
+| 3 | `crates/dotnet-intrinsics-reflection/src/types/type_queries.rs:369` — `intrinsic_type_get_enum_underlying_type` | fix (resolved) | F-QUAL-001; `dotnetdll::prelude::` |
+| 4 | `crates/dotnet-intrinsics-string/src/constructors.rs:207` — `intrinsic_string_ctor_char_array` | fix (resolved) | F-QUAL-001; `crate::` |
+| 5 | `crates/dotnet-intrinsics-string/src/simd.rs:10` — `probe_sequence_equal_u16` | fix (resolved) | F-QUAL-001; `core::mem::` |
+| 6 | `crates/dotnet-intrinsics-threading/src/volatile.rs:42` — `intrinsic_volatile_read` | fix (resolved) | F-QUAL-001; `std::mem::` |
+| 7 | `crates/dotnet-intrinsics-threading/src/volatile.rs:241` — `intrinsic_volatile_write` | fix (resolved) | F-QUAL-001; `std::mem::` |
+| 8 | `crates/dotnet-intrinsics-unsafe/src/lib.rs:80` — `ptr_info` | fix (resolved) | F-QUAL-001; `dotnet_value::object::` |
+| 9 | `crates/dotnet-intrinsics-unsafe/src/unsafe_ptr.rs:104` — `intrinsic_unsafe_null_ref` | fix (resolved) | F-QUAL-001; `std::` |
+| 10 | `crates/dotnet-intrinsics-unsafe/src/unsafe_ptr.rs:446` — `intrinsic_unsafe_bitcast` | fix (resolved) | F-QUAL-001; `std::mem::` |
+| 11 | `crates/dotnet-intrinsics-unsafe/src/unsafe_ptr.rs:507` — `intrinsic_unsafe_bitcast` | fix (resolved) | F-QUAL-001; `std::mem::` |
 | 12 | `crates/dotnet-macros/src/lib.rs:314` — `find_filter_fn` | keep | F-QUAL-001: macro hygiene, sync identity or doc target; `syn::` |
 | 13 | `crates/dotnet-macros/src/lib.rs:329` — `assert_filter_tail_is_true` | keep | F-QUAL-001: macro hygiene, sync identity or doc target; `syn::` |
 | 14 | `crates/dotnet-macros-core/src/lib.rs:136` — `parse` | keep | F-QUAL-001: macro hygiene, sync identity or doc target; `syn::` |
@@ -845,206 +841,206 @@ Each row is one exported problem, identified by inspection and one-based XML ord
 | 22 | `crates/dotnet-macros-core/src/lib.rs:931` — `test_parse_trait_alias_generics` | keep | F-QUAL-001: macro hygiene, sync identity or doc target; `syn::` |
 | 23 | `crates/dotnet-macros-core/src/lib.rs:942` — `test_struct_mapping_rejects_duplicate_binding_names` | keep | F-QUAL-001: macro hygiene, sync identity or doc target; `syn::` |
 | 24 | `crates/dotnet-macros-core/src/lib.rs:955` — `test_struct_mapping_rejects_duplicate_field_names` | keep | F-QUAL-001: macro hygiene, sync identity or doc target; `syn::` |
-| 25 | `crates/dotnet-metrics/src/lib.rs:1442` — `snapshot_includes_always_on_gc_pause_percentiles` | fix | F-QUAL-001; `std::time::` |
-| 26 | `crates/dotnet-pinvoke/src/call.rs:1257` — `typed_reference_input_abi_is_a_two_pointer_temporary` | fix | F-QUAL-001; `std::mem::` |
-| 27 | `crates/dotnet-pinvoke/src/call.rs:1258` — `typed_reference_input_abi_is_a_two_pointer_temporary` | fix | F-QUAL-001; `std::mem::` |
-| 28 | `crates/dotnet-pinvoke/src/call.rs:1261` — `typed_reference_input_abi_is_a_two_pointer_temporary` | fix | F-QUAL-001; `std::mem::` |
-| 29 | `crates/dotnet-pinvoke/src/call.rs:1262` — `typed_reference_input_abi_is_a_two_pointer_temporary` | fix | F-QUAL-001; `std::mem::` |
-| 30 | `crates/dotnet-runtime-memory/src/access.rs:169` — `object_atomic` | fix | F-QUAL-001; `std::mem::` |
-| 31 | `crates/dotnet-runtime-memory/src/access.rs:2079` — `dummy_wb_entry` | fix | F-QUAL-001; `gc_arena::` |
-| 32 | `crates/dotnet-runtime-memory/src/access.rs:2085` — `dummy_wb_entry` | fix | F-QUAL-001; `dotnet_utils::gc::` |
-| 33 | `crates/dotnet-runtime-memory/src/access.rs:2086` — `dummy_wb_entry` | fix | F-QUAL-001; `dotnet_value::` |
-| 34 | `crates/dotnet-runtime-resolver/src/layout.rs:34` — `integral_to_usize` | fix | F-QUAL-001; `dotnetdll::binary::signature::attribute::` |
-| 35 | `crates/dotnet-runtime-resolver/src/types.rs:169` — `has_finalizer` | fix | F-QUAL-001; `dotnet_types::generics::` |
-| 36 | `crates/dotnet-runtime-resolver/src/types.rs:171` — `has_finalizer` | fix | F-QUAL-001; `dotnetdll::prelude::` |
-| 37 | `crates/dotnet-tracer/src/lib.rs:70` — `(module context)` | fix | F-QUAL-001; `dotnet_metrics::` |
-| 38 | `crates/dotnet-tracer/src/lib.rs:710` — `init_tracing` | fix | F-QUAL-001; `std::sync::` |
-| 39 | `crates/dotnet-types/src/generics.rs:189` — `has_default_constructor` | fix | F-QUAL-001; `crate::generics::` |
-| 40 | `crates/dotnet-types/src/members.rs:145` — `method_index` | fix | F-QUAL-001; `dotnetdll::prelude::` |
-| 41 | `crates/dotnet-types/src/members.rs:159` — `body` | fix | F-QUAL-001; `dotnetdll::prelude::` |
-| 42 | `crates/dotnet-types/src/members.rs:262` — `make_type_index` | fix | F-QUAL-001; `std::mem::` |
-| 43 | `crates/dotnet-utils/src/atomic.rs:336` — `execute` | fix | F-QUAL-001; `std::mem::` |
-| 44 | `crates/dotnet-utils/src/atomic.rs:347` — `execute` | fix | F-QUAL-001; `std::` |
-| 45 | `crates/dotnet-utils/src/atomic.rs:359` — `execute` | fix | F-QUAL-001; `std::` |
-| 46 | `crates/dotnet-utils/src/atomic.rs:929` — `test_orderings` | fix | F-QUAL-001; `std::` |
-| 47 | `crates/dotnet-utils/src/gc/cross_arena.rs:872` — `unregister_waits_for_outstanding_lease` | fix | F-QUAL-001; `std::` |
-| 48 | `crates/dotnet-utils/src/gc/cross_arena.rs:879` — `unregister_waits_for_outstanding_lease` | fix | F-QUAL-001; `std::` |
-| 49 | `crates/dotnet-utils/src/gc/cross_arena.rs:879` — `unregister_waits_for_outstanding_lease` | fix | F-QUAL-001; `std::time::` |
-| 50 | `crates/dotnet-utils/src/sync/lock_order.rs:429` — `assert_can_acquire_after` | fix | F-QUAL-001; `super::` |
-| 51 | `crates/dotnet-utils/src/sync/lock_order.rs:430` — `assert_can_acquire_after` | fix | F-QUAL-001; `super::` |
-| 52 | `crates/dotnet-utils/src/sync/lock_order.rs:431` — `assert_can_acquire_after` | fix | F-QUAL-001; `super::` |
-| 53 | `crates/dotnet-value/src/layout.rs:657` — `read_from` | fix | F-QUAL-001; `dotnet_types::` |
-| 54 | `crates/dotnet-value/src/object_tests.rs:28` — `new` | keep | F-QUAL-001: macro hygiene, sync identity or doc target; `dotnet_utils::sync::` |
-| 55 | `crates/dotnet-value/src/object_tests.rs:178` — `codec_local_invalid_control` | fix | F-QUAL-001; `std::sync::` |
-| 56 | `crates/dotnet-value/src/object_tests.rs:202` — `publication_drops` | fix | F-QUAL-001; `std::sync::` |
-| 57 | `crates/dotnet-value/src/pointer/cross_arena.rs:91` — `retained_stack_value_lease` | fix | F-QUAL-001; `dotnet_utils::gc::` |
-| 58 | `crates/dotnet-value/src/pointer/tests.rs:39` — `static_storage_base` | fix | F-QUAL-001; `hashbrown::` |
-| 59 | `crates/dotnet-value/src/pointer/tests.rs:127` — `owner_retention_transient_native_int_conversion_is_rejected` | fix | F-QUAL-001; `crate::pointer::` |
-| 60 | `crates/dotnet-value/src/pointer/tests.rs:986` — `frame_home_access_checks_liveness_and_range` | fix | F-QUAL-001; `dotnet_types::error::` |
-| 61 | `crates/dotnet-value/src/pointer/tests.rs:996` — `frame_home_access_checks_liveness_and_range` | fix | F-QUAL-001; `dotnet_types::error::` |
-| 62 | `crates/dotnet-value/src/pointer/tests.rs:1228` — `test_managed_ptr_serialization_bugs_reproduction` | fix | F-QUAL-001; `crate::layout::` |
-| 63 | `crates/dotnet-value/src/pointer/tests.rs:1229` — `test_managed_ptr_serialization_bugs_reproduction` | fix | F-QUAL-001; `hashbrown::` |
-| 64 | `crates/dotnet-value/src/pointer/tests.rs:1232` — `test_managed_ptr_serialization_bugs_reproduction` | fix | F-QUAL-001; `crate::layout::` |
-| 65 | `crates/dotnet-value/src/pointer/tests.rs:1235` — `test_managed_ptr_serialization_bugs_reproduction` | fix | F-QUAL-001; `crate::storage::` |
-| 66 | `crates/dotnet-value/src/pointer/tests.rs:1388` — `ptr_arith_managed_ptr_checked_offset_reports_errors` | fix | F-QUAL-001; `crate::pointer::` |
-| 67 | `crates/dotnet-value/src/pointer/tests.rs:1484` — `ptr_arith_managed_ptr_checked_offset_reports_errors` | fix | F-QUAL-001; `crate::pointer::` |
-| 68 | `crates/dotnet-value/src/pointer/tests.rs:1507` — `ptr_arith_managed_ptr_checked_offset_reports_errors` | fix | F-QUAL-001; `crate::pointer::` |
-| 69 | `crates/dotnet-value/src/pointer/tests.rs:2532` — `retained_frame_home_range_checks_full_access` | fix | F-QUAL-001; `std::ptr::` |
-| 70 | `crates/dotnet-value/src/pointer/tests.rs:2541` — `retained_frame_home_range_checks_full_access` | fix | F-QUAL-001; `super::` |
-| 71 | `crates/dotnet-value/src/pointer/tests.rs:2549` — `retained_frame_home_range_checks_full_access` | fix | F-QUAL-001; `dotnet_types::error::` |
-| 72 | `crates/dotnet-value/src/pointer/tests.rs:2553` — `retained_frame_home_range_checks_full_access` | fix | F-QUAL-001; `dotnet_types::error::` |
-| 73 | `crates/dotnet-value/src/pointer/tests.rs:2557` — `retained_frame_home_range_checks_full_access` | fix | F-QUAL-001; `dotnet_types::error::` |
-| 74 | `crates/dotnet-value/src/stack_value.rs:1189` — `managed_pointer_numeric_operations_use_cached_non_heap_address` | fix | F-QUAL-001; `crate::` |
-| 75 | `crates/dotnet-value/src/stack_value.rs:1204` — `typed_reference_slot_copy_retains_type_lifetime_and_pointer_origin` | fix | F-QUAL-001; `crate::` |
-| 76 | `crates/dotnet-vm/src/condition_wait_tests.rs:117` — `condition_wait_release_before_recheck_keeps_ownership` | fix | F-QUAL-001; `dotnet_utils::` |
-| 77 | `crates/dotnet-vm/src/condition_wait_tests.rs:402` — `finalizer_wait_executor` | fix | F-QUAL-001; `crate::executor::` |
-| 78 | `crates/dotnet-vm/src/condition_wait_tests.rs:406` — `finalizer_wait_executor` | fix | F-QUAL-001; `crate::executor::` |
-| 79 | `crates/dotnet-vm/src/condition_wait_tests.rs:452` — `start_condition_monitor` | fix | F-QUAL-001; `dotnet_utils::` |
-| 80 | `crates/dotnet-vm/src/condition_wait_tests.rs:475` — `condition_wait_registration_schedules_do_not_lose_release` | fix | F-QUAL-001; `dotnet_utils::` |
-| 81 | `crates/dotnet-vm/src/condition_wait_tests.rs:511` — `condition_wait_stale_release_never_grants_ownership` | fix | F-QUAL-001; `dotnet_utils::` |
-| 82 | `crates/dotnet-vm/src/condition_wait_tests.rs:544` — `condition_wait_executor_parks_outside_mutation_and_wakes_on_release` | fix | F-QUAL-001; `dotnet_utils::` |
-| 83 | `crates/dotnet-vm/src/condition_wait_tests.rs:599` — `condition_wait_cancel_does_not_manufacture_finalizer_readiness` | fix | F-QUAL-001; `crate::executor::` |
-| 84 | `crates/dotnet-vm/src/condition_wait_tests.rs:602` — `condition_wait_cancel_does_not_manufacture_finalizer_readiness` | fix | F-QUAL-001; `crate::executor::` |
-| 85 | `crates/dotnet-vm/src/condition_wait_tests.rs:629` — `condition_wait_timeout_does_not_acquire_or_release_monitor` | fix | F-QUAL-001; `dotnet_utils::` |
-| 86 | `crates/dotnet-vm/src/condition_wait_tests.rs:645` — `condition_wait_executor_participates_in_real_gc_stop` | fix | F-QUAL-001; `dotnet_utils::` |
-| 87 | `crates/dotnet-vm/src/condition_wait_tests.rs:682` — `condition_wait_spurious_and_duplicate_wakes_only_trigger_rechecks` | fix | F-QUAL-001; `dotnet_utils::` |
-| 88 | `crates/dotnet-vm/src/condition_wait_tests.rs:720` — `condition_wait_cancellation_releases_registration_without_releasing_monitor` | fix | F-QUAL-001; `dotnet_utils::` |
-| 89 | `crates/dotnet-vm/src/condition_wait_tests.rs:726` — `condition_wait_cancellation_releases_registration_without_releasing_monitor` | fix | F-QUAL-001; `crate::executor::` |
-| 90 | `crates/dotnet-vm/src/condition_wait_tests.rs:754` — `condition_wait_deadline_survives_real_collection` | fix | F-QUAL-001; `dotnet_utils::` |
-| 91 | `crates/dotnet-vm/src/condition_wait_tests.rs:806` — `condition_wait_deadlines_and_notifications_are_activation_local` | fix | F-QUAL-001; `dotnet_utils::` |
-| 92 | `crates/dotnet-vm/src/condition_wait_tests.rs:850` — `condition_error_after_acquire_body` | fix | F-QUAL-001; `dotnet_types::error::` |
-| 93 | `crates/dotnet-vm/src/condition_wait_tests.rs:851` — `condition_error_after_acquire_body` | fix | F-QUAL-001; `dotnet_types::error::` |
-| 94 | `crates/dotnet-vm/src/condition_wait_tests.rs:861` — `condition_wait_acquisition_survives_later_native_failure` | fix | F-QUAL-001; `dotnet_utils::` |
-| 95 | `crates/dotnet-vm/src/condition_wait_tests.rs:949` — `condition_wait_foreign_monitor_owner_survives_collection` | fix | F-QUAL-001; `dotnet_utils::` |
-| 96 | `crates/dotnet-vm/src/condition_wait_tests.rs:998` — `condition_wait_unprobed_monitor_rechecks_before_parking` | fix | F-QUAL-001; `dotnet_utils::` |
-| 97 | `crates/dotnet-vm/src/condition_wait_tests.rs:1022` — `condition_wait_unprobed_monitor_rechecks_before_parking` | fix | F-QUAL-001; `crate::executor::` |
-| 98 | `crates/dotnet-vm/src/condition_wait_tests.rs:1026` — `condition_wait_unprobed_monitor_rechecks_before_parking` | fix | F-QUAL-001; `crate::executor::` |
-| 99 | `crates/dotnet-vm/src/condition_wait_tests.rs:1139` — `monitor_byref_contended_dispatch_survives_collection` | fix | F-QUAL-001; `dotnet_utils::` |
-| 100 | `crates/dotnet-vm/src/condition_wait_tests.rs:1309` — `static_descriptor_body` | fix | F-QUAL-001; `dotnet_types::error::` |
-| 101 | `crates/dotnet-vm/src/condition_wait_tests.rs:1506` — `monitor_static_timed_wait_survives_collection_and_writes_result` | fix | F-QUAL-001; `dotnet_utils::` |
-| 102 | `crates/dotnet-vm/src/condition_wait_tests.rs:1589` — `monitor_unmanaged_timed_wait_survives_collection_and_writes_result` | fix | F-QUAL-001; `dotnet_utils::` |
-| 103 | `crates/dotnet-vm/src/condition_wait_tests.rs:1686` — `release_monitor_for_test` | fix | F-QUAL-001; `dotnet_utils::` |
-| 104 | `crates/dotnet-vm/src/condition_wait_tests.rs:1692` — `hold_monitor_for_timeout` | fix | F-QUAL-001; `dotnet_utils::` |
-| 105 | `crates/dotnet-vm/src/condition_wait_tests.rs:1711` — `monitor_timed_byref_alias_writes_once_for_timeout_and_acquisition` | fix | F-QUAL-001; `dotnet_utils::` |
-| 106 | `crates/dotnet-vm/src/condition_wait_tests.rs:1822` — `monitor_timed_byref_writes_result_and_preserves_ownership` | fix | F-QUAL-001; `dotnet_utils::` |
-| 107 | `crates/dotnet-vm/src/condition_wait_tests.rs:1870` — `monitor_heap_byref_survives_collection_and_writes_owner` | fix | F-QUAL-001; `dotnet_utils::` |
-| 108 | `crates/dotnet-vm/src/condition_wait_tests.rs:2112` — `monitor_wait_rejects_retired_frame_home_without_unlocking` | fix | F-QUAL-001; `dotnet_utils::` |
-| 109 | `crates/dotnet-vm/src/condition_wait_tests.rs:2175` — `monitor_timed_dispatch_keeps_deadline_across_collection` | fix | F-QUAL-001; `dotnet_utils::` |
-| 110 | `crates/dotnet-vm/src/condition_wait_tests.rs:2380` — `drop` | fix | F-QUAL-001; `super::super::` |
-| 111 | `crates/dotnet-vm/src/condition_wait_tests.rs:2618` — `sleep_park_participates_in_gc_and_abort` | fix | F-QUAL-001; `crate::executor::` |
-| 112 | `crates/dotnet-vm/src/condition_wait_tests.rs:2685` — `monitor_pulse_schedules_preserve_wake_and_recursion` | fix | F-QUAL-001; `dotnet_utils::` |
-| 113 | `crates/dotnet-vm/src/condition_wait_tests.rs:2733` — `monitor_timeout_and_pulse_are_serialized_and_cancel_removes_waiter` | fix | F-QUAL-001; `dotnet_utils::` |
-| 114 | `crates/dotnet-vm/src/condition_wait_tests.rs:2734` — `monitor_timeout_and_pulse_are_serialized_and_cancel_removes_waiter` | fix | F-QUAL-001; `dotnet_utils::` |
-| 115 | `crates/dotnet-vm/src/condition_wait_tests.rs:2735` — `monitor_timeout_and_pulse_are_serialized_and_cancel_removes_waiter` | fix | F-QUAL-001; `dotnet_utils::` |
-| 116 | `crates/dotnet-vm/src/condition_wait_tests.rs:2868` — `native_monitor_wait_pulse_restores_recursion_after_suspension` | fix | F-QUAL-001; `dotnet_utils::` |
-| 117 | `crates/dotnet-vm/src/condition_wait_tests.rs:3619` — `pool_worker_parks_participates_in_gc_reuses_executor_and_shuts_down` | fix | F-QUAL-001; `crate::test_utils::` |
-| 118 | `crates/dotnet-vm/src/condition_wait_tests.rs:3635` — `pool_worker_parks_participates_in_gc_reuses_executor_and_shuts_down` | fix | F-QUAL-001; `crate::test_utils::` |
+| 25 | `crates/dotnet-metrics/src/lib.rs:1442` — `snapshot_includes_always_on_gc_pause_percentiles` | fix (resolved) | F-QUAL-001; `std::time::` |
+| 26 | `crates/dotnet-pinvoke/src/call.rs:1257` — `typed_reference_input_abi_is_a_two_pointer_temporary` | fix (resolved) | F-QUAL-001; `std::mem::` |
+| 27 | `crates/dotnet-pinvoke/src/call.rs:1258` — `typed_reference_input_abi_is_a_two_pointer_temporary` | fix (resolved) | F-QUAL-001; `std::mem::` |
+| 28 | `crates/dotnet-pinvoke/src/call.rs:1261` — `typed_reference_input_abi_is_a_two_pointer_temporary` | fix (resolved) | F-QUAL-001; `std::mem::` |
+| 29 | `crates/dotnet-pinvoke/src/call.rs:1262` — `typed_reference_input_abi_is_a_two_pointer_temporary` | fix (resolved) | F-QUAL-001; `std::mem::` |
+| 30 | `crates/dotnet-runtime-memory/src/access.rs:169` — `object_atomic` | fix (resolved) | F-QUAL-001; `std::mem::` |
+| 31 | `crates/dotnet-runtime-memory/src/access.rs:2079` — `dummy_wb_entry` | fix (resolved) | F-QUAL-001; `gc_arena::` |
+| 32 | `crates/dotnet-runtime-memory/src/access.rs:2085` — `dummy_wb_entry` | fix (resolved) | F-QUAL-001; `dotnet_utils::gc::` |
+| 33 | `crates/dotnet-runtime-memory/src/access.rs:2086` — `dummy_wb_entry` | fix (resolved) | F-QUAL-001; `dotnet_value::` |
+| 34 | `crates/dotnet-runtime-resolver/src/layout.rs:34` — `integral_to_usize` | fix (resolved) | F-QUAL-001; `dotnetdll::binary::signature::attribute::` |
+| 35 | `crates/dotnet-runtime-resolver/src/types.rs:169` — `has_finalizer` | fix (resolved) | F-QUAL-001; `dotnet_types::generics::` |
+| 36 | `crates/dotnet-runtime-resolver/src/types.rs:171` — `has_finalizer` | fix (resolved) | F-QUAL-001; `dotnetdll::prelude::` |
+| 37 | `crates/dotnet-tracer/src/lib.rs:70` — `(module context)` | fix (resolved) | F-QUAL-001; `dotnet_metrics::` |
+| 38 | `crates/dotnet-tracer/src/lib.rs:710` — `init_tracing` | fix (resolved) | F-QUAL-001; `std::sync::` |
+| 39 | `crates/dotnet-types/src/generics.rs:189` — `has_default_constructor` | fix (resolved) | F-QUAL-001; `crate::generics::` |
+| 40 | `crates/dotnet-types/src/members.rs:145` — `method_index` | fix (resolved) | F-QUAL-001; `dotnetdll::prelude::` |
+| 41 | `crates/dotnet-types/src/members.rs:159` — `body` | fix (resolved) | F-QUAL-001; `dotnetdll::prelude::` |
+| 42 | `crates/dotnet-types/src/members.rs:262` — `make_type_index` | fix (resolved) | F-QUAL-001; `std::mem::` |
+| 43 | `crates/dotnet-utils/src/atomic.rs:336` — `execute` | fix (resolved) | F-QUAL-001; `std::mem::` |
+| 44 | `crates/dotnet-utils/src/atomic.rs:347` — `execute` | fix (resolved) | F-QUAL-001; `std::` |
+| 45 | `crates/dotnet-utils/src/atomic.rs:359` — `execute` | fix (resolved) | F-QUAL-001; `std::` |
+| 46 | `crates/dotnet-utils/src/atomic.rs:929` — `test_orderings` | fix (resolved) | F-QUAL-001; `std::` |
+| 47 | `crates/dotnet-utils/src/gc/cross_arena.rs:872` — `unregister_waits_for_outstanding_lease` | fix (resolved) | F-QUAL-001; `std::` |
+| 48 | `crates/dotnet-utils/src/gc/cross_arena.rs:879` — `unregister_waits_for_outstanding_lease` | fix (resolved) | F-QUAL-001; `std::` |
+| 49 | `crates/dotnet-utils/src/gc/cross_arena.rs:879` — `unregister_waits_for_outstanding_lease` | fix (resolved) | F-QUAL-001; `std::time::` |
+| 50 | `crates/dotnet-utils/src/sync/lock_order.rs:429` — `assert_can_acquire_after` | keep | F-QUAL-001; `super::AcquireAfter` names the parent-owned lock-order trait in the conformance bound; importing it would hide that ownership behind the test module glob |
+| 51 | `crates/dotnet-utils/src/sync/lock_order.rs:430` — `assert_can_acquire_after` | keep | F-QUAL-001; `super::LockLevel` names the parent-owned lock-order trait in the conformance bound; importing it would hide that ownership behind the test module glob |
+| 52 | `crates/dotnet-utils/src/sync/lock_order.rs:431` — `assert_can_acquire_after` | keep | F-QUAL-001; `super::LockLevel` names the parent-owned lock-order trait in the conformance bound; importing it would hide that ownership behind the test module glob |
+| 53 | `crates/dotnet-value/src/layout.rs:657` — `read_from` | fix (resolved) | F-QUAL-001; `dotnet_types::` |
+| 54 | `crates/dotnet-value/src/object_tests.rs:28` — `new` | fix (resolved) | F-QUAL-001; imported `Arc` and `AtomicBool` from `dotnet_utils::sync` |
+| 55 | `crates/dotnet-value/src/object_tests.rs:178` — `codec_local_invalid_control` | fix (resolved) | F-QUAL-001; `std::sync::` |
+| 56 | `crates/dotnet-value/src/object_tests.rs:202` — `publication_drops` | fix (resolved) | F-QUAL-001; `std::sync::` |
+| 57 | `crates/dotnet-value/src/pointer/cross_arena.rs:91` — `retained_stack_value_lease` | fix (resolved) | F-QUAL-001; `dotnet_utils::gc::` |
+| 58 | `crates/dotnet-value/src/pointer/tests.rs:39` — `static_storage_base` | fix (resolved) | F-QUAL-001; `hashbrown::` |
+| 59 | `crates/dotnet-value/src/pointer/tests.rs:127` — `owner_retention_transient_native_int_conversion_is_rejected` | fix (resolved) | F-QUAL-001; `crate::pointer::` |
+| 60 | `crates/dotnet-value/src/pointer/tests.rs:986` — `frame_home_access_checks_liveness_and_range` | fix (resolved) | F-QUAL-001; `dotnet_types::error::` |
+| 61 | `crates/dotnet-value/src/pointer/tests.rs:996` — `frame_home_access_checks_liveness_and_range` | fix (resolved) | F-QUAL-001; `dotnet_types::error::` |
+| 62 | `crates/dotnet-value/src/pointer/tests.rs:1228` — `test_managed_ptr_serialization_bugs_reproduction` | fix (resolved) | F-QUAL-001; `crate::layout::` |
+| 63 | `crates/dotnet-value/src/pointer/tests.rs:1229` — `test_managed_ptr_serialization_bugs_reproduction` | fix (resolved) | F-QUAL-001; `hashbrown::` |
+| 64 | `crates/dotnet-value/src/pointer/tests.rs:1232` — `test_managed_ptr_serialization_bugs_reproduction` | fix (resolved) | F-QUAL-001; `crate::layout::` |
+| 65 | `crates/dotnet-value/src/pointer/tests.rs:1235` — `test_managed_ptr_serialization_bugs_reproduction` | fix (resolved) | F-QUAL-001; `crate::storage::` |
+| 66 | `crates/dotnet-value/src/pointer/tests.rs:1388` — `ptr_arith_managed_ptr_checked_offset_reports_errors` | fix (resolved) | F-QUAL-001; `crate::pointer::` |
+| 67 | `crates/dotnet-value/src/pointer/tests.rs:1484` — `ptr_arith_managed_ptr_checked_offset_reports_errors` | fix (resolved) | F-QUAL-001; `crate::pointer::` |
+| 68 | `crates/dotnet-value/src/pointer/tests.rs:1507` — `ptr_arith_managed_ptr_checked_offset_reports_errors` | fix (resolved) | F-QUAL-001; `crate::pointer::` |
+| 69 | `crates/dotnet-value/src/pointer/tests.rs:2532` — `retained_frame_home_range_checks_full_access` | fix (resolved) | F-QUAL-001; `std::ptr::` |
+| 70 | `crates/dotnet-value/src/pointer/tests.rs:2541` — `retained_frame_home_range_checks_full_access` | fix (resolved) | F-QUAL-001; `super::` |
+| 71 | `crates/dotnet-value/src/pointer/tests.rs:2549` — `retained_frame_home_range_checks_full_access` | fix (resolved) | F-QUAL-001; `dotnet_types::error::` |
+| 72 | `crates/dotnet-value/src/pointer/tests.rs:2553` — `retained_frame_home_range_checks_full_access` | fix (resolved) | F-QUAL-001; `dotnet_types::error::` |
+| 73 | `crates/dotnet-value/src/pointer/tests.rs:2557` — `retained_frame_home_range_checks_full_access` | fix (resolved) | F-QUAL-001; `dotnet_types::error::` |
+| 74 | `crates/dotnet-value/src/stack_value.rs:1189` — `managed_pointer_numeric_operations_use_cached_non_heap_address` | fix (resolved) | F-QUAL-001; `crate::` |
+| 75 | `crates/dotnet-value/src/stack_value.rs:1204` — `typed_reference_slot_copy_retains_type_lifetime_and_pointer_origin` | fix (resolved) | F-QUAL-001; `crate::` |
+| 76 | `crates/dotnet-vm/src/condition_wait_tests.rs:117` — `condition_wait_release_before_recheck_keeps_ownership` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 77 | `crates/dotnet-vm/src/condition_wait_tests.rs:402` — `finalizer_wait_executor` | fix (resolved) | F-QUAL-001; `crate::executor::` |
+| 78 | `crates/dotnet-vm/src/condition_wait_tests.rs:406` — `finalizer_wait_executor` | fix (resolved) | F-QUAL-001; `crate::executor::` |
+| 79 | `crates/dotnet-vm/src/condition_wait_tests.rs:452` — `start_condition_monitor` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 80 | `crates/dotnet-vm/src/condition_wait_tests.rs:475` — `condition_wait_registration_schedules_do_not_lose_release` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 81 | `crates/dotnet-vm/src/condition_wait_tests.rs:511` — `condition_wait_stale_release_never_grants_ownership` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 82 | `crates/dotnet-vm/src/condition_wait_tests.rs:544` — `condition_wait_executor_parks_outside_mutation_and_wakes_on_release` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 83 | `crates/dotnet-vm/src/condition_wait_tests.rs:599` — `condition_wait_cancel_does_not_manufacture_finalizer_readiness` | fix (resolved) | F-QUAL-001; `crate::executor::` |
+| 84 | `crates/dotnet-vm/src/condition_wait_tests.rs:602` — `condition_wait_cancel_does_not_manufacture_finalizer_readiness` | fix (resolved) | F-QUAL-001; `crate::executor::` |
+| 85 | `crates/dotnet-vm/src/condition_wait_tests.rs:629` — `condition_wait_timeout_does_not_acquire_or_release_monitor` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 86 | `crates/dotnet-vm/src/condition_wait_tests.rs:645` — `condition_wait_executor_participates_in_real_gc_stop` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 87 | `crates/dotnet-vm/src/condition_wait_tests.rs:682` — `condition_wait_spurious_and_duplicate_wakes_only_trigger_rechecks` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 88 | `crates/dotnet-vm/src/condition_wait_tests.rs:720` — `condition_wait_cancellation_releases_registration_without_releasing_monitor` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 89 | `crates/dotnet-vm/src/condition_wait_tests.rs:726` — `condition_wait_cancellation_releases_registration_without_releasing_monitor` | fix (resolved) | F-QUAL-001; `crate::executor::` |
+| 90 | `crates/dotnet-vm/src/condition_wait_tests.rs:754` — `condition_wait_deadline_survives_real_collection` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 91 | `crates/dotnet-vm/src/condition_wait_tests.rs:806` — `condition_wait_deadlines_and_notifications_are_activation_local` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 92 | `crates/dotnet-vm/src/condition_wait_tests.rs:850` — `condition_error_after_acquire_body` | fix (resolved) | F-QUAL-001; `dotnet_types::error::` |
+| 93 | `crates/dotnet-vm/src/condition_wait_tests.rs:851` — `condition_error_after_acquire_body` | fix (resolved) | F-QUAL-001; `dotnet_types::error::` |
+| 94 | `crates/dotnet-vm/src/condition_wait_tests.rs:861` — `condition_wait_acquisition_survives_later_native_failure` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 95 | `crates/dotnet-vm/src/condition_wait_tests.rs:949` — `condition_wait_foreign_monitor_owner_survives_collection` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 96 | `crates/dotnet-vm/src/condition_wait_tests.rs:998` — `condition_wait_unprobed_monitor_rechecks_before_parking` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 97 | `crates/dotnet-vm/src/condition_wait_tests.rs:1022` — `condition_wait_unprobed_monitor_rechecks_before_parking` | fix (resolved) | F-QUAL-001; `crate::executor::` |
+| 98 | `crates/dotnet-vm/src/condition_wait_tests.rs:1026` — `condition_wait_unprobed_monitor_rechecks_before_parking` | fix (resolved) | F-QUAL-001; `crate::executor::` |
+| 99 | `crates/dotnet-vm/src/condition_wait_tests.rs:1139` — `monitor_byref_contended_dispatch_survives_collection` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 100 | `crates/dotnet-vm/src/condition_wait_tests.rs:1309` — `static_descriptor_body` | fix (resolved) | F-QUAL-001; `dotnet_types::error::` |
+| 101 | `crates/dotnet-vm/src/condition_wait_tests.rs:1506` — `monitor_static_timed_wait_survives_collection_and_writes_result` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 102 | `crates/dotnet-vm/src/condition_wait_tests.rs:1589` — `monitor_unmanaged_timed_wait_survives_collection_and_writes_result` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 103 | `crates/dotnet-vm/src/condition_wait_tests.rs:1686` — `release_monitor_for_test` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 104 | `crates/dotnet-vm/src/condition_wait_tests.rs:1692` — `hold_monitor_for_timeout` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 105 | `crates/dotnet-vm/src/condition_wait_tests.rs:1711` — `monitor_timed_byref_alias_writes_once_for_timeout_and_acquisition` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 106 | `crates/dotnet-vm/src/condition_wait_tests.rs:1822` — `monitor_timed_byref_writes_result_and_preserves_ownership` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 107 | `crates/dotnet-vm/src/condition_wait_tests.rs:1870` — `monitor_heap_byref_survives_collection_and_writes_owner` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 108 | `crates/dotnet-vm/src/condition_wait_tests.rs:2112` — `monitor_wait_rejects_retired_frame_home_without_unlocking` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 109 | `crates/dotnet-vm/src/condition_wait_tests.rs:2175` — `monitor_timed_dispatch_keeps_deadline_across_collection` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 110 | `crates/dotnet-vm/src/condition_wait_tests.rs:2380` — `drop` | fix (resolved) | F-QUAL-001; `super::super::` |
+| 111 | `crates/dotnet-vm/src/condition_wait_tests.rs:2618` — `sleep_park_participates_in_gc_and_abort` | fix (resolved) | F-QUAL-001; `crate::executor::` |
+| 112 | `crates/dotnet-vm/src/condition_wait_tests.rs:2685` — `monitor_pulse_schedules_preserve_wake_and_recursion` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 113 | `crates/dotnet-vm/src/condition_wait_tests.rs:2733` — `monitor_timeout_and_pulse_are_serialized_and_cancel_removes_waiter` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 114 | `crates/dotnet-vm/src/condition_wait_tests.rs:2734` — `monitor_timeout_and_pulse_are_serialized_and_cancel_removes_waiter` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 115 | `crates/dotnet-vm/src/condition_wait_tests.rs:2735` — `monitor_timeout_and_pulse_are_serialized_and_cancel_removes_waiter` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 116 | `crates/dotnet-vm/src/condition_wait_tests.rs:2868` — `native_monitor_wait_pulse_restores_recursion_after_suspension` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 117 | `crates/dotnet-vm/src/condition_wait_tests.rs:3619` — `pool_worker_parks_participates_in_gc_reuses_executor_and_shuts_down` | fix (resolved) | F-QUAL-001; `crate::test_utils::` |
+| 118 | `crates/dotnet-vm/src/condition_wait_tests.rs:3635` — `pool_worker_parks_participates_in_gc_reuses_executor_and_shuts_down` | fix (resolved) | F-QUAL-001; `crate::test_utils::` |
 | 119 | `crates/dotnet-vm/src/condition_wait_tests.rs:3667` — `pool_worker_parks_participates_in_gc_reuses_executor_and_shuts_down` | keep | F-QUAL-001: macro hygiene, sync identity or doc target; `dotnet_utils::sync::` |
 | 120 | `crates/dotnet-vm/src/condition_wait_tests.rs:3689` — `pool_worker_parks_participates_in_gc_reuses_executor_and_shuts_down` | keep | F-QUAL-001: macro hygiene, sync identity or doc target; `dotnet_utils::sync::` |
-| 121 | `crates/dotnet-vm/src/condition_wait_tests.rs:3924` — `event_wait_parked_gc_and_signal` | fix | F-QUAL-001; `crate::executor::` |
-| 122 | `crates/dotnet-vm/src/condition_wait_tests.rs:3948` — `event_wait_spurious_wakes_and_abort_remove_registration` | fix | F-QUAL-001; `crate::executor::` |
-| 123 | `crates/dotnet-vm/src/condition_wait_tests.rs:4215` — `join_timeout_survives_collection` | fix | F-QUAL-001; `std::sync::` |
-| 124 | `crates/dotnet-vm/src/conversion_regression_tests.rs:120` — `new_static_field` | fix | F-QUAL-001; `resolved_mod::` |
-| 125 | `crates/dotnet-vm/src/executor.rs:480` — `run_thread_start_inner` | fix | F-QUAL-001; `std::sync::atomic::` |
-| 126 | `crates/dotnet-vm/src/executor.rs:741` — `install_thread_start_with_args` | fix | F-QUAL-001; `dotnet_value::object::` |
-| 127 | `crates/dotnet-vm/src/executor.rs:750` — `install_thread_start_with_args` | fix | F-QUAL-001; `dotnet_value::object::` |
-| 128 | `crates/dotnet-vm/src/executor_collection_tests.rs:109` — `run_vm_collection` | fix | F-QUAL-001; `dotnet_utils::` |
-| 129 | `crates/dotnet-vm/src/executor_collection_tests.rs:303` — `probe_any` | fix | F-QUAL-001; `dotnet_utils::` |
-| 130 | `crates/dotnet-vm/src/executor_collection_tests.rs:310` — `spawn_owner` | fix | F-QUAL-001; `dotnet_utils::` |
-| 131 | `crates/dotnet-vm/src/executor_collection_tests.rs:565` — `arena_lifetime_mark_command_rejects_stale_registration` | fix | F-QUAL-001; `dotnet_utils::gc::` |
-| 132 | `crates/dotnet-vm/src/executor_collection_tests.rs:573` — `arena_lifetime_mark_command_rejects_stale_registration` | fix | F-QUAL-001; `dotnet_utils::` |
-| 133 | `crates/dotnet-vm/src/executor_collection_tests.rs:587` — `arena_lifetime_mark_command_rejects_stale_registration` | fix | F-QUAL-001; `dotnet_utils::gc::` |
-| 134 | `crates/dotnet-vm/src/intrinsics/object_ops.rs:120` — `read_enum_value` | fix | F-QUAL-001; `dotnetdll::prelude::` |
-| 135 | `crates/dotnet-vm/src/intrinsics/object_ops.rs:128` — `read_enum_value` | fix | F-QUAL-001; `dotnetdll::prelude::` |
-| 136 | `crates/dotnet-vm/src/intrinsics/object_ops.rs:136` — `read_enum_value` | fix | F-QUAL-001; `dotnetdll::prelude::` |
-| 137 | `crates/dotnet-vm/src/intrinsics/object_ops.rs:144` — `read_enum_value` | fix | F-QUAL-001; `dotnetdll::prelude::` |
-| 138 | `crates/dotnet-vm/src/intrinsics/object_ops.rs:152` — `read_enum_value` | fix | F-QUAL-001; `dotnetdll::prelude::` |
-| 139 | `crates/dotnet-vm/src/intrinsics/object_ops.rs:160` — `read_enum_value` | fix | F-QUAL-001; `dotnetdll::prelude::` |
-| 140 | `crates/dotnet-vm/src/intrinsics/object_ops.rs:168` — `read_enum_value` | fix | F-QUAL-001; `dotnetdll::prelude::` |
-| 141 | `crates/dotnet-vm/src/intrinsics/object_ops.rs:176` — `read_enum_value` | fix | F-QUAL-001; `dotnetdll::prelude::` |
-| 142 | `crates/dotnet-vm/src/intrinsics/object_ops.rs:184` — `read_enum_value` | fix | F-QUAL-001; `dotnetdll::prelude::` |
-| 143 | `crates/dotnet-vm/src/intrinsics/object_ops.rs:190` — `read_enum_value` | fix | F-QUAL-001; `dotnetdll::prelude::` |
-| 144 | `crates/dotnet-vm/src/intrinsics/object_ops.rs:366` — `generic_enum_type` | fix | F-QUAL-001; `dotnetdll::prelude::` |
-| 145 | `crates/dotnet-vm/src/intrinsics/object_ops.rs:444` — `runtime_type_from_desc` | fix | F-QUAL-001; `dotnet_types::` |
-| 146 | `crates/dotnet-vm/src/layout.rs:166` — `runtime_handle_value_slots_use_object_ref_layout` | fix | F-QUAL-001; `std::mem::` |
+| 121 | `crates/dotnet-vm/src/condition_wait_tests.rs:3924` — `event_wait_parked_gc_and_signal` | fix (resolved) | F-QUAL-001; `crate::executor::` |
+| 122 | `crates/dotnet-vm/src/condition_wait_tests.rs:3948` — `event_wait_spurious_wakes_and_abort_remove_registration` | fix (resolved) | F-QUAL-001; `crate::executor::` |
+| 123 | `crates/dotnet-vm/src/condition_wait_tests.rs:4215` — `join_timeout_survives_collection` | fix (resolved) | F-QUAL-001; `std::sync::` |
+| 124 | `crates/dotnet-vm/src/conversion_regression_tests.rs:120` — `new_static_field` | fix (resolved) | F-QUAL-001; `resolved_mod::` |
+| 125 | `crates/dotnet-vm/src/executor.rs:480` — `run_thread_start_inner` | fix (resolved) | F-QUAL-001; `std::sync::atomic::` |
+| 126 | `crates/dotnet-vm/src/executor.rs:741` — `install_thread_start_with_args` | fix (resolved) | F-QUAL-001; `dotnet_value::object::` |
+| 127 | `crates/dotnet-vm/src/executor.rs:750` — `install_thread_start_with_args` | fix (resolved) | F-QUAL-001; `dotnet_value::object::` |
+| 128 | `crates/dotnet-vm/src/executor_collection_tests.rs:109` — `run_vm_collection` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 129 | `crates/dotnet-vm/src/executor_collection_tests.rs:303` — `probe_any` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 130 | `crates/dotnet-vm/src/executor_collection_tests.rs:310` — `spawn_owner` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 131 | `crates/dotnet-vm/src/executor_collection_tests.rs:565` — `arena_lifetime_mark_command_rejects_stale_registration` | fix (resolved) | F-QUAL-001; `dotnet_utils::gc::` |
+| 132 | `crates/dotnet-vm/src/executor_collection_tests.rs:573` — `arena_lifetime_mark_command_rejects_stale_registration` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 133 | `crates/dotnet-vm/src/executor_collection_tests.rs:587` — `arena_lifetime_mark_command_rejects_stale_registration` | fix (resolved) | F-QUAL-001; `dotnet_utils::gc::` |
+| 134 | `crates/dotnet-vm/src/intrinsics/object_ops.rs:120` — `read_enum_value` | fix (resolved) | F-QUAL-001; `dotnetdll::prelude::` |
+| 135 | `crates/dotnet-vm/src/intrinsics/object_ops.rs:128` — `read_enum_value` | fix (resolved) | F-QUAL-001; `dotnetdll::prelude::` |
+| 136 | `crates/dotnet-vm/src/intrinsics/object_ops.rs:136` — `read_enum_value` | fix (resolved) | F-QUAL-001; `dotnetdll::prelude::` |
+| 137 | `crates/dotnet-vm/src/intrinsics/object_ops.rs:144` — `read_enum_value` | fix (resolved) | F-QUAL-001; `dotnetdll::prelude::` |
+| 138 | `crates/dotnet-vm/src/intrinsics/object_ops.rs:152` — `read_enum_value` | fix (resolved) | F-QUAL-001; `dotnetdll::prelude::` |
+| 139 | `crates/dotnet-vm/src/intrinsics/object_ops.rs:160` — `read_enum_value` | fix (resolved) | F-QUAL-001; `dotnetdll::prelude::` |
+| 140 | `crates/dotnet-vm/src/intrinsics/object_ops.rs:168` — `read_enum_value` | fix (resolved) | F-QUAL-001; `dotnetdll::prelude::` |
+| 141 | `crates/dotnet-vm/src/intrinsics/object_ops.rs:176` — `read_enum_value` | fix (resolved) | F-QUAL-001; `dotnetdll::prelude::` |
+| 142 | `crates/dotnet-vm/src/intrinsics/object_ops.rs:184` — `read_enum_value` | fix (resolved) | F-QUAL-001; `dotnetdll::prelude::` |
+| 143 | `crates/dotnet-vm/src/intrinsics/object_ops.rs:190` — `read_enum_value` | fix (resolved) | F-QUAL-001; `dotnetdll::prelude::` |
+| 144 | `crates/dotnet-vm/src/intrinsics/object_ops.rs:366` — `generic_enum_type` | fix (resolved) | F-QUAL-001; `dotnetdll::prelude::` |
+| 145 | `crates/dotnet-vm/src/intrinsics/object_ops.rs:444` — `runtime_type_from_desc` | fix (resolved) | F-QUAL-001; `dotnet_types::` |
+| 146 | `crates/dotnet-vm/src/layout.rs:166` — `runtime_handle_value_slots_use_object_ref_layout` | fix (resolved) | F-QUAL-001; `std::mem::` |
 | 147 | `crates/dotnet-vm/src/native_return_tests.rs:42` — `method` | fix (resolved) | F-QUAL-001; `dotnetdll::resolved::` |
-| 148 | `crates/dotnet-vm/src/native_substring_tests.rs:404` — `pending_finalizer_runs_in_separate_segment_during_copy` | fix | F-QUAL-001; `dotnetdll::resolved::signature::` |
-| 149 | `crates/dotnet-vm/src/native_substring_tests.rs:786` — `indirect_opcode_refuses_without_consuming_operands` | fix | F-QUAL-001; `dotnetdll::resolved::signature::` |
-| 150 | `crates/dotnet-vm/src/native_substring_tests.rs:799` — `indirect_opcode_refuses_without_consuming_operands` | fix | F-QUAL-001; `crate::error::` |
-| 151 | `crates/dotnet-vm/src/native_substring_tests.rs:800` — `indirect_opcode_refuses_without_consuming_operands` | fix | F-QUAL-001; `dotnet_types::error::` |
-| 152 | `crates/dotnet-vm/src/native_substring_tests.rs:1422` — `native_test_select_reject` | fix | F-QUAL-001; `crate::error::` |
-| 153 | `crates/dotnet-vm/src/native_substring_tests.rs:1431` — `native_test_host_failure` | fix | F-QUAL-001; `crate::error::` |
-| 154 | `crates/dotnet-vm/src/native_substring_tests.rs:1891` — `native_activation_forgotten_access_is_terminal` | fix | F-QUAL-001; `crate::error::` |
-| 155 | `crates/dotnet-vm/src/native_substring_tests.rs:1892` — `native_activation_forgotten_access_is_terminal` | fix | F-QUAL-001; `crate::error::` |
-| 156 | `crates/dotnet-vm/src/native_substring_tests.rs:1906` — `native_activation_unregistered_pending_is_terminal` | fix | F-QUAL-001; `crate::error::` |
-| 157 | `crates/dotnet-vm/src/native_substring_tests.rs:1907` — `native_activation_unregistered_pending_is_terminal` | fix | F-QUAL-001; `crate::error::` |
-| 158 | `crates/dotnet-vm/src/native_substring_tests.rs:1977` — `native_activation_rejects_each_changed_caller_component` | fix | F-QUAL-001; `crate::error::` |
-| 159 | `crates/dotnet-vm/src/native_substring_tests.rs:1978` — `native_activation_rejects_each_changed_caller_component` | fix | F-QUAL-001; `crate::error::` |
-| 160 | `crates/dotnet-vm/src/native_substring_tests.rs:2974` — `push_new_string` | fix | F-QUAL-001; `crate::error::` |
+| 148 | `crates/dotnet-vm/src/native_substring_tests.rs:404` — `pending_finalizer_runs_in_separate_segment_during_copy` | fix (resolved) | F-QUAL-001; `dotnetdll::resolved::signature::` |
+| 149 | `crates/dotnet-vm/src/native_substring_tests.rs:786` — `indirect_opcode_refuses_without_consuming_operands` | fix (resolved) | F-QUAL-001; `dotnetdll::resolved::signature::` |
+| 150 | `crates/dotnet-vm/src/native_substring_tests.rs:799` — `indirect_opcode_refuses_without_consuming_operands` | fix (resolved) | F-QUAL-001; `crate::error::` |
+| 151 | `crates/dotnet-vm/src/native_substring_tests.rs:800` — `indirect_opcode_refuses_without_consuming_operands` | fix (resolved) | F-QUAL-001; `dotnet_types::error::` |
+| 152 | `crates/dotnet-vm/src/native_substring_tests.rs:1422` — `native_test_select_reject` | fix (resolved) | F-QUAL-001; `crate::error::` |
+| 153 | `crates/dotnet-vm/src/native_substring_tests.rs:1431` — `native_test_host_failure` | fix (resolved) | F-QUAL-001; `crate::error::` |
+| 154 | `crates/dotnet-vm/src/native_substring_tests.rs:1891` — `native_activation_forgotten_access_is_terminal` | fix (resolved) | F-QUAL-001; `crate::error::` |
+| 155 | `crates/dotnet-vm/src/native_substring_tests.rs:1892` — `native_activation_forgotten_access_is_terminal` | fix (resolved) | F-QUAL-001; `crate::error::` |
+| 156 | `crates/dotnet-vm/src/native_substring_tests.rs:1906` — `native_activation_unregistered_pending_is_terminal` | fix (resolved) | F-QUAL-001; `crate::error::` |
+| 157 | `crates/dotnet-vm/src/native_substring_tests.rs:1907` — `native_activation_unregistered_pending_is_terminal` | fix (resolved) | F-QUAL-001; `crate::error::` |
+| 158 | `crates/dotnet-vm/src/native_substring_tests.rs:1977` — `native_activation_rejects_each_changed_caller_component` | fix (resolved) | F-QUAL-001; `crate::error::` |
+| 159 | `crates/dotnet-vm/src/native_substring_tests.rs:1978` — `native_activation_rejects_each_changed_caller_component` | fix (resolved) | F-QUAL-001; `crate::error::` |
+| 160 | `crates/dotnet-vm/src/native_substring_tests.rs:2974` — `push_new_string` | fix (resolved) | F-QUAL-001; `crate::error::` |
 | 161 | `crates/dotnet-vm/src/native_substring_tests.rs:3300` — `boundary_executor_with_initializer` | fix (resolved) | F-QUAL-001; `dotnetdll::resolved::members::` |
 | 162 | `crates/dotnet-vm/src/native_substring_tests.rs:3316` — `boundary_executor_with_initializer` | fix (resolved) | F-QUAL-001; `dotnetdll::resolved::members::` |
 | 163 | `crates/dotnet-vm/src/native_substring_tests.rs:3572` — `native_capture_filters_and_child_cleanup_precede_outer_search` | fix (resolved) | F-QUAL-001; `dotnet_vm_data::` |
 | 164 | `crates/dotnet-vm/src/native_substring_tests.rs:3614` — `native_capture_filters_and_child_cleanup_precede_outer_search` | fix (resolved) | F-QUAL-001; `dotnet_vm_data::` |
 | 165 | `crates/dotnet-vm/src/native_substring_tests.rs:3705` — `static_store_operand_collection` | fix (resolved) | F-QUAL-001; `dotnetdll::resolved::members::` |
-| 166 | `crates/dotnet-vm/src/native_substring_tests.rs:4091` — `claim_initializer_for` | fix | F-QUAL-001; `dotnet_utils::` |
-| 167 | `crates/dotnet-vm/src/native_substring_tests.rs:4116` — `native_initializer_wait_rechecks_cycle_after_real_collection` | fix | F-QUAL-001; `dotnet_utils::` |
-| 168 | `crates/dotnet-vm/src/native_substring_tests.rs:4160` — `native_initializer_wait_replies_before_collection_when_owner_is_busy` | fix | F-QUAL-001; `dotnet_utils::` |
-| 169 | `crates/dotnet-vm/src/native_substring_tests.rs:4193` — `native_initializer_wait_observes_published_success` | fix | F-QUAL-001; `dotnet_utils::` |
-| 170 | `crates/dotnet-vm/src/native_substring_tests.rs:4219` — `native_initializer_wait_abort_removes_graph_edge` | fix | F-QUAL-001; `dotnet_utils::` |
-| 171 | `crates/dotnet-vm/src/native_substring_tests.rs:4263` — `drop` | fix | F-QUAL-001; `super::` |
-| 172 | `crates/dotnet-vm/src/native_substring_tests.rs:4268` — `drop` | fix | F-QUAL-001; `dotnet_utils::` |
-| 173 | `crates/dotnet-vm/src/native_substring_tests.rs:4295` — `drop` | fix | F-QUAL-001; `super::` |
+| 166 | `crates/dotnet-vm/src/native_substring_tests.rs:4091` — `claim_initializer_for` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 167 | `crates/dotnet-vm/src/native_substring_tests.rs:4116` — `native_initializer_wait_rechecks_cycle_after_real_collection` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 168 | `crates/dotnet-vm/src/native_substring_tests.rs:4160` — `native_initializer_wait_replies_before_collection_when_owner_is_busy` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 169 | `crates/dotnet-vm/src/native_substring_tests.rs:4193` — `native_initializer_wait_observes_published_success` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 170 | `crates/dotnet-vm/src/native_substring_tests.rs:4219` — `native_initializer_wait_abort_removes_graph_edge` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 171 | `crates/dotnet-vm/src/native_substring_tests.rs:4263` — `drop` | fix (resolved) | F-QUAL-001; `super::` |
+| 172 | `crates/dotnet-vm/src/native_substring_tests.rs:4268` — `drop` | fix (resolved) | F-QUAL-001; `dotnet_utils::` |
+| 173 | `crates/dotnet-vm/src/native_substring_tests.rs:4295` — `drop` | fix (resolved) | F-QUAL-001; `super::` |
 | 174 | `crates/dotnet-vm/src/native_substring_tests.rs:4698` — `native_capture_intrinsic_throw_precedes_outer_filter` | fix (resolved) | F-QUAL-001; `dotnet_vm_data::` |
 | 175 | `crates/dotnet-vm/src/native_substring_tests.rs:4830` — `native_boundary_unhandled_runs_child_cleanup` | fix (resolved) | F-QUAL-001; `dotnet_vm_data::` |
 | 176 | `crates/dotnet-vm/src/native_substring_tests.rs:4968` — `native_boundary_filter_search_precedes_cleanup` | fix (resolved) | F-QUAL-001; `dotnet_vm_data::` |
-| 177 | `crates/dotnet-vm/src/native_substring_tests.rs:5815` — `native_call_in_handler_preserves_ambient_unwind` | fix | F-QUAL-001; `dotnet_vm_data::exceptions::` |
-| 178 | `crates/dotnet-vm/src/native_substring_tests.rs:6258` — `managed_join_returns_before_native_worker_exits` | fix | F-QUAL-001; `std::sync::` |
-| 179 | `crates/dotnet-vm/src/native_substring_tests.rs:6305` — `managed_join_resolves_completion_published_after_start` | fix | F-QUAL-001; `std::sync::` |
-| 180 | `crates/dotnet-vm/src/native_substring_tests.rs:6375` — `native_error_retires_initializer_frame_before_future_drop` | fix | F-QUAL-001; `std::future::` |
-| 181 | `crates/dotnet-vm/src/native_substring_tests.rs:6536` — `worker_teardown_cleans_native_before_retiring_caller` | fix | F-QUAL-001; `std::future::` |
-| 182 | `crates/dotnet-vm/src/native_substring_tests.rs:6642` — `drop` | fix | F-QUAL-001; `dotnet_types::error::` |
-| 183 | `crates/dotnet-vm/src/native_substring_tests.rs:6741` — `drop` | fix | F-QUAL-001; `dotnet_types::error::` |
+| 177 | `crates/dotnet-vm/src/native_substring_tests.rs:5815` — `native_call_in_handler_preserves_ambient_unwind` | fix (resolved) | F-QUAL-001; `dotnet_vm_data::exceptions::` |
+| 178 | `crates/dotnet-vm/src/native_substring_tests.rs:6258` — `managed_join_returns_before_native_worker_exits` | fix (resolved) | F-QUAL-001; `std::sync::` |
+| 179 | `crates/dotnet-vm/src/native_substring_tests.rs:6305` — `managed_join_resolves_completion_published_after_start` | fix (resolved) | F-QUAL-001; `std::sync::` |
+| 180 | `crates/dotnet-vm/src/native_substring_tests.rs:6375` — `native_error_retires_initializer_frame_before_future_drop` | fix (resolved) | F-QUAL-001; `std::future::` |
+| 181 | `crates/dotnet-vm/src/native_substring_tests.rs:6536` — `worker_teardown_cleans_native_before_retiring_caller` | fix (resolved) | F-QUAL-001; `std::future::` |
+| 182 | `crates/dotnet-vm/src/native_substring_tests.rs:6642` — `drop` | fix (resolved) | F-QUAL-001; `dotnet_types::error::` |
+| 183 | `crates/dotnet-vm/src/native_substring_tests.rs:6741` — `drop` | fix (resolved) | F-QUAL-001; `dotnet_types::error::` |
 | 184 | `crates/dotnet-vm/src/native_substring_tests.rs:6806` — `static_fields_complete_without_activation` | fix (resolved) | F-QUAL-001; `dotnetdll::resolved::members::` |
-| 185 | `crates/dotnet-vm/src/native_substring_tests.rs:7416` — `test_failing_value_constructor` | fix | F-QUAL-001; `crate::error::` |
-| 186 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:508` — `void_sig` | fix | F-QUAL-001; `dotnetdll::binary::signature::kinds::` |
-| 187 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:513` — `void_sig` | fix | F-QUAL-001; `dotnetdll::binary::signature::kinds::` |
-| 188 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:528` — `new_static_field` | fix | F-QUAL-001; `dotnetdll::resolved::` |
-| 189 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:549` — `run_program` | fix | F-QUAL-001; `dotnetdll::prelude::` |
-| 190 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:559` — `run_program_with_collection` | fix | F-QUAL-001; `dotnetdll::prelude::` |
-| 191 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:592` — `build_program` | fix | F-QUAL-001; `dotnetdll::prelude::` |
-| 192 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:807` — `p35_ldflda_on_stack_value_type_then_ldind` | fix | F-QUAL-001; `dotnetdll::resolved::assembly::` |
-| 193 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:810` — `p35_ldflda_on_stack_value_type_then_ldind` | fix | F-QUAL-001; `dotnetdll::resolved::types::` |
-| 194 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:813` — `p35_ldflda_on_stack_value_type_then_ldind` | fix | F-QUAL-001; `dotnetdll::resolved::types::` |
-| 195 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:852` — `push_test_value_type` | fix | F-QUAL-001; `dotnetdll::resolved::assembly::` |
-| 196 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:855` — `push_test_value_type` | fix | F-QUAL-001; `dotnetdll::resolved::types::` |
-| 197 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:858` — `push_test_value_type` | fix | F-QUAL-001; `dotnetdll::resolved::types::` |
-| 198 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:1046` — `p43_enum_home_scalar_roundtrip` | fix | F-QUAL-001; `dotnetdll::resolved::assembly::` |
-| 199 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:1049` — `p43_enum_home_scalar_roundtrip` | fix | F-QUAL-001; `dotnetdll::resolved::types::` |
-| 200 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:1052` — `p43_enum_home_scalar_roundtrip` | fix | F-QUAL-001; `dotnetdll::resolved::types::` |
-| 201 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:3004` — `frame_blocks_exception_lifecycle` | fix | F-QUAL-001; `dotnetdll::resolved::types::` |
-| 202 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:3007` — `frame_blocks_exception_lifecycle` | fix | F-QUAL-001; `dotnetdll::resolved::types::` |
-| 203 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:3010` — `frame_blocks_exception_lifecycle` | fix | F-QUAL-001; `dotnetdll::resolved::members::` |
-| 204 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:3011` — `frame_blocks_exception_lifecycle` | fix | F-QUAL-001; `dotnetdll::resolved::members::` |
-| 205 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:3239` — `frame_home_block` | fix | F-QUAL-001; `std::mem::` |
-| 206 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:3839` — `p42_typed_reference_address_policy` | fix | F-QUAL-001; `dotnetdll::resolved::assembly::` |
-| 207 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:3842` — `p42_typed_reference_address_policy` | fix | F-QUAL-001; `dotnetdll::resolved::types::` |
-| 208 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:3845` — `p42_typed_reference_address_policy` | fix | F-QUAL-001; `dotnetdll::resolved::types::` |
-| 209 | `crates/dotnet-vm/src/stack/context.rs:88` — `drop` | fix | F-QUAL-001; `super::ops::` |
-| 210 | `crates/dotnet-vm/src/stack/context.rs:308` — `on_pop_safe` | fix | F-QUAL-001; `crate::error::` |
-| 211 | `crates/dotnet-vm/src/stack/context_ops.rs:165` — `instance_field_layout` | fix | F-QUAL-001; `dotnet_vm_ops::ops::` |
-| 212 | `crates/dotnet-vm/src/stack/context_ops.rs:196` — `new_object` | fix | F-QUAL-001; `dotnet_value::object::` |
-| 213 | `crates/dotnet-vm/src/stack/context_ops.rs:205` — `new_object_with_lookup` | fix | F-QUAL-001; `dotnet_value::object::` |
-| 214 | `crates/dotnet-vm/src/stack/context_ops.rs:385` — `type_layout` | fix | F-QUAL-001; `std::sync::` |
-| 215 | `crates/dotnet-vm/src/stack/context_ops.rs:556` — `threading_current_thread` | fix | F-QUAL-001; `std::sync::` |
-| 216 | `crates/dotnet-vm/src/stack/context_ops.rs:582` — `threading_new_managed_thread` | fix | F-QUAL-001; `std::sync::` |
+| 185 | `crates/dotnet-vm/src/native_substring_tests.rs:7416` — `test_failing_value_constructor` | fix (resolved) | F-QUAL-001; `crate::error::` |
+| 186 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:508` — `void_sig` | fix (resolved) | F-QUAL-001; `dotnetdll::binary::signature::kinds::` |
+| 187 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:513` — `void_sig` | fix (resolved) | F-QUAL-001; `dotnetdll::binary::signature::kinds::` |
+| 188 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:528` — `new_static_field` | fix (resolved) | F-QUAL-001; `dotnetdll::resolved::` |
+| 189 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:549` — `run_program` | fix (resolved) | F-QUAL-001; `dotnetdll::prelude::` |
+| 190 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:559` — `run_program_with_collection` | fix (resolved) | F-QUAL-001; `dotnetdll::prelude::` |
+| 191 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:592` — `build_program` | fix (resolved) | F-QUAL-001; `dotnetdll::prelude::` |
+| 192 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:807` — `p35_ldflda_on_stack_value_type_then_ldind` | fix (resolved) | F-QUAL-001; `dotnetdll::resolved::assembly::` |
+| 193 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:810` — `p35_ldflda_on_stack_value_type_then_ldind` | fix (resolved) | F-QUAL-001; `dotnetdll::resolved::types::` |
+| 194 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:813` — `p35_ldflda_on_stack_value_type_then_ldind` | fix (resolved) | F-QUAL-001; `dotnetdll::resolved::types::` |
+| 195 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:852` — `push_test_value_type` | fix (resolved) | F-QUAL-001; `dotnetdll::resolved::assembly::` |
+| 196 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:855` — `push_test_value_type` | fix (resolved) | F-QUAL-001; `dotnetdll::resolved::types::` |
+| 197 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:858` — `push_test_value_type` | fix (resolved) | F-QUAL-001; `dotnetdll::resolved::types::` |
+| 198 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:1046` — `p43_enum_home_scalar_roundtrip` | fix (resolved) | F-QUAL-001; `dotnetdll::resolved::assembly::` |
+| 199 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:1049` — `p43_enum_home_scalar_roundtrip` | fix (resolved) | F-QUAL-001; `dotnetdll::resolved::types::` |
+| 200 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:1052` — `p43_enum_home_scalar_roundtrip` | fix (resolved) | F-QUAL-001; `dotnetdll::resolved::types::` |
+| 201 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:3004` — `frame_blocks_exception_lifecycle` | fix (resolved) | F-QUAL-001; `dotnetdll::resolved::types::` |
+| 202 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:3007` — `frame_blocks_exception_lifecycle` | fix (resolved) | F-QUAL-001; `dotnetdll::resolved::types::` |
+| 203 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:3010` — `frame_blocks_exception_lifecycle` | fix (resolved) | F-QUAL-001; `dotnetdll::resolved::members::` |
+| 204 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:3011` — `frame_blocks_exception_lifecycle` | fix (resolved) | F-QUAL-001; `dotnetdll::resolved::members::` |
+| 205 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:3239` — `frame_home_block` | fix (resolved) | F-QUAL-001; `std::mem::` |
+| 206 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:3839` — `p42_typed_reference_address_policy` | fix (resolved) | F-QUAL-001; `dotnetdll::resolved::assembly::` |
+| 207 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:3842` — `p42_typed_reference_address_policy` | fix (resolved) | F-QUAL-001; `dotnetdll::resolved::types::` |
+| 208 | `crates/dotnet-vm/src/pointer_provenance_tests.rs:3845` — `p42_typed_reference_address_policy` | fix (resolved) | F-QUAL-001; `dotnetdll::resolved::types::` |
+| 209 | `crates/dotnet-vm/src/stack/context.rs:88` — `drop` | fix (resolved) | F-QUAL-001; `super::ops::` |
+| 210 | `crates/dotnet-vm/src/stack/context.rs:308` — `on_pop_safe` | fix (resolved) | F-QUAL-001; `crate::error::` |
+| 211 | `crates/dotnet-vm/src/stack/context_ops.rs:165` — `instance_field_layout` | fix (resolved) | F-QUAL-001; `dotnet_vm_ops::ops::` |
+| 212 | `crates/dotnet-vm/src/stack/context_ops.rs:196` — `new_object` | fix (resolved) | F-QUAL-001; `dotnet_value::object::` |
+| 213 | `crates/dotnet-vm/src/stack/context_ops.rs:205` — `new_object_with_lookup` | fix (resolved) | F-QUAL-001; `dotnet_value::object::` |
+| 214 | `crates/dotnet-vm/src/stack/context_ops.rs:385` — `type_layout` | fix (resolved) | F-QUAL-001; `std::sync::` |
+| 215 | `crates/dotnet-vm/src/stack/context_ops.rs:556` — `threading_current_thread` | fix (resolved) | F-QUAL-001; `std::sync::` |
+| 216 | `crates/dotnet-vm/src/stack/context_ops.rs:582` — `threading_new_managed_thread` | fix (resolved) | F-QUAL-001; `std::sync::` |
 | 217 | `crates/dotnet-vm/src/stack/mod.rs:47` — `(module context)` | keep | F-QUAL-001: macro hygiene, sync identity or doc target; `crate::dispatch::` |
-| 218 | `crates/dotnet-vm/src/stack/native_effects.rs:146` — `wait_test_hook` | fix | F-QUAL-001; `dotnet_types::` |
-| 219 | `crates/dotnet-vm/src/stack/native_effects.rs:433` — `class_constructor_target` | fix | F-QUAL-001; `dotnet_types::` |
-| 220 | `crates/dotnet-vm/src/stack/native_effects.rs:468` — `probe_initializer` | fix | F-QUAL-001; `dotnet_types::` |
-| 221 | `crates/dotnet-vm/src/stack/native_effects.rs:525` — `wrap_initializer_failure` | fix | F-QUAL-001; `dotnet_types::` |
-| 222 | `crates/dotnet-vm/src/stack/native_effects.rs:1142` — `start_native` | fix | F-QUAL-001; `dotnet_vm_data::` |
-| 223 | `crates/dotnet-vm/src/stack/ops.rs:66` — `local_address` | fix | F-QUAL-001; `crate::error::` |
-| 224 | `crates/dotnet-vm/src/stack/ops.rs:72` — `argument_address` | fix | F-QUAL-001; `crate::error::` |
+| 218 | `crates/dotnet-vm/src/stack/native_effects.rs:146` — `wait_test_hook` | fix (resolved) | F-QUAL-001; `dotnet_types::` |
+| 219 | `crates/dotnet-vm/src/stack/native_effects.rs:433` — `class_constructor_target` | fix (resolved) | F-QUAL-001; `dotnet_types::` |
+| 220 | `crates/dotnet-vm/src/stack/native_effects.rs:468` — `probe_initializer` | fix (resolved) | F-QUAL-001; `dotnet_types::` |
+| 221 | `crates/dotnet-vm/src/stack/native_effects.rs:525` — `wrap_initializer_failure` | fix (resolved) | F-QUAL-001; `dotnet_types::` |
+| 222 | `crates/dotnet-vm/src/stack/native_effects.rs:1142` — `start_native` | fix (resolved) | F-QUAL-001; `dotnet_vm_data::` |
+| 223 | `crates/dotnet-vm/src/stack/ops.rs:66` — `local_address` | fix (resolved) | F-QUAL-001; `crate::error::` |
+| 224 | `crates/dotnet-vm/src/stack/ops.rs:72` — `argument_address` | fix (resolved) | F-QUAL-001; `crate::error::` |
 | 225 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:157` — `write_unaligned` | fix (resolved) | F-QUAL-001; `dotnet_value::layout::` |
 | 226 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:173` — `write_unaligned` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
 | 227 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:191` — `write_unaligned` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
@@ -1099,24 +1095,24 @@ Each row is one exported problem, identified by inspection and one-based XML ord
 | 276 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:959` — `store_atomic` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
 | 277 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:967` — `store_atomic` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
 | 278 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:1102` — `owned_origin_typed_access_checks_complete_range` | fix (resolved) | F-QUAL-001; `dotnetdll::resolved::` |
-| 279 | `crates/dotnet-vm/src/sync/mod.rs:95` — `expire_for_test` | fix | F-QUAL-001; `std::time::` |
-| 280 | `crates/dotnet-vm/src/sync/threaded.rs:103` — `lock_and_try_enter` | fix | F-QUAL-001; `super::` |
-| 281 | `crates/dotnet-vm/src/sync/threaded.rs:144` — `enter_with_timeout` | fix | F-QUAL-001; `super::` |
-| 282 | `crates/dotnet-vm/src/threading/basic.rs:914` — `execute_gc_command_for_current_thread` | fix | F-QUAL-001; `std::sync::` |
-| 283 | `crates/dotnet-vm/src/threading/workers.rs:37` — `(module context)` | fix | F-QUAL-001; `std::sync::` |
-| 284 | `crates/dotnet-vm/src/threading/workers.rs:53` — `(module context)` | fix | F-QUAL-001; `std::sync::` |
-| 285 | `crates/dotnet-vm-data/src/lib.rs:93` — `new` | fix | F-QUAL-001; `exceptions::` |
-| 286 | `crates/dotnet-vm-ops/src/effects.rs:55` — `from` | fix | F-QUAL-001; `std::` |
-| 287 | `crates/dotnet-vm-ops/src/effects.rs:182` — `fetch` | fix | F-QUAL-001; `std::` |
-| 288 | `crates/dotnet-vm-ops/src/effects.rs:386` — `frame_home_block` | fix | F-QUAL-001; `std::` |
-| 289 | `crates/dotnet-vm-ops/src/effects.rs:2802` — `rooted_frame_home_descriptor_preserves_aliases_and_rejects_retired_home` | fix | F-QUAL-001; `std::` |
-| 290 | `crates/dotnet-vm-ops/src/effects.rs:2820` — `frame_home_block` | fix | F-QUAL-001; `std::` |
-| 291 | `crates/dotnet-vm-ops/src/effects.rs:2828` — `frame_home_block` | fix | F-QUAL-001; `std::` |
-| 292 | `crates/dotnet-vm-ops/src/effects.rs:2829` — `frame_home_block` | fix | F-QUAL-001; `std::` |
-| 293 | `crates/dotnet-vm-ops/src/ops.rs:134` — `push_value_type` | fix | F-QUAL-001; `dotnet_value::object::` |
-| 294 | `crates/dotnet-vm-ops/src/ops.rs:181` — `pop_value_type` | fix | F-QUAL-001; `dotnet_value::object::` |
-| 295 | `crates/dotnet-vm-ops/src/ops.rs:440` — `new_object` | fix | F-QUAL-001; `dotnet_value::object::` |
-| 296 | `crates/dotnet-vm-ops/src/ops.rs:445` — `new_object_with_lookup` | fix | F-QUAL-001; `dotnet_value::object::` |
+| 279 | `crates/dotnet-vm/src/sync/mod.rs:95` — `expire_for_test` | fix (resolved) | F-QUAL-001; `std::time::` |
+| 280 | `crates/dotnet-vm/src/sync/threaded.rs:103` — `lock_and_try_enter` | fix (resolved) | F-QUAL-001; `super::` |
+| 281 | `crates/dotnet-vm/src/sync/threaded.rs:144` — `enter_with_timeout` | fix (resolved) | F-QUAL-001; `super::` |
+| 282 | `crates/dotnet-vm/src/threading/basic.rs:914` — `execute_gc_command_for_current_thread` | fix (resolved) | F-QUAL-001; `std::sync::` |
+| 283 | `crates/dotnet-vm/src/threading/workers.rs:37` — `(module context)` | fix (resolved) | F-QUAL-001; `std::sync::` |
+| 284 | `crates/dotnet-vm/src/threading/workers.rs:53` — `(module context)` | fix (resolved) | F-QUAL-001; `std::sync::` |
+| 285 | `crates/dotnet-vm-data/src/lib.rs:93` — `new` | fix (resolved) | F-QUAL-001; `exceptions::` |
+| 286 | `crates/dotnet-vm-ops/src/effects.rs:55` — `from` | fix (resolved) | F-QUAL-001; `std::` |
+| 287 | `crates/dotnet-vm-ops/src/effects.rs:182` — `fetch` | fix (resolved) | F-QUAL-001; `std::` |
+| 288 | `crates/dotnet-vm-ops/src/effects.rs:386` — `frame_home_block` | fix (resolved) | F-QUAL-001; `std::` |
+| 289 | `crates/dotnet-vm-ops/src/effects.rs:2802` — `rooted_frame_home_descriptor_preserves_aliases_and_rejects_retired_home` | fix (resolved) | F-QUAL-001; `std::` |
+| 290 | `crates/dotnet-vm-ops/src/effects.rs:2820` — `frame_home_block` | fix (resolved) | F-QUAL-001; `std::` |
+| 291 | `crates/dotnet-vm-ops/src/effects.rs:2828` — `frame_home_block` | fix (resolved) | F-QUAL-001; `std::` |
+| 292 | `crates/dotnet-vm-ops/src/effects.rs:2829` — `frame_home_block` | fix (resolved) | F-QUAL-001; `std::` |
+| 293 | `crates/dotnet-vm-ops/src/ops.rs:134` — `push_value_type` | fix (resolved) | F-QUAL-001; `dotnet_value::object::` |
+| 294 | `crates/dotnet-vm-ops/src/ops.rs:181` — `pop_value_type` | fix (resolved) | F-QUAL-001; `dotnet_value::object::` |
+| 295 | `crates/dotnet-vm-ops/src/ops.rs:440` — `new_object` | fix (resolved) | F-QUAL-001; `dotnet_value::object::` |
+| 296 | `crates/dotnet-vm-ops/src/ops.rs:445` — `new_object_with_lookup` | fix (resolved) | F-QUAL-001; `dotnet_value::object::` |
 
 ### RsUnusedMut — 1 entries
 

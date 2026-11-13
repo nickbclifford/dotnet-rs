@@ -1,22 +1,40 @@
 //! Executor controls for the async, finite substring copy.
 
+#[cfg(feature = "multithreading")]
+use super::WAIT_TEST_HOOK;
 use super::*;
 use crate::{
     StepResult,
+    error::{ExecutionError, VmError},
     stack::{BasePointer, ops::EvalStackOps},
     test_utils::{parameterless_i32_signature, test_gc_handle},
 };
 use dotnet_assemblies::AssemblyLoader;
 use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
-use dotnet_utils::gc::GCHandleType;
+#[cfg(feature = "multithreading")]
+use dotnet_utils::ArenaId;
+use dotnet_utils::{ByteOffset, gc::GCHandleType};
 use dotnet_value::{
     StackValue,
     object::{HeapStorage, ObjectRef},
     string::CLRString,
 };
-use dotnet_vm_data::ExceptionState;
-use dotnetdll::{prelude::*, resolved::members::Method};
-use std::cell::RefCell;
+use dotnet_vm_data::{
+    ExceptionState, ProtectedSection,
+    exceptions::{Handler, HandlerKind, ManagedException},
+};
+use dotnetdll::{
+    prelude::*,
+    resolved::{members::Method, signature::ReturnType},
+};
+#[cfg(feature = "multithreading")]
+use std::sync::mpsc;
+#[cfg(feature = "multithreading")]
+use std::sync::{Arc as StdArc, atomic::AtomicBool};
+use std::{
+    cell::RefCell,
+    future::{Future, pending},
+};
 
 const CHUNK: usize = 64 * 1024;
 const LENGTH: usize = CHUNK * 2 + 17;
@@ -402,7 +420,7 @@ fn pending_finalizer_runs_in_separate_segment_during_copy() {
     }
     let mut signature = parameterless_i32_signature();
     signature.instance = true;
-    signature.return_type = dotnetdll::resolved::signature::ReturnType(vec![], None);
+    signature.return_type = ReturnType(vec![], None);
     let mut finalizer = Method::new(
         Accessibility::Public,
         signature,
@@ -784,7 +802,7 @@ fn indirect_opcode_refuses_without_consuming_operands() {
                         explicit_this: false,
                         calling_convention: StandAloneCallingConvention::DefaultManaged,
                         parameters: vec![],
-                        return_type: dotnetdll::resolved::signature::ReturnType(vec![], None),
+                        return_type: ReturnType(vec![], None),
                         varargs: None,
                     };
                     let instruction = Instruction::CallIndirect {
@@ -797,9 +815,7 @@ fn indirect_opcode_refuses_without_consuming_operands() {
                     );
                     assert!(matches!(
                         result,
-                        StepResult::Error(crate::error::VmError::Execution(
-                            dotnet_types::error::ExecutionError::NotImplemented(_)
-                        ))
+                        StepResult::Error(VmError::Execution(ExecutionError::NotImplemented(_)))
                     ));
                     assert!(engine.stack.execution.call_state.native.is_empty());
                     assert_eq!(engine.stack.execution.evaluation_stack.stack.len(), 3);
@@ -1184,7 +1200,7 @@ fn foreign_byref_owner_survives_collection_and_child_call(cross_origin: bool) {
                             TypeDescription::NULL,
                             source.as_ptr().expect("foreign object"),
                             &lease,
-                            dotnet_utils::ByteOffset::new(0),
+                            ByteOffset::new(0),
                         )
                     }
                 } else {
@@ -1193,7 +1209,7 @@ fn foreign_byref_owner_survives_collection_and_child_call(cross_origin: bool) {
                         TypeDescription::NULL,
                         Some(source),
                         false,
-                        Some(dotnet_utils::ByteOffset::new(0)),
+                        Some(ByteOffset::new(0)),
                     )
                 };
                 let mut ctx = engine.ves_context(gc);
@@ -1420,7 +1436,7 @@ fn native_test_select_reject<'a, 'gc>(
 ) -> dotnet_vm_ops::effects::NativeSelection {
     assert!(matches!(operands.peek_at(0), StackValue::Int32(3)));
     dotnet_vm_ops::effects::NativeSelection::Reject(
-        crate::error::ExecutionError::InternalError("test selector rejection".into()).into(),
+        ExecutionError::InternalError("test selector rejection".into()).into(),
     )
 }
 
@@ -1429,7 +1445,7 @@ fn native_test_host_failure(
 ) -> dotnet_vm_ops::effects::NativeFuture {
     Box::pin(async {
         Err(dotnet_vm_ops::effects::NativeFailure::Host(
-            crate::error::ExecutionError::InternalError("test host failure".into()).into(),
+            ExecutionError::InternalError("test host failure".into()).into(),
         ))
     })
 }
@@ -1705,7 +1721,7 @@ fn native_test_immediate(
 fn native_test_invalid_pending(
     _: dotnet_vm_ops::effects::VmEffects,
 ) -> dotnet_vm_ops::effects::NativeFuture {
-    Box::pin(std::future::pending())
+    Box::pin(pending())
 }
 
 #[test]
@@ -1795,7 +1811,7 @@ fn native_test_pending_without_effect(
             vm.pop_string()?
         };
         fx.yield_now().await?;
-        std::future::pending::<()>().await;
+        pending::<()>().await;
         drop(source);
         Ok(())
     })
@@ -1889,8 +1905,8 @@ fn native_activation_forgotten_access_is_terminal() {
         StepResult::Yield
     );
     assert!(
-        matches!(resume(&mut executor), StepResult::Error(crate::error::VmError::Execution(
-        crate::error::ExecutionError::InternalError(ref message)
+        matches!(resume(&mut executor), StepResult::Error(VmError::Execution(
+        ExecutionError::InternalError(ref message)
     )) if message.contains("invalid native poll result"))
     );
     assert_native_source_released(&mut executor);
@@ -1904,8 +1920,8 @@ fn native_activation_unregistered_pending_is_terminal() {
         StepResult::Yield
     );
     assert!(
-        matches!(resume(&mut executor), StepResult::Error(crate::error::VmError::Execution(
-        crate::error::ExecutionError::InternalError(ref message)
+        matches!(resume(&mut executor), StepResult::Error(VmError::Execution(
+        ExecutionError::InternalError(ref message)
     )) if message.contains("invalid native poll result"))
     );
     assert_native_source_released(&mut executor);
@@ -1975,8 +1991,8 @@ fn native_activation_rejects_each_changed_caller_component() {
             })
             .unwrap();
         assert!(
-            matches!(result, StepResult::Error(crate::error::VmError::Execution(
-            crate::error::ExecutionError::InternalError(ref message)
+            matches!(result, StepResult::Error(VmError::Execution(
+            ExecutionError::InternalError(ref message)
         )) if message.contains("native caller changed")),
             "{component}: {result:?}"
         );
@@ -2972,7 +2988,7 @@ fn native_activation_rejects_reply_from_wrong_root_set() {
         fn operands(&mut self) -> &mut Vec<StackValue<'gc>> {
             &mut self.0
         }
-        fn push_new_string(&mut self, _: Vec<u16>) -> Result<(), crate::error::VmError> {
+        fn push_new_string(&mut self, _: Vec<u16>) -> Result<(), VmError> {
             unreachable!()
         }
     }
@@ -3507,8 +3523,8 @@ fn boundary_start_with(
 fn boundary_throw(
     executor: &mut Executor,
     exception_type: TypeDescription,
-    child: Vec<dotnet_vm_data::ProtectedSection>,
-    parent: Vec<dotnet_vm_data::ProtectedSection>,
+    child: Vec<ProtectedSection>,
+    parent: Vec<ProtectedSection>,
 ) -> StepResult {
     boundary_throw_inner(executor, exception_type, child, parent, false)
 }
@@ -3516,8 +3532,8 @@ fn boundary_throw(
 fn boundary_throw_inner(
     executor: &mut Executor,
     exception_type: TypeDescription,
-    child: Vec<dotnet_vm_data::ProtectedSection>,
-    parent: Vec<dotnet_vm_data::ProtectedSection>,
+    child: Vec<ProtectedSection>,
+    parent: Vec<ProtectedSection>,
     weak: bool,
 ) -> StepResult {
     use crate::stack::ops::ExceptionOps;
@@ -3560,13 +3576,13 @@ fn boundary_throw_inner(
 }
 
 fn boundary_section(
-    kind: dotnet_vm_data::exceptions::HandlerKind,
+    kind: HandlerKind,
     instructions: std::ops::Range<usize>,
     handler: std::ops::Range<usize>,
-) -> dotnet_vm_data::ProtectedSection {
-    dotnet_vm_data::ProtectedSection {
+) -> ProtectedSection {
+    ProtectedSection {
         instructions,
-        handlers: vec![dotnet_vm_data::exceptions::Handler {
+        handlers: vec![Handler {
             instructions: handler,
             kind,
         }],
@@ -3618,7 +3634,6 @@ fn capturing_boundary_body(
 #[test]
 fn native_capture_filters_and_child_cleanup_precede_outer_search() {
     use crate::stack::ops::ExceptionOps;
-    use dotnet_vm_data::exceptions::HandlerKind;
     let (mut executor, ty) = boundary_executor(false);
     boundary_start_with(&mut executor, capturing_boundary_body);
     let child = vec![
@@ -4090,7 +4105,6 @@ fn native_initializer_host_error_publishes_failure() {
 #[test]
 fn native_initializer_child_cleanup_precedes_outer_filter() {
     use crate::stack::ops::ExceptionOps;
-    use dotnet_vm_data::exceptions::HandlerKind;
     let (mut executor, exception_type) = boundary_executor_with_initializer(false, true);
     let subject = initializer_test_subject(&executor, "FilterSubject");
     assert!(matches!(
@@ -4161,7 +4175,7 @@ fn native_initializer_child_cleanup_precedes_outer_filter() {
 fn claim_initializer_for(
     executor: &mut Executor,
     ty: TypeDescription,
-    owner: dotnet_utils::ArenaId,
+    owner: ArenaId,
 ) -> crate::statics::StaticInitResult {
     use crate::stack::ops::VmResolutionOps;
     executor
@@ -4186,7 +4200,7 @@ fn native_initializer_wait_rechecks_cycle_after_real_collection() {
     let first = initializer_test_subject(&executor, "FirstSubject");
     let second = initializer_test_subject(&executor, "SecondSubject");
     CALL_TARGET.with(|slot| *slot.borrow_mut() = first.static_initializer());
-    let owner = dotnet_utils::ArenaId::new(9999);
+    let owner = ArenaId::new(9999);
     let thread = executor.thread_id;
     let claim_1 = claim_initializer_for(&mut executor, first.clone(), owner);
     assert!(matches!(
@@ -4230,7 +4244,7 @@ fn native_initializer_wait_rechecks_cycle_after_real_collection() {
 fn native_initializer_wait_replies_before_collection_when_owner_is_busy() {
     let (mut executor, _) = boundary_executor_with_initializer(false, true);
     let subject = initializer_test_subject(&executor, "CollectionWaitSubject");
-    let owner = dotnet_utils::ArenaId::new(9999);
+    let owner = ArenaId::new(9999);
     let claim = claim_initializer_for(&mut executor, subject.clone(), owner);
     assert!(matches!(
         claim,
@@ -4263,7 +4277,7 @@ fn native_initializer_wait_replies_before_collection_when_owner_is_busy() {
 fn native_initializer_wait_observes_published_success() {
     let (mut executor, _) = boundary_executor_with_initializer(false, true);
     let subject = initializer_test_subject(&executor, "WaitSubject");
-    let owner = dotnet_utils::ArenaId::new(9999);
+    let owner = ArenaId::new(9999);
     let claim_3 = claim_initializer_for(&mut executor, subject.clone(), owner);
     assert!(matches!(
         claim_3,
@@ -4289,7 +4303,7 @@ fn native_initializer_wait_abort_removes_graph_edge() {
     let first = initializer_test_subject(&executor, "WaitAbortFirst");
     let second = initializer_test_subject(&executor, "WaitAbortSecond");
     CALL_TARGET.with(|slot| *slot.borrow_mut() = first.static_initializer());
-    let owner = dotnet_utils::ArenaId::new(9999);
+    let owner = ArenaId::new(9999);
     let thread = executor.thread_id;
     let claim_4 = claim_initializer_for(&mut executor, first.clone(), owner);
     assert!(matches!(
@@ -4333,12 +4347,12 @@ fn native_initializer_executor_wait_wakes_after_registration() {
     struct ClearHook;
     impl Drop for ClearHook {
         fn drop(&mut self) {
-            super::WAIT_TEST_HOOK.with(|hook| *hook.borrow_mut() = None);
+            WAIT_TEST_HOOK.with(|hook| *hook.borrow_mut() = None);
         }
     }
     let (mut executor, _) = boundary_executor_with_initializer(false, true);
     let subject = initializer_test_subject(&executor, "WakeSubject");
-    let owner = dotnet_utils::ArenaId::new(9999);
+    let owner = ArenaId::new(9999);
     let claim_6 = claim_initializer_for(&mut executor, subject.clone(), owner);
     assert!(matches!(
         claim_6,
@@ -4365,7 +4379,7 @@ fn native_initializer_executor_wait_wakes_after_registration() {
         })
         .unwrap();
     let (send, receive) = mpsc::channel();
-    super::WAIT_TEST_HOOK.with(|hook| {
+    WAIT_TEST_HOOK.with(|hook| {
         *hook.borrow_mut() = Some(Box::new(move || {
             let _ = send.send(());
         }))
@@ -4423,9 +4437,9 @@ fn native_initializer_failure_survives_owner_retirement_and_collection() {
     let owner_state = shared.clone();
     let owner_subject = subject.clone();
     let owner_exception = exception_type.clone();
-    let (send, receive) = std::sync::mpsc::channel();
-    let (ready, started) = std::sync::mpsc::channel();
-    let (release, wait_for_release) = std::sync::mpsc::channel();
+    let (send, receive) = mpsc::channel();
+    let (ready, started) = mpsc::channel();
+    let (release, wait_for_release) = mpsc::channel();
     let completion = shared.workers.spawn_owner(move |running| {
         use crate::threading::ThreadManagerOps;
         let mut owner = Executor::new(owner_state.clone());
@@ -4598,7 +4612,6 @@ fn capturing_success_body(
 
 #[test]
 fn native_capture_child_handler_returns_normally() {
-    use dotnet_vm_data::exceptions::HandlerKind;
     let (mut executor, ty) = boundary_executor(false);
     boundary_start_with(&mut executor, capturing_success_body);
     let child = vec![boundary_section(
@@ -4723,7 +4736,6 @@ fn capturing_synchronous_body(
 
 #[test]
 fn native_capture_intrinsic_throw_precedes_outer_filter() {
-    use dotnet_vm_data::exceptions::HandlerKind;
     use dotnet_vm_ops::effects::{NativeDispatchMode, NativeIntrinsicHost};
     let (mut executor, _) = boundary_executor(false);
     let method = substring_method(&executor, true);
@@ -4806,7 +4818,6 @@ fn capturing_handled_body(
 #[test]
 fn native_capture_inside_filter_restores_outer_exception() {
     use crate::stack::ops::ExceptionOps;
-    use dotnet_vm_data::exceptions::HandlerKind;
     use dotnet_vm_ops::{
         MemoryOps,
         effects::{NativeDispatchMode, NativeIntrinsicHost},
@@ -4883,7 +4894,6 @@ fn native_capture_inside_filter_restores_outer_exception() {
 
 #[test]
 fn native_boundary_unhandled_runs_child_cleanup() {
-    use dotnet_vm_data::exceptions::HandlerKind;
     let (mut executor, ty) = boundary_executor(true);
     boundary_start(&mut executor);
     let sections = vec![
@@ -4932,7 +4942,6 @@ fn native_boundary_unhandled_runs_child_cleanup() {
 
 #[test]
 fn native_boundary_outer_handler_runs_after_child_cleanup() {
-    use dotnet_vm_data::exceptions::HandlerKind;
     let (mut executor, ty) = boundary_executor(true);
     boundary_start(&mut executor);
     let child = vec![
@@ -4982,7 +4991,6 @@ fn native_boundary_outer_handler_runs_after_child_cleanup() {
 
 #[test]
 fn native_boundary_inner_handler_keeps_parent_alive() {
-    use dotnet_vm_data::exceptions::HandlerKind;
     let (mut executor, ty) = boundary_executor(true);
     boundary_start(&mut executor);
     let child = vec![boundary_section(
@@ -5018,7 +5026,6 @@ fn native_boundary_inner_handler_keeps_parent_alive() {
 #[test]
 fn native_boundary_filter_search_precedes_cleanup() {
     use crate::stack::ops::ExceptionOps;
-    use dotnet_vm_data::exceptions::HandlerKind;
     let (mut executor, ty) = boundary_executor(true);
     boundary_start(&mut executor);
     let child = vec![boundary_section(HandlerKind::Finally, 0..1, 1..2)];
@@ -5153,7 +5160,6 @@ fn native_boundary_survives_exception_in_outer_filter() {
 
 #[test]
 fn native_boundary_cleanup_survives_collection() {
-    use dotnet_vm_data::exceptions::HandlerKind;
     let (mut executor, ty) = boundary_executor(false);
     boundary_start(&mut executor);
     let child = vec![boundary_section(HandlerKind::Finally, 0..1, 1..2)];
@@ -5201,7 +5207,6 @@ fn boundary_synchronous_throw_body(
 
 #[test]
 fn native_boundary_synchronous_throw_reaches_caller_handler() {
-    use dotnet_vm_data::exceptions::HandlerKind;
     use dotnet_vm_ops::effects::{NativeDispatchMode, NativeIntrinsicHost};
     let (mut executor, _) = boundary_executor(false);
     let ty = executor
@@ -5267,7 +5272,6 @@ fn native_boundary_synchronous_throw_reaches_caller_handler() {
 
 #[test]
 fn native_call_in_filter_does_not_reply_to_suspended_call() {
-    use dotnet_vm_data::exceptions::HandlerKind;
     use dotnet_vm_ops::effects::{NativeDispatchMode, NativeIntrinsicHost};
     let (mut executor, ty) = boundary_executor(true);
     boundary_start(&mut executor);
@@ -5640,7 +5644,6 @@ fn foreign_short_weak_handle_clears_before_the_owner_finalizes() {
 
 #[test]
 fn finalizer_preserves_filter_and_suspended_native_context() {
-    use dotnet_vm_data::exceptions::HandlerKind;
     let (mut executor, ty) = boundary_executor(false);
     boundary_start(&mut executor);
     let parent = vec![boundary_section(
@@ -5702,7 +5705,6 @@ fn finalizer_preserves_filter_and_suspended_native_context() {
 
 #[test]
 fn finalizer_exception_cannot_reach_interrupted_handler() {
-    use dotnet_vm_data::exceptions::HandlerKind;
     use dotnet_vm_ops::MemoryOps;
     let (mut executor, ty) = boundary_executor(false);
     boundary_start(&mut executor);
@@ -5814,7 +5816,6 @@ fn finalizer_segment_resolves_parked_homes_and_preserves_serials() {
 
 #[test]
 fn native_call_in_handler_preserves_ambient_unwind() {
-    use dotnet_vm_data::exceptions::HandlerKind;
     use dotnet_vm_ops::effects::{NativeDispatchMode, NativeIntrinsicHost};
     let (mut executor, ty) = boundary_executor(false);
     boundary_start(&mut executor);
@@ -5879,7 +5880,7 @@ fn native_call_in_handler_preserves_ambient_unwind() {
                 assert_eq!(engine.stack.execution.call_state.native.len(), 1);
                 assert_eq!(
                     engine.ves_context(gc).endfinally(),
-                    StepResult::MethodThrew(dotnet_vm_data::exceptions::ManagedException {
+                    StepResult::MethodThrew(ManagedException {
                         type_name: "System.Exception".into(),
                         message: None,
                         stack_trace: None
@@ -5894,7 +5895,6 @@ fn native_call_in_handler_preserves_ambient_unwind() {
 #[test]
 fn native_activations_follow_nested_filter_segments() {
     use crate::stack::ops::ExceptionOps;
-    use dotnet_vm_data::exceptions::HandlerKind;
     use dotnet_vm_ops::effects::{NativeDispatchMode, NativeIntrinsicHost};
     let (mut executor, ty) = boundary_executor(false);
     boundary_start(&mut executor);
@@ -6016,7 +6016,6 @@ fn native_activations_follow_nested_filter_segments() {
 
 #[test]
 fn abort_retires_suspended_native_frames() {
-    use dotnet_vm_data::exceptions::HandlerKind;
     let (mut executor, ty) = boundary_executor(false);
     boundary_start(&mut executor);
     let parent = vec![boundary_section(
@@ -6111,7 +6110,6 @@ fn finalizer_native_ids_remain_monotonic_across_segments() {
 
 #[test]
 fn finalizer_exception_cannot_enter_interrupted_filter() {
-    use dotnet_vm_data::exceptions::HandlerKind;
     use dotnet_vm_ops::MemoryOps;
     let (mut executor, ty) = boundary_executor(false);
     boundary_start(&mut executor);
@@ -6198,7 +6196,6 @@ fn finalizer_after_entrypoint_preserves_exit_value() {
 #[test]
 fn abort_drops_suspended_children_before_active_parent() {
     use crate::stack::ops::ExceptionOps;
-    use dotnet_vm_data::exceptions::HandlerKind;
     use dotnet_vm_ops::{
         MemoryOps,
         effects::{NativeDispatchMode, NativeIntrinsicHost},
@@ -6295,8 +6292,8 @@ fn managed_join_returns_before_native_worker_exits() {
     let method = test_constructor_method(&executor);
     boundary_start(&mut executor);
     let shared = executor.shared.clone();
-    let (release, held) = std::sync::mpsc::channel();
-    let (ready, published) = std::sync::mpsc::channel();
+    let (release, held) = mpsc::channel();
+    let (ready, published) = mpsc::channel();
     let completion = shared.workers.spawn_with_completion_hook(
         || ExecutorResult::Exited(0),
         move || {
@@ -6322,7 +6319,7 @@ fn managed_join_returns_before_native_worker_exits() {
                         started: true,
                         background: false,
                         completion_index: Some(completion.index()),
-                        retained: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                        retained: StdArc::new(AtomicBool::new(true)),
                     },
                 );
                 let mut ctx = engine.ves_context(gc);
@@ -6369,7 +6366,7 @@ fn managed_join_resolves_completion_published_after_start() {
         started: true,
         background: false,
         completion_index,
-        retained: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        retained: StdArc::new(AtomicBool::new(true)),
     };
     let (first, ptr) = executor
         .with_arena(|arena| {
@@ -6426,7 +6423,7 @@ mod native_return_tests;
 
 #[test]
 fn native_error_retires_initializer_frame_before_future_drop() {
-    use dotnet_utils::ByteOffset;
+    use ByteOffset;
     use dotnet_value::{
         ManagedPtr,
         layout::{FieldLayoutManager, GcDesc},
@@ -6439,7 +6436,7 @@ fn native_error_retires_initializer_frame_before_future_drop() {
         layout: Arc<FieldLayoutManager>,
         retired: Rc<Cell<Option<bool>>>,
     }
-    impl std::future::Future for Witness {
+    impl Future for Witness {
         type Output = dotnet_vm_ops::effects::NativeResult;
         fn poll(
             mut self: std::pin::Pin<&mut Self>,
@@ -6567,7 +6564,7 @@ fn native_future_owner_revokes_control_before_drop() {
     };
     let future = Box::pin(async move {
         let _probe = probe;
-        std::future::pending::<()>().await;
+        pending::<()>().await;
         Ok(())
     });
     let owner = crate::stack::context::NativeFutureOwner {
@@ -6581,7 +6578,7 @@ fn native_future_owner_revokes_control_before_drop() {
 #[cfg(feature = "multithreading")]
 #[test]
 fn worker_teardown_cleans_native_before_retiring_caller() {
-    use dotnet_utils::ByteOffset;
+    use ByteOffset;
     use dotnet_value::{
         ManagedPtr,
         layout::{FieldLayoutManager, GcDesc},
@@ -6600,7 +6597,7 @@ fn worker_teardown_cleans_native_before_retiring_caller() {
         layout: Arc<FieldLayoutManager>,
         result: StdArc<AtomicUsize>,
     }
-    impl std::future::Future for Witness {
+    impl Future for Witness {
         type Output = dotnet_vm_ops::effects::NativeResult;
         fn poll(
             mut self: std::pin::Pin<&mut Self>,
@@ -6706,10 +6703,7 @@ fn worker_teardown_cleans_native_before_retiring_caller() {
                     })
                     .unwrap();
                 ExecutorResult::Error(
-                    dotnet_types::error::ExecutionError::InternalError(
-                        "injected worker failure".into(),
-                    )
-                    .into(),
+                    ExecutionError::InternalError("injected worker failure".into()).into(),
                 )
             }))
         });
@@ -6805,10 +6799,7 @@ fn trigger_initializer_host_error_releases_waiter() {
                 send.send(subject).unwrap();
                 released.recv_timeout(Duration::from_secs(30)).unwrap();
                 ExecutorResult::Error(
-                    dotnet_types::error::ExecutionError::InternalError(
-                        "injected worker failure".into(),
-                    )
-                    .into(),
+                    ExecutionError::InternalError("injected worker failure".into()).into(),
                 )
             }));
         });
@@ -7137,7 +7128,7 @@ fn exception_fields_are_optional_and_empty_message_stays_null() {
                             .state
                             .info_handle
                             .exceptions = vec![Arc::new(boundary_section(
-                            dotnet_vm_data::exceptions::HandlerKind::Filter { clause_offset: 1 },
+                            HandlerKind::Filter { clause_offset: 1 },
                             0..1,
                             1..2,
                         ))];
@@ -7221,7 +7212,7 @@ fn exception_fields_survive_collection_for_sync_and_native_dispatch() {
                             .state
                             .info_handle
                             .exceptions = vec![Arc::new(boundary_section(
-                            dotnet_vm_data::exceptions::HandlerKind::Filter { clause_offset: 1 },
+                            HandlerKind::Filter { clause_offset: 1 },
                             0..1,
                             1..2,
                         ))];
@@ -7325,7 +7316,7 @@ fn substring_body_validates_invalid_ranges_and_null_receiver() {
                         .state
                         .info_handle
                         .exceptions = vec![Arc::new(boundary_section(
-                        dotnet_vm_data::exceptions::HandlerKind::Filter { clause_offset: 1 },
+                        HandlerKind::Filter { clause_offset: 1 },
                         0..1,
                         1..2,
                     ))];
@@ -7371,7 +7362,7 @@ fn substring_body_rejects_non_string_receivers() {
                         .state
                         .info_handle
                         .exceptions = vec![Arc::new(boundary_section(
-                        dotnet_vm_data::exceptions::HandlerKind::Filter { clause_offset: 1 },
+                        HandlerKind::Filter { clause_offset: 1 },
                         0..1,
                         1..2,
                     ))];
@@ -7670,7 +7661,7 @@ fn test_failing_value_constructor(
         let _receiver = fx.vm().await?.prepare_multicast()?.0;
         fx.yield_now().await?;
         Err(dotnet_vm_ops::effects::NativeFailure::Host(
-            crate::error::ExecutionError::InternalError("constructor failure".into()).into(),
+            ExecutionError::InternalError("constructor failure".into()).into(),
         ))
     })
 }

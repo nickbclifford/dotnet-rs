@@ -41,10 +41,15 @@ use dotnetdll::{
     binary::signature::kinds::CallingConvention,
     prelude::*,
     resolved::{
-        members::Method,
-        types::{BaseType, TypeDefinition},
+        assembly::ExternalAssemblyReference,
+        members::{
+            Accessibility as MemberAccessibility, ExternalMethodReference, Method,
+            MethodReferenceParent,
+        },
+        types::{BaseType, ExternalTypeReference, ResolutionScope, TypeDefinition},
     },
 };
+use std::mem::size_of;
 
 fn corlib_resolution(module: &'static str, assembly: &'static str) -> Resolution<'static> {
     let mut res = Resolution::new(Module::new(module));
@@ -517,12 +522,11 @@ use dotnetdll::resolved::{
     signature::{MethodSignature, ReturnType},
 };
 
-fn void_sig() -> MethodSignature<dotnetdll::binary::signature::kinds::CallingConvention, MethodType>
-{
+fn void_sig() -> MethodSignature<CallingConvention, MethodType> {
     MethodSignature {
         instance: false,
         explicit_this: false,
-        calling_convention: dotnetdll::binary::signature::kinds::CallingConvention::Default,
+        calling_convention: CallingConvention::Default,
         parameters: vec![],
         return_type: ReturnType(vec![], None),
         varargs: None,
@@ -536,9 +540,7 @@ fn new_static_field(name: &str, ty: BaseType<MemberType>) -> Field<'static> {
         type_modifiers: vec![],
         by_ref: false,
         return_type: MemberType::Base(Box::new(ty)),
-        accessibility: dotnetdll::resolved::members::Accessibility::Access(
-            dotnetdll::resolved::Accessibility::Public,
-        ),
+        accessibility: MemberAccessibility::Access(Accessibility::Public),
         static_member: true,
         init_only: false,
         literal: false,
@@ -558,7 +560,7 @@ fn run_program(
     asm: &str,
     setup: impl FnOnce(
         &mut Resolution<'static>,
-        dotnetdll::prelude::TypeIndex,
+        TypeIndex,
     ) -> (usize, Vec<LocalVariable>, Vec<Instruction>),
 ) -> i32 {
     run_program_with_collection(asm, setup, false)
@@ -568,7 +570,7 @@ fn run_program_with_collection(
     asm: &str,
     setup: impl FnOnce(
         &mut Resolution<'static>,
-        dotnetdll::prelude::TypeIndex,
+        TypeIndex,
     ) -> (usize, Vec<LocalVariable>, Vec<Instruction>),
     collect_after_local_store: bool,
 ) -> i32 {
@@ -601,7 +603,7 @@ fn build_program(
     asm: &str,
     setup: impl FnOnce(
         &mut Resolution<'static>,
-        dotnetdll::prelude::TypeIndex,
+        TypeIndex,
     ) -> (usize, Vec<LocalVariable>, Vec<Instruction>),
 ) -> (Arc<SharedGlobalState>, MethodDescription) {
     let loader = get_mock_loader();
@@ -815,15 +817,13 @@ fn p35_ldflda_on_stack_value_type_then_ldind() {
     let r = run_program("P35", |res, _type_idx| {
         // The mock loader registers two corlib copies; `ValueType` must resolve through the one
         // `corlib_wkt` uses (mscorlib) or `is_value_type` is false and the local initialises null.
-        let system_runtime = res.push_assembly_reference(
-            dotnetdll::resolved::assembly::ExternalAssemblyReference::new("mscorlib"),
-        );
-        let value_type_ref =
-            res.push_type_reference(dotnetdll::resolved::types::ExternalTypeReference::new(
-                Some("System".into()),
-                "ValueType",
-                dotnetdll::resolved::types::ResolutionScope::Assembly(system_runtime),
-            ));
+        let system_runtime =
+            res.push_assembly_reference(ExternalAssemblyReference::new("mscorlib"));
+        let value_type_ref = res.push_type_reference(ExternalTypeReference::new(
+            Some("System".into()),
+            "ValueType",
+            ResolutionScope::Assembly(system_runtime),
+        ));
         let mut struct_def = TypeDefinition::new(None, "P35Struct");
         struct_def.extends = Some(value_type_ref.into());
         let struct_idx = res.push_type_definition(struct_def);
@@ -860,15 +860,12 @@ fn push_test_value_type(
     byref_like: bool,
     ref_field: bool,
 ) -> (TypeIndex, BaseType<MethodType>, FieldSource) {
-    let corlib = res.push_assembly_reference(
-        dotnetdll::resolved::assembly::ExternalAssemblyReference::new("mscorlib"),
-    );
-    let value_type_ref =
-        res.push_type_reference(dotnetdll::resolved::types::ExternalTypeReference::new(
-            Some("System".into()),
-            "ValueType",
-            dotnetdll::resolved::types::ResolutionScope::Assembly(corlib),
-        ));
+    let corlib = res.push_assembly_reference(ExternalAssemblyReference::new("mscorlib"));
+    let value_type_ref = res.push_type_reference(ExternalTypeReference::new(
+        Some("System".into()),
+        "ValueType",
+        ResolutionScope::Assembly(corlib),
+    ));
     let mut struct_def = TypeDefinition::new(None, name.to_string());
     struct_def.extends = Some(value_type_ref.into());
     if byref_like {
@@ -1054,15 +1051,12 @@ fn homed_object_local_survives_collection() {
 #[test]
 fn p43_enum_home_scalar_roundtrip() {
     let (shared, entrypoint) = build_program("P43", |res, owner| {
-        let corlib = res.push_assembly_reference(
-            dotnetdll::resolved::assembly::ExternalAssemblyReference::new("mscorlib"),
-        );
-        let enum_ref =
-            res.push_type_reference(dotnetdll::resolved::types::ExternalTypeReference::new(
-                Some("System".into()),
-                "Enum",
-                dotnetdll::resolved::types::ResolutionScope::Assembly(corlib),
-            ));
+        let corlib = res.push_assembly_reference(ExternalAssemblyReference::new("mscorlib"));
+        let enum_ref = res.push_type_reference(ExternalTypeReference::new(
+            Some("System".into()),
+            "Enum",
+            ResolutionScope::Assembly(corlib),
+        ));
         let mut definition = TypeDefinition::new(None, "HomeEnum");
         definition.extends = Some(enum_ref.into());
         let index = res.push_type_definition(definition);
@@ -3167,28 +3161,26 @@ fn frame_blocks_exception_lifecycle(filter_result: Option<i32>) {
         "LocallocExceptionUnwindType".to_string()
     );
 
-    let exception_type_ref =
-        res.push_type_reference(dotnetdll::resolved::types::ExternalTypeReference::new(
-            Some("System".into()),
-            "Exception",
-            dotnetdll::resolved::types::ResolutionScope::Assembly(system_runtime),
-        ));
-    let exception_ctor =
-        res.push_method_reference(dotnetdll::resolved::members::ExternalMethodReference {
-            parent: dotnetdll::resolved::members::MethodReferenceParent::Type(MethodType::Base(
-                Box::new(BaseType::class(exception_type_ref)),
-            )),
-            name: ".ctor".into(),
-            signature: MethodSignature {
-                instance: true,
-                explicit_this: false,
-                calling_convention: CallingConvention::Default,
-                parameters: vec![],
-                return_type: ReturnType(vec![], None),
-                varargs: None,
-            },
-            attributes: vec![],
-        });
+    let exception_type_ref = res.push_type_reference(ExternalTypeReference::new(
+        Some("System".into()),
+        "Exception",
+        ResolutionScope::Assembly(system_runtime),
+    ));
+    let exception_ctor = res.push_method_reference(ExternalMethodReference {
+        parent: MethodReferenceParent::Type(MethodType::Base(Box::new(BaseType::class(
+            exception_type_ref,
+        )))),
+        name: ".ctor".into(),
+        signature: MethodSignature {
+            instance: true,
+            explicit_this: false,
+            calling_convention: CallingConvention::Default,
+            parameters: vec![],
+            return_type: ReturnType(vec![], None),
+            varargs: None,
+        },
+        attributes: vec![],
+    });
 
     let thrower_body = make_test_method!(
         max_stack: 1,
@@ -3403,7 +3395,7 @@ fn frame_blocks_exception_lifecycle(filter_result: Option<i32>) {
                     &HomeResolver(frame_stack),
                     slot.serial,
                     slot.home.offset,
-                    std::mem::size_of::<usize>(),
+                    size_of::<usize>(),
                 )
                 .expect("suspended home must pass range and liveness checks");
                 // SAFETY: F10.FrameHomeChecked — the checked window covers the initialized IntPtr home.
@@ -4002,16 +3994,13 @@ fn p42_typed_reference_address_policy() {
             for initialized in [false, true] {
                 let (shared, entrypoint) = build_program("TypedReferenceAddress", |res, ty| {
                     let i32_type = MethodType::Base(Box::new(BaseType::Int32));
-                    let assembly = res.push_assembly_reference(
-                        dotnetdll::resolved::assembly::ExternalAssemblyReference::new("mscorlib"),
-                    );
-                    let tr = res.push_type_reference(
-                        dotnetdll::resolved::types::ExternalTypeReference::new(
-                            Some("System".into()),
-                            "TypedReference",
-                            dotnetdll::resolved::types::ResolutionScope::Assembly(assembly),
-                        ),
-                    );
+                    let assembly =
+                        res.push_assembly_reference(ExternalAssemblyReference::new("mscorlib"));
+                    let tr = res.push_type_reference(ExternalTypeReference::new(
+                        Some("System".into()),
+                        "TypedReference",
+                        ResolutionScope::Assembly(assembly),
+                    ));
                     let tr_type = BaseType::Type {
                         value_kind: Some(ValueKind::ValueType),
                         source: TypeSource::User(tr.into()),

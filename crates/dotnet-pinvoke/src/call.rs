@@ -1165,6 +1165,7 @@ use crate::call_types::apply_write_backs_with;
 mod tests {
     use super::*;
     use dotnet_types::error::MemoryAccessError;
+    use std::mem::{align_of, size_of};
 
     /// Native escape is
     /// rejected before marshalling; ref arguments use the existing copy path.
@@ -1254,12 +1255,12 @@ mod tests {
     #[test]
     fn typed_reference_input_abi_is_a_two_pointer_temporary() {
         assert_eq!(
-            std::mem::size_of::<PInvokeTypedReferenceAbi>(),
-            std::mem::size_of::<[*mut u8; 2]>(),
+            size_of::<PInvokeTypedReferenceAbi>(),
+            size_of::<[*mut u8; 2]>(),
         );
         assert_eq!(
-            std::mem::align_of::<PInvokeTypedReferenceAbi>(),
-            std::mem::align_of::<*mut u8>(),
+            align_of::<PInvokeTypedReferenceAbi>(),
+            align_of::<*mut u8>(),
         );
 
         let temporary = TempBuffer::TypedReference(PInvokeTypedReferenceAbi {

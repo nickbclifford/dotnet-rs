@@ -142,7 +142,7 @@ impl MethodDescription {
 
     /// Returns the decoded IL body for this method, or `None` if it has none.
     ///
-    /// Delegates to [`Resolution::method_body`](dotnetdll::prelude::Resolution::method_body), which
+    /// Delegates to [`Resolution::method_body`](Resolution::method_body), which
     /// works in both eager and lazy parse modes (in lazy mode the body is decoded and cached on
     /// first access). `None` covers abstract methods, methods with no IL (`rva == 0`), and — in
     /// lazy mode — a deferred IL decode error. Prefer this over `self.method().body`, which is
@@ -156,7 +156,7 @@ impl MethodDescription {
 
     /// Returns the decoded signature for this method.
     ///
-    /// Delegates to [`Resolution::method_signature`](dotnetdll::prelude::Resolution::method_signature),
+    /// Delegates to [`Resolution::method_signature`](Resolution::method_signature),
     /// which works in both eager and lazy parse modes (in lazy mode the signature is decoded and
     /// cached on first access). Prefer this over `self.signature()`, which returns a
     /// placeholder when the owning resolution was parsed with `lazy_method_signatures`.
@@ -253,13 +253,14 @@ mod method_description_eq_hash_tests {
     use std::{
         collections::hash_map::DefaultHasher,
         hash::{Hash, Hasher},
+        mem::size_of,
     };
 
     /// Construct a deterministic `TypeIndex` for test data through the crate's
     /// centralized compatibility helper. Repeating the byte preserves the
     /// historical test values while avoiding a second layout transmute.
     fn make_type_index(byte: u8) -> TypeIndex {
-        crate::type_index_from_usize(usize::from_ne_bytes([byte; std::mem::size_of::<usize>()]))
+        crate::type_index_from_usize(usize::from_ne_bytes([byte; size_of::<usize>()]))
     }
 
     fn hash_of(desc: &MethodDescription) -> u64 {
