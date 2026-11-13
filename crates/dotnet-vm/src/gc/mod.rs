@@ -64,3 +64,13 @@ pub fn finalize_arena(marked: MarkedArena<'_, GCArenaRoot>) {
         );
     });
 }
+
+/// Clear long weak handles and prune object registries after promotion has been marked.
+pub fn finish_finalization_arena(marked: MarkedArena<'_, GCArenaRoot>) {
+    marked.finalize(|fc, c| {
+        c.stack
+            .local
+            .heap
+            .finish_finalization(fc, c.stack.shared.as_ref());
+    });
+}

@@ -923,6 +923,15 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                 #[cfg(test)]
                 finalize_test_hook(FinalizeStage::After);
             }
+            SweepPhaseCommand::ClearLongWeak => {
+                with_current(|arena| {
+                    if let Some(arena) = arena
+                        && let Some(marked) = arena.finish_marking()
+                    {
+                        crate::gc::finish_finalization_arena(marked);
+                    }
+                });
+            }
             SweepPhaseCommand::Sweep => {
                 with_current(|arena| {
                     if let Some(arena) = arena {

@@ -325,6 +325,8 @@ pub enum SweepPhaseCommand {
     ClearWeak,
     /// Run finalizers for dead objects.
     Finalize,
+    /// Clear long weak handles after promotion has been marked in every arena.
+    ClearLongWeak,
     /// Finish collection (sweep).
     Sweep,
 }

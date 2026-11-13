@@ -250,6 +250,9 @@ impl GCArena {
         // Resurrection can make the arena gray again. The arena is not sweeping yet, so
         // `finish_marking` marks the rest and returns the fully marked arena.
         if let Some(marked) = self.arena.finish_marking() {
+            crate::gc::finish_finalization_arena(marked);
+        }
+        if let Some(marked) = self.arena.finish_marking() {
             marked.start_sweeping();
         }
     }

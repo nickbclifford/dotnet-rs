@@ -543,6 +543,42 @@ impl CollectionSession<'_> {
             GCCommand::Mark(MarkPhaseCommand::All),
         );
 
+        self.mark_cross_arena_fixed_point(initiating_thread_id);
+
+        // Short weak handles must observe reachability before any arena resurrects a finalizable
+        // object. A handle may target an object another arena owns, and that owner's `Finalize`
+        // recolors it, so clearing and finalizing cannot share one concurrent phase.
+        self.send_command_to_all_and_wait(
+            initiating_thread_id,
+            GCCommand::Sweep(SweepPhaseCommand::ClearWeak),
+        );
+
+        // Run finalizers.
+        self.send_command_to_all_and_wait(
+            initiating_thread_id,
+            GCCommand::Sweep(SweepPhaseCommand::Finalize),
+        );
+
+        // The finalization roots were selected using the original liveness result. Resume
+        // marking only after every owner has selected them, then propagate foreign edges.
+        self.send_command_to_all_and_wait(
+            initiating_thread_id,
+            GCCommand::Mark(MarkPhaseCommand::TraceDependents),
+        );
+        self.mark_cross_arena_fixed_point(initiating_thread_id);
+        self.send_command_to_all_and_wait(
+            initiating_thread_id,
+            GCCommand::Sweep(SweepPhaseCommand::ClearLongWeak),
+        );
+
+        // Sweep unmarked objects.
+        self.send_command_to_all_and_wait(
+            initiating_thread_id,
+            GCCommand::Sweep(SweepPhaseCommand::Sweep),
+        );
+    }
+
+    fn mark_cross_arena_fixed_point(&self, initiating_thread_id: dotnet_utils::ArenaId) {
         // Fixed-point iteration for cross-arena resurrection.
         // Keep iterating until no new cross-arena references are found
         // Root-barrier retracing can rediscover references already dispatched in
@@ -647,26 +683,6 @@ impl CollectionSession<'_> {
         }
         #[cfg(feature = "bench-instrumentation")]
         dotnet_metrics::record_active_gc_fixed_point_cycle(fixed_point_iterations);
-
-        // Short weak handles must observe reachability before any arena resurrects a finalizable
-        // object. A handle may target an object another arena owns, and that owner's `Finalize`
-        // recolors it, so clearing and finalizing cannot share one concurrent phase.
-        self.send_command_to_all_and_wait(
-            initiating_thread_id,
-            GCCommand::Sweep(SweepPhaseCommand::ClearWeak),
-        );
-
-        // Run finalizers.
-        self.send_command_to_all_and_wait(
-            initiating_thread_id,
-            GCCommand::Sweep(SweepPhaseCommand::Finalize),
-        );
-
-        // Sweep unmarked objects.
-        self.send_command_to_all_and_wait(
-            initiating_thread_id,
-            GCCommand::Sweep(SweepPhaseCommand::Sweep),
-        );
     }
 
     #[cfg(test)]
@@ -943,7 +959,9 @@ mod tests {
                         }
                         GCCommand::Sweep(SweepPhaseCommand::Sweep) => finished = true,
                         GCCommand::Sweep(
-                            SweepPhaseCommand::ClearWeak | SweepPhaseCommand::Finalize,
+                            SweepPhaseCommand::ClearWeak
+                            | SweepPhaseCommand::Finalize
+                            | SweepPhaseCommand::ClearLongWeak,
                         ) => {}
                     }
                     worker_coordinator.command_finished(worker);

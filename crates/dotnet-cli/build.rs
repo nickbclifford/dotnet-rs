@@ -327,7 +327,8 @@ fn main() {
         // Keep them in the fixture list for prebuilt validation.
         let is_manually_registered = matches!(
             file_name,
-            "cross_thread_dependent_handles_42"
+            "cross_arena_resurrection_42"
+                | "cross_thread_dependent_handles_42"
                 | "cross_thread_handles_42"
                 | "pinvoke_last_error_isolation_42"
                 | "invoke_byref_foreign_42"

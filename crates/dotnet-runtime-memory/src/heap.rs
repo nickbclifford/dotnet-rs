@@ -246,11 +246,20 @@ impl<'gc> HeapManager<'gc> {
                         shared.trace_gc_resurrection(indent, &obj_type_name, addr);
                     }
                     Gc::resurrect(fc, ptr);
-                    ptr.borrow().storage.resurrect(fc, &mut resurrected, 0);
+                    // gc-arena traces the gray object iteratively when marking resumes.
+                    // Its tracer records foreign edges instead of recoloring foreign objects.
                 }
             }
         }
+    }
 
+    /// Called after all promoted finalization roots and their transitive edges have been marked.
+    pub fn finish_finalization(
+        &self,
+        fc: &'gc gc_arena::Finalization<'gc>,
+        shared: &impl MemorySharedStateHost,
+    ) {
+        let resurrected = HashSet::new();
         // 2. Zero out WeakTrackResurrection handles
         // These are only cleared if the object was NOT resurrected.
         // SAFETY: finalization runs in the owner arena before any sweep.
