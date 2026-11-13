@@ -15,9 +15,7 @@ public abstract class MulticastDelegate : Delegate
 
     public override bool HasSingleTarget => targets.Length == 1;
 
-    public Delegate[] GetInvocationList() => (Delegate[])targets.Clone();
-
-    internal override Delegate[] InvocationEntries() => GetInvocationList();
+    public override Delegate[] GetInvocationList() => (Delegate[])targets.Clone();
 
     protected override Delegate CombineImpl(Delegate? d)
     {

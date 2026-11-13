@@ -34,16 +34,14 @@ public abstract class Delegate : ICloneable, ISerializable
     public object? DynamicInvoke(params object?[]? args)
     {
         object? result = null;
-        foreach (Delegate entry in InvocationEntries())
+        foreach (Delegate entry in GetInvocationList())
         {
             result = entry.DynamicInvokeSingle(args);
         }
         return result;
     }
 
-    // The delegates DynamicInvoke runs in order. Virtual dispatch, not a type test, selects the
-    // multicast override.
-    internal virtual Delegate[] InvocationEntries() => new Delegate[] { this };
+    public virtual Delegate[] GetInvocationList() => new Delegate[] { this };
 
     private object? DynamicInvokeSingle(object?[]? args)
     {

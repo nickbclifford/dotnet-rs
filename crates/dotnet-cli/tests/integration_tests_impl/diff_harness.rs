@@ -286,6 +286,14 @@ diff_test!(
     delegates_multicast_values_42_matches_dotnet,
     "tests/fixtures/delegates/delegate_multicast_values_42.cs"
 );
+diff_test!(
+    delegates_invocation_list_42_matches_dotnet,
+    "tests/fixtures/delegates/delegate_invocation_list_42.cs"
+);
+diff_test!(
+    delegates_dynamic_invoke_42_matches_dotnet,
+    "tests/fixtures/delegates/delegate_dynamic_invoke_42.cs"
+);
 #[cfg(feature = "multithreading")]
 diff_test!(
     delegates_multicast_contended_42_matches_dotnet,
