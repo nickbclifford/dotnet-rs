@@ -942,3 +942,8 @@ diff_test!(
     type_names_match_dotnet,
     "tests/fixtures/reflection/type_names_42.cs"
 );
+
+diff_test!(
+    is_byref_like_matches_dotnet,
+    "tests/fixtures/reflection/is_byref_like_42.cs"
+);

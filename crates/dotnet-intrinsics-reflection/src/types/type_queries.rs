@@ -469,9 +469,16 @@ pub fn intrinsic_type_get_is_by_ref_like<'gc, T: ReflectionIntrinsicHost<'gc>>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let _ = ctx.pop_obj();
-    // Conservative fallback until full metadata-based byref-like detection is wired up.
-    ctx.push_i32(0);
+    let o = ctx.pop_obj();
+    let target = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, o));
+    let value = match target {
+        RuntimeType::Type(td) | RuntimeType::Generic(td, _) => {
+            crate::invoke_args::is_byref_like(ctx, &td)
+        }
+        RuntimeType::TypedReference => true,
+        _ => false,
+    };
+    ctx.push_i32(value as i32);
     StepResult::Continue
 }
 
