@@ -300,6 +300,21 @@ fn complete_load<'gc, T: VesOps<'gc>>(
     let val_bytes = storage
         .storage
         .get_field_atomic(field.parent.clone(), name, ordering);
+
+    // Unmanaged pointer fields occupy one native word in storage and live on the
+    // evaluation stack as a native int, exactly as `ldfld` reads them. Routing them
+    // through the CTS codec would build a `ManagedPtr` value instead.
+    if matches!(t.get(), BaseType::ValuePointer(..)) {
+        let Ok(word) = <[u8; size_of::<isize>()]>::try_from(val_bytes.as_slice()) else {
+            return ctx.throw_by_name_with_message(
+                "System.AccessViolationException",
+                ACCESS_VIOLATION_MSG,
+            );
+        };
+        ctx.push(StackValue::NativeInt(isize::from_ne_bytes(word)));
+        return StepResult::Continue;
+    }
+
     let value = dotnet_vm_ops::vm_try!(res_ctx.read_cts_value(
         &t,
         &val_bytes,
@@ -353,7 +368,28 @@ fn complete_store<'gc, T: VesOps<'gc>>(
         .get_field(field.parent.clone(), name.as_ref())
         .expect("field was resolved from field.parent by locate_field, so it exists in that type's layout");
     let mut val_bytes = vec![0u8; field_layout.layout.size().as_usize()];
-    dotnet_vm_ops::vm_try!(ctx.new_cts_value(&t, value)).write(&mut val_bytes);
+    if matches!(t.get(), BaseType::ValuePointer(..)) {
+        // See `complete_load`: pointer statics hold a single native word, like
+        // instance pointer fields, never a serialized `ManagedPtr`.
+        let address = match &value {
+            StackValue::NativeInt(v) => Some(*v as usize),
+            StackValue::UnmanagedPtr(p) => Some(p.0.as_ptr().expose_provenance()),
+            StackValue::ManagedPtr(p) => p
+                .try_observe_address()
+                .ok()
+                .map(|a| a.map_or(0, |a| a.as_ptr().expose_provenance())),
+            _ => None,
+        };
+        let (Some(address), true) = (address, val_bytes.len() == size_of::<usize>()) else {
+            return ctx.throw_by_name_with_message(
+                "System.AccessViolationException",
+                ACCESS_VIOLATION_MSG,
+            );
+        };
+        val_bytes.copy_from_slice(&address.to_ne_bytes());
+    } else {
+        dotnet_vm_ops::vm_try!(ctx.new_cts_value(&t, value)).write(&mut val_bytes);
+    }
 
     storage
         .storage

@@ -1116,3 +1116,14 @@ diff_test!(
     conditional_weak_table_growth_matches_dotnet,
     "tests/fixtures/gc/conditional_weak_table_growth_42.cs"
 );
+
+diff_test!(
+    pointer_static_fields_match_dotnet,
+    "tests/fixtures/pointers/static_pointer_fields_42.cs"
+);
+
+#[cfg(feature = "multithreading")]
+diff_test!(
+    threading_lock_contended_matches_dotnet,
+    "tests/fixtures/threading/lock_contended_42.cs"
+);

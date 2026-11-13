@@ -155,7 +155,17 @@ Evidence and IDs (p01…, R01…) are defined in the
 - **Timer pool-thread fixture under load:** `threading_timer_callback_pool_thread_42` failed
   twice during full parallel `dotnet-cli` integration runs on 2026-11-11 (once single-threaded,
   once during plan 16 slice 4 validation) and passed every isolated and repeated run. The
-  failure message was not captured; reproduce under load and record it before diagnosing.
+  failure message was not captured. After the pointer-static fix (next entry) 600 stress runs
+  under load (6 x 100) did not reproduce it, but nothing ties it to that bug, so it stays open:
+  reproduce under load and record the message before diagnosing.
+- **Pointer statics and `ManagedPtr` serialization:** `ldsfld`/`stsfld` of unmanaged-pointer
+  statics (including `[ThreadStatic]`, e.g. `ThreadBlockingInfo.t_first`) used the CTS codec,
+  which builds a `ManagedPtr` value and serialized it into the one-word field slot; fixed so
+  they load as native ints like `ldfld`, which cured the intermittent
+  `threading_threading_timer_idle_background_exit_42` access violation (any contended
+  `System.Threading.Lock` hit it). Still open: other callers of `new_cts_value` into pointer
+  slots (reflection `FieldInfo.SetValue`, boxed pointers) rely only on the `CTSValue::write`
+  one-word fallback, which silently zero-fills a slot that is neither 8 nor 24 bytes.
 - **Other missing or incorrect runtime behavior:**
   - Empty strings have no shared identity: `string.Empty` allocates on every load
     (`intrinsic_field_string_empty`), so `ReferenceEquals(string.Empty, string.Empty)` and

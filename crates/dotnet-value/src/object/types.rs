@@ -127,6 +127,23 @@ impl<'gc> CTSValue<'gc> {
                 NativeInt(i) => dest.copy_from_slice(&i.to_ne_bytes()),
                 NativeUInt(i) => dest.copy_from_slice(&i.to_ne_bytes()),
                 Pointer(p) => {
+                    if dest.len() < ManagedPtr::SIZE {
+                        // A one-word slot is an unmanaged-pointer field (the layout of
+                        // `T*`); `read_cts_value` decodes it as a raw address. A
+                        // serialized ManagedPtr cannot fit, so store the address.
+                        let address = p
+                            .try_observe_address()
+                            .ok()
+                            .flatten()
+                            .map_or(0, |a| a.as_ptr().expose_provenance());
+                        let word = address.to_ne_bytes();
+                        if dest.len() == word.len() {
+                            dest.copy_from_slice(&word);
+                        } else {
+                            dest.fill(0);
+                        }
+                        return;
+                    }
                     // This infallible CTS codec cannot reject a Transient pointer;
                     // its encoding cannot retain its owner or be decoded.
                     p.write(dest);

@@ -290,6 +290,7 @@ fn main() {
             || file_name == "async_task_when_any_timeout_42"
             || file_name == "threading_timer_callback_pool_thread_42"
             || file_name == "threading_timer_idle_background_exit_42"
+            || file_name == "lock_contended_42"
             || file_name == "thread_identity_start_42"
             || file_name == "thread_cross_start_42"
             || file_name == "thread_retired_creator_42"
