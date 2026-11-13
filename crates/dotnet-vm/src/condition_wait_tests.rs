@@ -2272,7 +2272,7 @@ fn sync_block_is_assigned_once_per_object() {
 }
 
 #[cfg(feature = "multithreading")]
-fn queue_collected_finalizer(executor: &mut Executor) {
+fn register_collectable_finalizer(executor: &mut Executor) {
     let mut res = Resolution::new(Module::new("mscorlib.dll"));
     res.assembly = Some(Assembly::new("mscorlib"));
     let mut object = TypeDefinition::new(None, "Object");
@@ -2318,6 +2318,11 @@ fn queue_collected_finalizer(executor: &mut Executor) {
             })
         })
         .unwrap();
+}
+
+#[cfg(feature = "multithreading")]
+fn queue_collected_finalizer(executor: &mut Executor) {
+    register_collectable_finalizer(executor);
     collect(executor);
     assert!(executor.shared.has_pending_finalizers());
     executor
@@ -2330,6 +2335,42 @@ fn queue_collected_finalizer(executor: &mut Executor) {
             })
         })
         .unwrap();
+}
+
+/// With the dedicated finalizer thread running, a collection publishes the dead finalizable
+/// object to the shared f-reachable queue; the worker's own arena claims it, runs `Finalize`
+/// and completes the entry, which a waiter observes through the enqueue generation.
+#[cfg(feature = "multithreading")]
+#[test]
+fn dedicated_finalizer_thread_claims_runs_and_completes_collected_finalizer() {
+    use crate::threading::ThreadManagerOps;
+    use std::time::{Duration, Instant};
+    struct AbortAndJoin(Arc<SharedGlobalState>);
+    impl Drop for AbortAndJoin {
+        fn drop(&mut self) {
+            self.0.abort_signal().request_abort();
+            self.0.shutdown_workers();
+        }
+    }
+    let mut executor = executor();
+    let shared = executor.shared.clone();
+    let _cleanup = AbortAndJoin(shared.clone());
+    executor.start_finalizer_thread();
+    // A collection requested before the worker thread has registered with the thread manager
+    // hangs (observed in about half of runs); wait for registration first. Recorded in plan 20.
+    while shared.thread_manager.thread_count() < 2 {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    register_collectable_finalizer(&mut executor);
+    collect(&mut executor);
+    let generation = shared.finalizers.snapshot();
+    assert_eq!(generation, 1, "the collection must publish the object");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !shared.finalizers.completed(generation) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(shared.finalizers.completed(generation));
+    assert!(!shared.has_pending_finalizers());
 }
 
 #[cfg(feature = "multithreading")]

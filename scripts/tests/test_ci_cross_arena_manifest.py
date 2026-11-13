@@ -99,7 +99,10 @@ FOREIGN = {'executor::native_substring_tests::' + name for name in (
     'condition_wait_tests::condition_wait_foreign_monitor_owner_survives_collection',
     'native_activation_foreign_child_return_survives_collection',
     'native_foreign_byref_owner_survives_collection_and_child_call',
-    'native_cross_arena_byref_owner_survives_collection_and_child_call')}
+    'native_cross_arena_byref_owner_survives_collection_and_child_call',
+    'foreign_short_weak_handle_clears_before_the_owner_finalizes',
+    'condition_wait_tests::dedicated_finalizer_thread_claims_runs_and_completes_collected_finalizer')}
+HANDLES_MT = {'executor::executor_collection_tests::dependent_handle_chain_survives_and_clears'}
 COLLECTION_MT = {'executor::executor_collection_tests::' + name for name in (
     'arena_lifetime_vm_collection_fixed_point_payload_and_reclamation',
     'arena_lifetime_vm_collection',
@@ -143,7 +146,7 @@ def execute(row, name='Execute guarded singletons'):
 class CrossArenaManifestTests(unittest.TestCase):
     def test_matrix_teardown_is_exact_and_mt_only(self):
         rows = matrix_rows()
-        self.assertEqual(len(rows), 97)
+        self.assertEqual(len(rows), 100)
         self.assertEqual(len({(r['configuration'], r['group'], r['shard']) for r in rows}), len(rows))
         teardown = [r for r in rows if r['group'] == 'vm-teardown']
         st = [r for r in teardown if r['configuration'] == 'no-features']
@@ -239,8 +242,11 @@ class CrossArenaManifestTests(unittest.TestCase):
                       if crate == 'dotnet-vm' and selector.startswith('executor::native_substring_tests::')}
             self.assertEqual(bridge, BRIDGE)
             self.assertEqual(native, NATIVE | (FOREIGN if config == 'multithreading' else set()))
+            handles = {selector for crate, selector in seen[config]
+                       if crate == 'dotnet-vm' and selector in HANDLES_MT}
+            self.assertEqual(handles, HANDLES_MT if config == 'multithreading' else set())
         self.assertEqual(len(seen['no-features']), 35)
-        self.assertEqual(len(seen['multithreading']), 78)
+        self.assertEqual(len(seen['multithreading']), 81)
 
     def test_strict_core_is_isolated_and_guarded(self):
         strict = JOB[JOB.index('      - name: Isolated strict-provenance transport core'):

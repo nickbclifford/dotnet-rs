@@ -809,6 +809,9 @@ jobs:
           - { configuration: multithreading, group: vm-native, shard: monitor-contended-home, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::condition_wait_tests::monitor_byref_contended_dispatch_survives_collection }
           - { configuration: multithreading, group: vm-native, shard: monitor-wait, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::condition_wait_tests::condition_wait_deadline_survives_real_collection }
           - { configuration: multithreading, group: vm-native, shard: foreign-monitor, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::condition_wait_tests::condition_wait_foreign_monitor_owner_survives_collection }
+          - { configuration: multithreading, group: vm-native, shard: foreign-weak-handle, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::foreign_short_weak_handle_clears_before_the_owner_finalizes }
+          - { configuration: multithreading, group: vm-native, shard: dependent-handles, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_collection_tests::dependent_handle_chain_survives_and_clears }
+          - { configuration: multithreading, group: vm-native, shard: finalizer-thread, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::condition_wait_tests::dedicated_finalizer_thread_claims_runs_and_completes_collected_finalizer }
           - { configuration: no-features, group: vm-collection, shard: main, job_timeout: 45, invocation_timeout: 1800, selector: unused }
           - { configuration: multithreading, group: vm-collection, shard: main, job_timeout: 45, invocation_timeout: 1800, selector: unused }
           - { configuration: no-features, group: vm-stress, shard: main, job_timeout: 45, invocation_timeout: 1800, selector: unused }
