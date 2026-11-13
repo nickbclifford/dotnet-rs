@@ -1028,9 +1028,11 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
         method: &MethodDescription,
         generics: &GenericLookup,
         value: Option<StackValue<'gc>>,
-    ) -> Result<StackValue<'gc>, VmError> {
-        let Some(ParameterType::Value(ty)) = &method.signature().return_type.1 else {
-            return Ok(StackValue::null());
+    ) -> Result<StackValue<'gc>, NativePrepareError<'gc>> {
+        let (ty, byref) = match &method.signature().return_type.1 {
+            Some(ParameterType::Value(ty)) => (ty, false),
+            Some(ParameterType::Ref(ty)) => (ty, true),
+            _ => return Ok(StackValue::null()),
         };
         let concrete = generics.make_concrete(
             method.resolution(),
@@ -1043,6 +1045,42 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
                 "missing reflected return value".into(),
             )
         })?;
+        let value = if byref {
+            let StackValue::ManagedPtr(pointer) = value else {
+                return Err(dotnet_types::error::ExecutionError::InternalError(
+                    "invalid reflected byref return".into(),
+                )
+                .into());
+            };
+            if pointer.is_null() {
+                let step = self.context.throw_by_name_with_message(
+                    "System.NullReferenceException",
+                    "Object reference not set to an instance of an object.",
+                );
+                return Err(reflection_prepare_error(self.context, step));
+            }
+            let layout = self
+                .context
+                .current_context()
+                .resolver()
+                .type_layout_cached_with_lookup(concrete.clone(), method.resolution(), generics)?;
+            // SAFETY: the returned managed pointer is rooted and its pointee has the declared layout.
+            unsafe {
+                self.context.read_unaligned(
+                    pointer.origin().clone(),
+                    pointer.byte_offset(),
+                    &layout,
+                    Some(description.clone()),
+                )
+            }
+            .map_err(|error| {
+                dotnet_types::error::ExecutionError::InternalError(
+                    format!("invalid reflected byref return: {error:?}").into(),
+                )
+            })?
+        } else {
+            value
+        };
         if description.is_value_type(&self.context.current_context())? {
             let boxed = self.context.box_value(&concrete, value)?;
             Ok(StackValue::ObjectRef(boxed))

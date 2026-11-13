@@ -955,3 +955,8 @@ diff_test!(
     is_byref_like_matches_dotnet,
     "tests/fixtures/reflection/is_byref_like_42.cs"
 );
+
+diff_test!(
+    reflection_byref_return_matches_dotnet,
+    "tests/fixtures/reflection/invoke_byref_return_42.cs"
+);

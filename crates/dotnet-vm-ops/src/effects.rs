@@ -409,8 +409,8 @@ pub trait NativeBackend<'gc> {
         _method: &dotnet_types::members::MethodDescription,
         _generics: &dotnet_types::generics::GenericLookup,
         _value: Option<StackValue<'gc>>,
-    ) -> Result<StackValue<'gc>, VmError> {
-        Err(internal("native reflection result unavailable"))
+    ) -> Result<StackValue<'gc>, NativePrepareError<'gc>> {
+        Err(internal("native reflection result unavailable").into())
     }
     fn reflection_constructor_result(
         &mut self,
@@ -688,13 +688,21 @@ impl<'gc, 'a> NativeRegion<'gc, 'a> {
         method: &dotnet_types::members::MethodDescription,
         generics: &dotnet_types::generics::GenericLookup,
         value: NativeValue,
-    ) -> Result<RootedValue, VmError> {
+    ) -> Result<RootedValue, NativeFailure> {
         let fetched = match &value {
             NativeValue::Void => None,
             NativeValue::Value(root) => Some(self.fetch(root)?),
         };
-        let result = self.backend.reflection_result(method, generics, fetched)?;
-        self.root(result)
+        let result = match self.backend.reflection_result(method, generics, fetched) {
+            Ok(result) => result,
+            Err(NativePrepareError::Host(error)) => return Err(error.into()),
+            Err(NativePrepareError::Managed(exception)) => {
+                return Err(NativeFailure::Managed(
+                    self.root(StackValue::ObjectRef(exception))?,
+                ));
+            }
+        };
+        Ok(self.root(result)?)
     }
     /// Normalize a constructed value while its owner remains rooted.
     pub fn reflection_constructor_result(

@@ -76,19 +76,8 @@ pub fn invoke_select<'gc, T: ReflectionIntrinsicHost<'gc>>(
     let StackValue::ObjectRef(method_obj @ ObjectRef(Some(_))) = values[0] else {
         return invalid_invoke_operands("null method object");
     };
-    let Ok((method, _)) = crate::common::resolve_runtime_method(ctx, method_obj) else {
+    if crate::common::resolve_runtime_method(ctx, method_obj).is_err() {
         return invalid_invoke_operands("unresolvable method object");
-    };
-    if matches!(
-        method.signature().return_type.1,
-        Some(ParameterType::Ref(_))
-    ) {
-        return NativeSelection::Reject(
-            dotnet_types::error::ExecutionError::NotImplemented(
-                "reflection invocation with a byref return".into(),
-            )
-            .into(),
-        );
     }
     tracing::debug!(reflection_invoke_path = "async");
     NativeSelection::Async(NativeInvocation {
@@ -140,7 +129,14 @@ pub async fn run_reflection_call(mut fx: VmEffects) -> NativeResult {
         Some(instance) => {
             vm.with(|region| region.reflection_constructor_result(&method, &generics, &instance))??
         }
-        None => vm.with(|region| region.reflection_result(&method, &generics, result))??,
+        None => match vm.with(|region| region.reflection_result(&method, &generics, result))? {
+            Ok(value) => value,
+            Err(NativeFailure::Managed(inner)) if !do_not_wrap => {
+                let wrapper = vm.with(|region| region.wrap_reflection_failure(&inner))??;
+                return Err(NativeFailure::Managed(wrapper));
+            }
+            Err(error) => return Err(error),
+        },
     };
     vm.push_value(NativeValue::Value(value))
 }
@@ -1126,9 +1122,11 @@ pub fn validate_invoke_return<'gc, T: ReflectionIntrinsicHost<'gc>>(
 ) -> Result<(), StepResult> {
     let byref_like = match &method.signature().return_type.1 {
         Some(ParameterType::TypedReference) => true,
-        Some(ParameterType::Value(ty)) => param_shape(ctx, method, lookup, ty)
-            .is_ok_and(|shape| crate::invoke_args::is_byref_like(ctx, &shape.td)),
-        Some(ParameterType::Ref(_)) | None => false,
+        Some(ParameterType::Value(ty) | ParameterType::Ref(ty)) => {
+            param_shape(ctx, method, lookup, ty)
+                .is_ok_and(|shape| crate::invoke_args::is_byref_like(ctx, &shape.td))
+        }
+        None => false,
     };
     if byref_like {
         return Err(ctx.throw_by_name_with_message(

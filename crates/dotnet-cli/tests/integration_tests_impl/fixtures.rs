@@ -286,32 +286,6 @@ fn reflection_path_selection() {
     }
 }
 
-#[cfg(not(feature = "fuzzing"))]
-#[test]
-fn reflection_byref_return_is_rejected_before_target_runs() {
-    let harness = TestHarness::get();
-    let dll = harness.ensure_dll(Path::new(
-        "tests/fixtures/reflection/invoke_byref_return_255.cs",
-    ));
-    let (status, stdout) = harness.run_cli(&dll);
-    assert_ne!(status, 42);
-    assert!(!stdout.contains("target ran"), "{stdout}");
-    let resolution = harness.loader.load_resolution_from_file(&dll).unwrap();
-    #[allow(
-        clippy::arc_with_non_send_sync,
-        reason = "the no-MT integration test keeps shared state on its sole executor"
-    )]
-    let shared = Arc::new(state::SharedGlobalState::new(Arc::clone(&harness.loader)));
-    let result = harness.run_with_shared(resolution, shared);
-    assert_eq!(result.exit_code, 255);
-    assert!(
-        result
-            .stderr
-            .unwrap_or_default()
-            .contains("reflection invocation with a byref return")
-    );
-}
-
 #[test]
 fn static_constrained_dispatch_caches_only_exact_metadata() {
     let harness = TestHarness::get();

@@ -1,5 +1,7 @@
 use crate::ReflectionIntrinsicHost;
 use dotnet_macros::dotnet_intrinsic;
+#[cfg(feature = "generic-constraint-validation")]
+use dotnet_types::generics::ConcreteType;
 use dotnet_types::{
     error::ExecutionError, generics::GenericLookup, members::MethodDescription,
     runtime::RuntimeType,
