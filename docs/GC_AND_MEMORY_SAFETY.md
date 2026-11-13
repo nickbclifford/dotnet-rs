@@ -232,8 +232,8 @@ the exact-identity lease registry. A retired owner counts as stopped for stop-th
 the coordinator's mark, finalize and sweep commands; it never resumes its ordinary managed entry
 point. In normal MT execution it publishes finalizers to the dedicated finalizer worker.
 
-Shutdown starts only from that service loop. The owner excludes collections, rechecks that no
-finalizer is queued, marks the worker as shutting down, and unregisters its exact arena identity.
+Shutdown starts only from that service loop. The owner excludes collections, rechecks worker quiescence and that no
+finalizer is queued (unless abort abandoned it), marks the worker as shutting down, and unregisters its exact arena identity.
 It then drains outstanding leases outside the collection lock before freeing the arena. If exact
 drain cannot complete, storage is deliberately leaked. These ordering requirements are
 `F1.RetiredCollectionExclusion` in the [invariant registry](INVARIANT_REGISTRY.md) and the
@@ -284,15 +284,19 @@ Two implementations are selected via the `multithreading` feature flag:
   - While `CollectionSession` is alive, collecting-only operations (command dispatch / wait / fixed-point marking) flow through the session.
   - `finish()` ends the session; dropping a still-live `CollectionSession` also restores Idle state (`stw_in_progress=false`, lock released).
 - Orchestrates STW collection via `collect_all_arenas` using a phase-based approach. In `Executor::perform_full_gc` the `CollectionSession` and the `StopTheWorldGuard` are bound together into a `GcCycleGuard` (which enforces drop order: session cleanup before thread resume), and `collect_all_arenas` is invoked through that guard:
-  1. **Phase 1 (MarkAll)**: Acquires collection lock, clears cross-arena references table, and sends `GCCommand::Mark(MarkPhaseCommand::All)` to all arenas.
-  2. **Phase 2 (Fixed-point MarkObjects)**: Repeatedly sends `GCCommand::Mark(MarkPhaseCommand::Objects(…))` for cross-arena references discovered during marking. Iterates until no new cross-arena references are found.
-  3. **Phase 3 (ClearWeak)**: Sends `GCCommand::Sweep(SweepPhaseCommand::ClearWeak)` and waits for every arena. Each arena zeroes its short weak handles whose targets are unreachable. This reads object colors without changing them, and it must finish everywhere first: a handle can target an object another arena owns, and that arena's `Finalize` resurrects (recolors) finalizable objects. Running both in one concurrent phase made a cross-arena `WeakReference` survive the first `GC.Collect` depending on which arena ran first.
-  4. **Phase 4 (Finalize)**: Sends `GCCommand::Sweep(SweepPhaseCommand::Finalize)` to queue unreachable finalizable objects.
-  5. **Phase 5 (Sweep)**: Sends `GCCommand::Sweep(SweepPhaseCommand::Sweep)` to all arenas to reclaim dead objects.
+  1. **MarkAll and fixed point:** Trace local roots, propagate cross-arena edges, and repeatedly
+     activate live dependent keys and trace their values in the owning arenas.
+  2. **ClearWeak:** Each owner clears dead short weak targets and dependent pairs before any
+     finalizable object is promoted.
+  3. **Finalize:** Each owner selects unreachable finalizable objects, promotes them to
+     f-reachable roots and publishes them for execution.
+  4. **Mark and ClearLongWeak:** Resume marking and repeat the cross-arena and dependent fixed
+     point, then each owner clears dead long weak targets after all promotions have propagated.
+  5. **Sweep:** Reclaim unmarked objects in every arena.
 
 **Single-threaded (`cfg(not(feature = "multithreading"))`)**:
 - Stub implementation — `should_collect` always returns false. The executor collects locally through `GCArena::collect_single_threaded`: allocation debt incrementally, and a full cycle when `GC.Collect` requests one.
-- Every cycle stops when fully marked so `finalize_check` runs before sweeping, mirroring phases 3 through 5 above (one arena, so the weak-handle clearing inside `finalize_check` already precedes resurrection). The finalization queue holds finalizable objects weakly, so a cycle that swept first would free objects the queue still points to. gc-arena's `collect_debt` passes through the fully marked phase without stopping, so the executor never calls it.
+- Every cycle stops when fully marked so `finalize_check` runs before sweeping, following the same weak-clearing, promotion and sweep order (one arena, so the weak-handle clearing inside `finalize_check` already precedes resurrection). The finalization queue holds finalizable objects weakly, so a cycle that swept first would free objects the queue still points to. gc-arena's `collect_debt` passes through the fully marked phase without stopping, so the executor never calls it.
 - No cross-arena tracking needed.
 
 ### `GCCommand` enum
@@ -300,9 +304,11 @@ Defined in `dotnet_utils::gc::GCCommand`, split into two phase-typed inner enums
 - `Mark(MarkPhaseCommand)`:
   - `MarkPhaseCommand::All` — start marking phase, trace all local roots in the arena.
   - `MarkPhaseCommand::Objects(MarkObjectPointers)` — trace specific typed cross-arena object pointers.
+  - `MarkPhaseCommand::Dependents` / `TraceDependents` — activate live dependent keys and trace their values.
 - `Sweep(SweepPhaseCommand)`:
   - `SweepPhaseCommand::ClearWeak` — zero short weak handles whose targets are unreachable, before any arena resurrects a finalizable object.
-  - `SweepPhaseCommand::Finalize` — queue unreachable finalizable objects.
+  - `SweepPhaseCommand::Finalize` — promote and queue unreachable finalizable objects.
+  - `SweepPhaseCommand::ClearLongWeak` — clear long weak targets after promoted roots are traced.
   - `SweepPhaseCommand::Sweep` — reclaim unreachable objects.
 
 ### Global finalizer completion
@@ -310,9 +316,11 @@ Defined in `dotnet_utils::gc::GCCommand`, split into two phase-typed inner enums
 In MT, owners publish unreachable objects to a shared queue before the stop ends. Each owner traces
 its queued and active objects; the active entry remains rooted until the dedicated worker completes
 the call. Suppression and re-registration are weak owner-directed requests applied before the
-owner's next sweep. In ST, the arena retains and executes its own queue. Ordinary
-`GC.WaitForPendingFinalizers` currently waits for global quiescence, outside the arena mutation while
-servicing GC stops. A call from a finalizer returns immediately. Generation-based waiting is slice 6.
+owner's next sweep. In ST, the arena retains and executes its own queue. In MT,
+`GC.WaitForPendingFinalizers` snapshots the enqueue generation and waits outside the
+arena mutation until the FIFO worker completes that prefix, while servicing GC stops. Later
+enqueues do not extend the wait. A call from a finalizer returns immediately. ST drains its local
+work on the interrupted context; it has no separate finalizer-thread identity.
 
 ```mermaid
 sequenceDiagram
@@ -336,6 +344,11 @@ sequenceDiagram
     C->>W: Send GCCommand::Sweep(SweepPhaseCommand::Finalize)
     W-->>C: Finished Finalize
     
+    C->>W: Trace promoted roots and dependent fixed point
+    W-->>C: Finished marking
+    C->>W: Send GCCommand::Sweep(SweepPhaseCommand::ClearLongWeak)
+    W-->>C: Finished ClearLongWeak
+
     C->>W: Send GCCommand::Sweep(SweepPhaseCommand::Sweep)
     W-->>C: Finished Sweep
     
@@ -380,10 +393,11 @@ Registration rejects duplicate live IDs; checked generation and token allocation
 - Bulk operations like block copying (`initblk`, `cpblk`) use `record_refs_recursive_with_recorder` and `record_refs_in_range_with_recorder` to scan the layout's GC descriptor and record any contained references.
 
 ### Weak References
-The VM supports `GCHandleType::Weak` and `WeakTrackResurrection` (§I.8.2.4).
-- **Implementation**: `HeapManager::clear_dead_weak_handles` (the multi-arena `ClearWeak` phase) and `HeapManager::finalize_check` zero-fill short weak handles for unreachable objects before any finalizable object is resurrected. The `GCHandle` intrinsics use opaque slot IDs with two clear low bits for CoreLib's handle tags; `System.WeakReference` liveness is tested in its handle's owning arena. [Cross-thread handle access](plans/README.md#not-yet-planned) remains limited.
-- **BCL Support**: `System.WeakReference<T>` is not in the BCL support library and must be defined by the user or added to `support.dll`.
-- **Cross-Arena Limitation**: The `GCCoordinator` fixed-point iteration only resurrects strong references. Short weak handles are cleared per owning arena in the `ClearWeak` phase, using the target's color even when another arena owns it. `WeakTrackResurrection` handles whose target another arena resurrects are not coordinated.
+The VM supports `GCHandleType::Weak` and `WeakTrackResurrection` (§I.8.2.4) through
+VM-wide slots accessible across threads. Opaque GCHandle IDs reserve two low bits for CoreLib
+handle tags. The target's owner clears short weak slots before promotion and long weak slots
+after f-reachable roots and their cross-arena edges have been traced. Dependent handles use a
+separate key/value fixed point; see [Shared GC handle roots](#shared-gc-handle-roots).
 
 ## GcScopeGuard and Deadlock Prevention
 
@@ -435,11 +449,9 @@ The aligned static-reference atomic path has a known provenance limitation under
      [invariant registry](INVARIANT_REGISTRY.md).
    - A condition wait is retained by its activation and replies are checked against the effect
      kind and generation. Monitor release epochs only make waiters eligible to probe again;
-     acquisition occurs inside a fresh mutation. `Executor::run` schedules finalizers first and
-     waits without a mutation or arena lease, in bounded intervals so GC stops are serviced.
-     Ordinary finalizer waits check the global pending-or-active arena count using this protocol;
-     calls made while `processing_finalizer` is set return immediately through both the selector
-     and the legacy fallback, while other non-inline calls retain their legacy retry. Admitted
+     acquisition occurs inside a fresh mutation. Finalizer waits release the mutation and arena lease
+     while sleeping in bounded intervals so GC stops are serviced. MT waits use the captured
+     enqueue generation; calls made while `processing_finalizer` is set return immediately. Admitted
      monitor calls use the same condition driver; excluded shapes retain their legacy paths.
 3. **Return-value post-processing after a managed call returns**
    - Reflection calls transform their own results in their native activation. The former
@@ -590,7 +602,7 @@ are accepted operational risks rather than type-level guarantees.
 `SharedGcHandles` retains provenance-preserving object pointers in VM-wide slots. During a
 collection, each owner traces its own normal and pinned targets; its short weak targets are
 cleared after marking and before any arena finalizes. Long weak targets are cleared by their
-owner after its finalization check. For dependent slots, key owners activate live keys in a
+owner after all promoted roots have been traced. For dependent slots, key owners activate live keys in a
 shared fixed point, value owners trace activated values, and key owners clear dead pairs before
 finalization. Null keys are cleared in the same phase.
 The MarkAll root barrier runs after mutators park, so publications made during an earlier

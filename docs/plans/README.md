@@ -12,7 +12,7 @@ In priority order. Each plan's own `Status:` line is the only record of its stat
 |---|---|---|
 | 18 | [Managed API gaps against the CLR](18-managed-api-clr-gaps.md) | Complete; Newtonsoft and EF host rungs match `dotnet` |
 | 19 | [Reflection invocation matches the CLR](19-reflection-invoke-clr-parity.md) | Complete; wrapping, byref returns, success-only copy-back and ambiguity match the CLR |
-| 20 | [Shared GC handles and a dedicated finalizer thread](20-gc-handles-and-finalizer-thread.md) | Starts with untraced dependent handles (likely use-after-free) |
+| 20 | [Shared GC handles and a dedicated finalizer thread](20-gc-handles-and-finalizer-thread.md) | Shared handles, cross-arena resurrection and finalizer scheduling |
 | 17 | [Inspection-driven code quality refactor](17-inspection-quality-refactor.md) | Ordered semantic, readability and dependency slices with an inspection ledger |
 | 16 | [Retire legacy continuations and move suspending intrinsics to effects](16-retire-legacy-continuations.md) | Complete (slices 1–8); the multicast continuation for excluded shapes is deliberately kept |
 | 15 | [CoreLib `Task` and the thread pool](15-corelib-task-and-thread-pool.md) | CoreLib tasks/resources, capped background pool workers, unnamed events and managed timers are active |
@@ -112,20 +112,8 @@ Evidence and IDs (p01…, R01…) are defined in the
   legacy continuation (reflection return, monitor retry, static-init retry, yield-retry
   intrinsics, `VmContinuation::RetryInstruction`). Substring retains
   its measured valid-small fast path ([plan 13](13-async-intrinsic-api.md#substring-fast-path-measurement)).
-- **Cross-thread GC handles:** `intrinsic_gchandle_internal_get` and related operations index the
-  calling arena's local handle table, so a `WeakReference` created on one thread cannot reliably
-  read its target from another, even while both arenas remain registered.
-- **Finalization and GC compatibility:** finalizers run on the interrupted mutator with its
-  thread identity, so they can re-enter monitors it holds or observe an in-progress `.cctor`
-  through recursion. A finalizer run by a retired worker can receive a new `Thread` object with
-  the worker's ID after the original thread object has been released. The resurrection and
-  weak-handle fixtures match the CLR in the slice 2 baseline (see [plan 20](20-gc-handles-and-finalizer-thread.md#slice-2-baseline));
-  they do not exercise finalizer thread identity. One ordering dependence is fixed: a cross-arena
-  short `WeakReference` no longer survives the first `GC.Collect` depending on which arena
-  finalized first (the `ClearWeak` phase).
-- **Exit waits for never-returning finalizers:** `Executor::run` waits until no worker is running
-  or finalizing, so a finalizer that never returns blocks every caller. The CLR does not wait for
-  finalizers at exit. `Executor::run_entrypoint` returns without the wait (plan 11).
+- **Single-threaded finalizer identity:** without `multithreading`, finalizers run on the
+  interrupted managed context and share its thread identity, including monitor and initializer ownership.
 - **Negative and wide managed-pointer offsets:** `ManagedPtr` stores a compact unsigned offset,
   so byref arithmetic that goes below the base or past the compact range (for example
   `Unsafe.Subtract`, or `Unsafe.Add` with a negative count) fails with `NotImplemented`
@@ -180,9 +168,6 @@ Evidence and IDs (p01…, R01…) are defined in the
     of its own (`Console` writes reach `write(2)` through the native shim, and the CLI flushes
     stdio on every exit path), so a repro (a fixture that writes, then fails with `Internal VM
     error`) is needed first.
-- **`GC.WaitForPendingFinalizers` global quiescence:** it waits until no arena has pending or
-  in-progress finalizers, rather than completing one pass, and can livelock while a thread keeps
-  producing finalizable garbage. The behavior has not been reproduced.
 - **Loom model coverage:** the hand-written `loom_stw.rs` model does not compile the production
   `WorkerRegistry` and does not cover every stop-the-world, retirement or shutdown interleaving.
 

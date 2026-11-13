@@ -168,22 +168,20 @@ safepoint; `Join` cannot catch the exception. The entry executor returns the rec
 the CLI, which reports it as an unhandled exception. A native operation already in progress must
 return before its executor can observe the abort.
 
-After Main returns, `Executor::run` calls `wait_for_foreground_workers`. (`Executor::run_entrypoint`
-runs only the entry method and returns without that wait; callers must wait before dropping the
-executor.) The entry arena remains registered and services GC stops while
-foreground workers finish. The exit decision observes foreground workers, finalizing owners and
-pending finalizers under the registry lock. Once they are idle, any still-running background
-workers receive the shared abort signal and stop at their next safepoint, including in `Sleep`.
-The entry executor continues participating in GC until all canceled workers stop. A native
-operation that does not return can still delay shutdown. `Thread::InternalFinalize` has no native
-handle to release because the registry owns those handles. The CLI and in-process harness explicitly call
-`SharedGlobalState::shutdown_workers` after dropping the entry executor, but keep the entry arena's
-storage (`Executor::extract_arena`) until it returns; shutdown must not be deferred to shared-state
-destruction because worker executors hold that state. Shutdown signals the finalizer worker, waits until no worker is
-running or finalizing, then signals retired owners and joins native handles until none remain,
-including workers a finalizer started after the signal. A retired owner only unregisters and frees
-its arena once the registry is quiescent and no finalizer is pending (or an abort abandoned them),
-because a collection traces references into every arena and must not outlive any of them.
+After Main returns, `Executor::run` keeps the entry arena registered and services GC stops while
+foreground workers finish. Pending or active finalizers do not delay the exit decision. Running
+background workers and pending finalizer work cause an abort request; managed code observes it at
+safepoints, including in `Sleep`. The entry executor continues participating in GC until canceled
+workers stop. A native operation that does not return can still delay shutdown.
+`Thread::InternalFinalize` has no native handle to release because the registry owns those handles.
+
+The CLI and in-process harness call `SharedGlobalState::shutdown_workers` after dropping the entry
+executor, retaining the extracted entry arena until shutdown returns. Shutdown requests abort,
+waits for running and finalizing workers to stop, signals retired owners and joins all native
+handles. A retired owner unregisters and frees its arena only after workers are quiescent and no
+finalizer is pending, unless abort abandoned the work. This prevents collection from tracing into
+freed arenas. In single-threaded builds finalizers instead run on the interrupted context and
+share its managed thread identity.
 
 Retaining a completed worker costs one OS thread and its arena until VM shutdown. Arena IDs are
 monotonic and the process supports at most 65,535 IDs, so this policy deliberately trades bounded
@@ -211,7 +209,7 @@ pending request:
   `wait_finalizers` for `GC.WaitForPendingFinalizers`, and the initializer registration created by
   `ensure_initialized`. The executor sleeps outside a
   mutation and rechecks readiness after waking; in MT these waits participate in GC-stop handling,
-  and pending finalizers are scheduled before an ordinary finalizer wait sleeps. Excluded monitor
+  and finalizer waits use the captured enqueue generation in MT. Excluded monitor
   byref calls with Transient or Unmanaged origins retain the safe-point-aware synchronous
   handlers (`enter_safe` and `enter_with_timeout_safe`). Every static-initializer trigger (field
   access, `newobj`, eligible calls, `RunClassConstructor`) waits through `ensure_initialized`. See the
