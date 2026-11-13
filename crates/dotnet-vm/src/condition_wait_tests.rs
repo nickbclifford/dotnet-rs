@@ -2343,7 +2343,6 @@ fn queue_collected_finalizer(executor: &mut Executor) {
 #[cfg(feature = "multithreading")]
 #[test]
 fn dedicated_finalizer_thread_claims_runs_and_completes_collected_finalizer() {
-    use crate::threading::ThreadManagerOps;
     use std::time::{Duration, Instant};
     struct AbortAndJoin(Arc<SharedGlobalState>);
     impl Drop for AbortAndJoin {
@@ -2355,12 +2354,9 @@ fn dedicated_finalizer_thread_claims_runs_and_completes_collected_finalizer() {
     let mut executor = executor();
     let shared = executor.shared.clone();
     let _cleanup = AbortAndJoin(shared.clone());
+    // Collect immediately, racing the worker's registration with the thread manager: a
+    // collector must not park for a thread that holds the coordination lock only to register.
     executor.start_finalizer_thread();
-    // A collection requested before the worker thread has registered with the thread manager
-    // hangs (observed in about half of runs); wait for registration first. Recorded in plan 20.
-    while shared.thread_manager.thread_count() < 2 {
-        std::thread::sleep(Duration::from_millis(1));
-    }
     register_collectable_finalizer(&mut executor);
     collect(&mut executor);
     let generation = shared.finalizers.snapshot();

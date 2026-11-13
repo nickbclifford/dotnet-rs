@@ -112,9 +112,6 @@ Evidence and IDs (p01…, R01…) are defined in the
   legacy continuation (reflection return, monitor retry, static-init retry, yield-retry
   intrinsics, `VmContinuation::RetryInstruction`). Substring retains
   its measured valid-small fast path ([plan 13](13-async-intrinsic-api.md#substring-fast-path-measurement)).
-- **Finalizer thread start race:** a collection requested before the dedicated finalizer thread
-  has registered with the thread manager hangs in about half of runs (see plan 20, "Loom and Miri
-  evidence"). `run_entrypoint` starts the thread without a registration handshake.
 - **`ConditionalWeakTable` growth crash:** adding a ninth entry crashes the VM with SIGSEGV in
   every configuration (plan 20, "Loom and Miri evidence"); the benchmark fixture stays at eight.
 - **Single-threaded finalizer identity:** without `multithreading`, finalizers run on the

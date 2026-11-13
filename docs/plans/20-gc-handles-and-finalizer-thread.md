@@ -1,6 +1,6 @@
 # Shared GC handles and a dedicated finalizer thread
 
-**Status:** Complete — slices 1–7 and the Loom, Miri and single-threaded-cost acceptance evidence (below); two open findings recorded in the plans README
+**Status:** Complete — slices 1–8 and the Loom, Miri and single-threaded-cost acceptance evidence (below); the `ConditionalWeakTable` growth crash is recorded in the plans README
 **Outcome:** Under `multithreading`, finalizers run on one background finalizer thread with its own
 identity, GC handles are readable from any thread, and the process exits without waiting for
 finalizers; the GC fixtures listed under each slice match `dotnet` through the diff harness.
@@ -152,6 +152,17 @@ Out:
    identity deviation recorded. Update `GC_AND_MEMORY_SAFETY.md`,
    `THREADING_AND_SYNCHRONIZATION.md`, `INVARIANT_REGISTRY.md` (F1.FinalizerPublication,
    F1.GcHandleRooted) and the pointer inventory.
+8. **Stop-the-world start race** (added at close-out). A collection requested while the
+   finalizer thread registers hung. `register_thread` holds `gc_coordination` briefly; an
+   initiator that failed `try_lock` assumed another initiator held it and parked at its own
+   safepoint, waiting out the stop it had requested. `ThreadManager` now records when an
+   initiator holds the lock (`stw_initiator_holds_lock`) and parks only then, and re-asserts
+   `gc_stop_requested` after acquiring it, because the previous initiator's resume clears it.
+   Any thread registering during a collection could hit this, not only the finalizer thread.
+   Tests: `registered_initiator_waits_out_registration_without_parking` and
+   `queued_initiator_reasserts_stop_request_after_previous_resume` (both fail without the fix),
+   and `dedicated_finalizer_thread_claims_runs_and_completes_collected_finalizer` now collects
+   without waiting for registration (100/100 runs; before, 8 of 15 hung).
 
 ## Done when
 
@@ -240,13 +251,10 @@ The last test is new: no existing `dotnet-vm` unit test started the finalizer th
 `Finalizers::claim`/`complete` ran only in the CLI fixtures. It enqueues through a real collection,
 the worker claims in its own arena, runs `Finalize` and completes.
 
-**Open finding (not fixed, outside this slice).** A collection requested immediately after
-`Executor::start_finalizer_thread` hangs in about half of runs (8 of 15 in a loop) until the worker
-thread has registered with the thread manager; with a registration wait, 25 of 25 runs pass. The
-new test waits for `thread_count() >= 2`. `run_entrypoint` has the same ordering, so an
-allocation-triggered collection at the start of an entry point may be exposed. Needs a startup
-handshake or a coordinator that tolerates an unregistered worker; this changes thread-start
-semantics, so it is left to the maintainer.
+**Open finding, fixed in slice 8.** A collection requested immediately after
+`Executor::start_finalizer_thread` hung in about half of runs (8 of 15 in a loop) until the worker
+thread had registered with the thread manager. It also timed out
+`monitor_wait_parks_outside_mutation_during_collection` once in a full `dotnet-vm` run.
 
 **Open finding (pre-existing, not plan 20).** Adding a ninth entry to a `ConditionalWeakTable`
 (`Keys = 9` in the benchmark fixture) crashes the VM with SIGSEGV, in debug and optimized builds,

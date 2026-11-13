@@ -231,6 +231,11 @@ pub struct ThreadManager {
     all_threads_stopped: Condvar,
     /// Mutex for GC coordination
     gc_coordination: OrderedMutex<levels::GcCoordination, ()>,
+    /// True while a stop-the-world initiator holds `gc_coordination`. Registration and
+    /// unregistration also take that lock briefly; a waiting initiator parks only for
+    /// another initiator, never for a registering thread that would itself park on the
+    /// pending stop.
+    stw_initiator_holds_lock: AtomicBool,
     /// Collection session state, including the period before all mutators park.
     #[cfg(debug_assertions)]
     stw_in_progress: Arc<AtomicBool>,
@@ -256,6 +261,7 @@ impl ThreadManager {
             threads_at_safepoint: AtomicUsize::new(0),
             all_threads_stopped: Condvar::new(),
             gc_coordination: OrderedMutex::new(()),
+            stw_initiator_holds_lock: AtomicBool::new(false),
             #[cfg(debug_assertions)]
             stw_in_progress: _stw_in_progress,
             world_stopped: Arc::new(AtomicBool::new(false)),
@@ -266,6 +272,8 @@ impl ThreadManager {
     }
 
     pub(super) fn resume_threads(&self) {
+        self.stw_initiator_holds_lock
+            .store(false, Ordering::Release);
         self.world_stopped.store(false, Ordering::Release);
         self.gc_stop_requested.store(false, Ordering::Release);
         self.all_threads_stopped.notify_all();
@@ -529,15 +537,25 @@ impl super::ThreadManagerBackend for ThreadManager {
                 break g;
             }
 
-            // If we're not the one holding the coordination lock, we might be
-            // requested to stop by the thread that DOES hold it.
-            if let Some(id) = self.current_thread_id()
+            // Another initiator holding the coordination lock is waiting for this thread to
+            // park. A registering thread holds it only briefly, and parking for it would
+            // deadlock: this thread's own request is the stop it would wait out.
+            if self.stw_initiator_holds_lock.load(Ordering::Acquire)
+                && let Some(id) = self.current_thread_id()
                 && let Some(coordinator) = self.get_coordinator()
             {
                 self.safe_point(id, &coordinator);
             }
             thread::yield_now();
         };
+        self.stw_initiator_holds_lock.store(true, Ordering::Release);
+        // A previous initiator's resume can clear the request while this one waits for the
+        // lock; re-assert it now that no other initiator can resume.
+        {
+            let _wake = self.retired_wake.lock();
+            self.gc_stop_requested.store(true, Ordering::Release);
+            self.retired_signal.notify_all();
+        }
 
         loop {
             let (thread_count, current_id) = {
@@ -1146,6 +1164,64 @@ mod tests {
             .expect("second request_stop_the_world did not acquire coordination lock after drop");
         release_tx.send(()).unwrap();
         join.join().unwrap();
+    }
+
+    /// A registered initiator that finds the coordination lock held by a registering thread
+    /// must not park at its own safepoint: no other initiator exists to resume it.
+    #[test]
+    fn registered_initiator_waits_out_registration_without_parking() {
+        let stw_flag = Arc::new(AtomicBool::new(false));
+        let manager = ThreadManager::new(stw_flag.clone());
+        let coordinator = Arc::new(GCCoordinator::new(stw_flag));
+        manager.set_coordinator(Arc::downgrade(&coordinator));
+
+        let initiator_manager = Arc::clone(&manager);
+        let initiator_coordinator = Arc::clone(&coordinator);
+        let (registered_tx, registered_rx) = mpsc::channel();
+        let (locked_tx, locked_rx) = mpsc::channel::<()>();
+        let (stopped_tx, stopped_rx) = mpsc::channel();
+        let initiator = thread::spawn(move || {
+            let id = initiator_manager.register_thread();
+            initiator_coordinator.register_arena(dotnet_utils::gc::ArenaHandle::new(id));
+            registered_tx.send(()).unwrap();
+            locked_rx.recv().unwrap();
+            drop(initiator_manager.request_stop_the_world());
+            stopped_tx.send(()).unwrap();
+            initiator_coordinator.unregister_arena(id);
+            initiator_manager.unregister_thread(id);
+        });
+        registered_rx.recv().unwrap();
+        // Stands in for another thread's `register_thread` holding the coordination lock.
+        let registration = manager.gc_coordination.try_lock().unwrap();
+        locked_tx.send(()).unwrap();
+        thread::sleep(Duration::from_millis(50));
+        drop(registration);
+
+        let stopped = stopped_rx.recv_timeout(Duration::from_secs(5));
+        if stopped.is_err() {
+            manager.resume_threads();
+        }
+        initiator.join().unwrap();
+        stopped.expect("the initiator parked waiting for its own stop request");
+    }
+
+    /// The previous initiator's resume clears the stop request while a second initiator waits
+    /// for the lock; the second must re-assert it before counting parked threads.
+    #[test]
+    fn queued_initiator_reasserts_stop_request_after_previous_resume() {
+        let manager = ThreadManager::new(Arc::new(AtomicBool::new(false)));
+        let first_guard = manager.request_stop_the_world();
+        let second_manager = Arc::clone(&manager);
+        let second = thread::spawn(move || {
+            let _guard = second_manager.request_stop_the_world();
+            second_manager.is_gc_stop_requested()
+        });
+        thread::sleep(Duration::from_millis(50));
+        drop(first_guard);
+        assert!(
+            second.join().unwrap(),
+            "the second stop-the-world ran without a stop request"
+        );
     }
 
     #[test]

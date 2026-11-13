@@ -89,7 +89,11 @@ sequenceDiagram
 ```
 
 New executor registration is serialized with `gc_coordination`, so a thread cannot join after
-the collector has counted participants. The collection-session flag covers the lead-in to a pause;
+the collector has counted participants. An initiator waiting for `gc_coordination` parks at its
+own safepoint only while another initiator holds it (`stw_initiator_holds_lock`); a registering
+thread holds it only briefly, and parking for one would leave the initiator waiting on its own
+stop request. After acquiring the lock, the initiator re-asserts `gc_stop_requested`, which the
+previous initiator's resume may have cleared. The collection-session flag covers the lead-in to a pause;
 the arena-registry stopped-world flag is published only after the registered mutators have parked
 and is cleared before they resume. This distinction permits cross-arena mutator access during
 stop-request propagation while still validating accesses during collection.
