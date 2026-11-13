@@ -20,6 +20,21 @@ use dotnet_value::{
 use dotnetdll::prelude::*;
 use tracing::error;
 
+fn object_write_error<'gc, T: ExceptionOps<'gc>>(
+    ctx: &mut T,
+    origin: &PointerOrigin<'gc>,
+    error: &crate::error::MemoryAccessError,
+    log_store_failure: bool,
+) -> StepResult {
+    if let Some(step) = crate::instructions::stale_frame_home(origin, error) {
+        return step;
+    }
+    if log_store_failure {
+        error!("stobj failed: {}", error);
+    }
+    ctx.throw_by_name_with_message("System.AccessViolationException", ACCESS_VIOLATION_MSG)
+}
+
 pub mod arrays;
 pub mod boxing;
 pub mod casting;
@@ -347,14 +362,7 @@ pub fn stobj<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResul
         // SAFETY: F10.RawMemoryAccessValid — `get_ptr_context` decoded the destination origin and offset, and the resolved
         // reference-bearing layout matches `value`; the callee checks bounds and records barriers.
         if let Err(e) = unsafe { ctx.write_unaligned(origin.clone(), offset, value, &layout) } {
-            if let Some(step) = crate::instructions::stale_frame_home(&origin, &e) {
-                return step;
-            }
-            error!("stobj failed: {}", e);
-            return ctx.throw_by_name_with_message(
-                "System.AccessViolationException",
-                ACCESS_VIOLATION_MSG,
-            );
+            return object_write_error(ctx, &origin, &e, true);
         }
     } else {
         let mut inline_buffer = [0u8; OBJECT_IO_INLINE_BUFFER_SIZE];
@@ -366,13 +374,7 @@ pub fn stobj<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResul
         // SAFETY: F10.RawMemoryAccessValid — `get_ptr_context` decoded the destination origin and offset, and `bytes` is
         // exactly the resolved non-reference layout's size; the callee performs bounds checks.
         if let Err(error) = unsafe { ctx.write_bytes(origin.clone(), offset, bytes) } {
-            if let Some(step) = crate::instructions::stale_frame_home(&origin, &error) {
-                return step;
-            }
-            return ctx.throw_by_name_with_message(
-                "System.AccessViolationException",
-                ACCESS_VIOLATION_MSG,
-            );
+            return object_write_error(ctx, &origin, &error, false);
         }
     }
     StepResult::Continue
@@ -408,11 +410,7 @@ pub fn initobj<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepRes
     // SAFETY: F10.RawMemoryAccessValid — `get_ptr_context` decoded the destination origin and offset, and `zero_bytes` is
     // exactly the resolved layout's size; the callee performs the storage bounds check.
     if let Err(error) = unsafe { ctx.write_bytes(origin.clone(), offset, zero_bytes) } {
-        if let Some(step) = crate::instructions::stale_frame_home(&origin, &error) {
-            return step;
-        }
-        return ctx
-            .throw_by_name_with_message("System.AccessViolationException", ACCESS_VIOLATION_MSG);
+        return object_write_error(ctx, &origin, &error, false);
     }
     StepResult::Continue
 }

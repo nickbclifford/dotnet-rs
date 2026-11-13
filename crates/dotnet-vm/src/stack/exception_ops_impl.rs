@@ -7,14 +7,51 @@ use crate::{
     },
 };
 use dotnet_runtime_memory::ops::BaseMemoryOps;
-use dotnet_types::WellKnown;
+use dotnet_types::{TypeDescription, WellKnown};
 use dotnet_value::{StackValue, object::ObjectRef, string::CLRString};
 use dotnet_vm_data::{
     ExceptionState, HandlerAddress, SearchState, UnwindState, UnwindTarget, exceptions::HandlerKind,
 };
 use dotnet_vm_ops::VesInternals;
 
+// Private BCL fields may be absent; parameter names, when present, must be reference slots.
+pub(crate) enum ExceptionStringField {
+    Message,
+    ParameterName,
+}
+
 impl<'a, 'gc> VesContext<'a, 'gc> {
+    pub(crate) fn initialize_exception_string(
+        &mut self,
+        exception: ObjectRef<'gc>,
+        owner: TypeDescription,
+        field: ExceptionStringField,
+        value: &str,
+    ) {
+        if matches!(field, ExceptionStringField::Message) && value.is_empty() {
+            return;
+        }
+        let gc = self.gc;
+        let text = StackValue::string(gc, CLRString::from(value)).as_object_ref();
+        self.register_new_object(&text);
+        exception.as_object_mut(gc, |obj| match field {
+            ExceptionStringField::Message => {
+                if let Some(slot) = obj.instance_storage.field::<ObjectRef>(owner, "_message") {
+                    slot.write(text);
+                }
+            }
+            ExceptionStringField::ParameterName => {
+                if obj.instance_storage.has_field(owner.clone(), "_paramName") {
+                    let slot = obj
+                        .instance_storage
+                        .field::<ObjectRef>(owner, "_paramName")
+                        .expect("ArgumentException._paramName must be an object-reference field");
+                    slot.write(text);
+                }
+            }
+        });
+    }
+
     /// Throws the `System.TypeInitializationException` that reports a failed `.cctor` of
     /// `description` (ECMA-335 §II.10.5.3.3), optionally wrapping the exception the `.cctor`
     /// threw. The exception's `TypeName` is the failing type's name, as in the CLR.
@@ -61,20 +98,12 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
         if let (StepResult::Exception, ExceptionState::Throwing(exception, _)) =
             (&result, *self.exception_mode)
         {
-            let gc = self.gc;
-            let param_ref = StackValue::string(gc, CLRString::from(param_name)).as_object_ref();
-            self.register_new_object(&param_ref);
-            exception.as_object_mut(gc, |obj| {
-                if obj
-                    .instance_storage
-                    .has_field(argument_type.clone(), "_paramName")
-                {
-                    let mut field = obj
-                        .instance_storage
-                        .get_field_mut_local(argument_type, "_paramName");
-                    param_ref.write(&mut field);
-                }
-            });
+            self.initialize_exception_string(
+                exception,
+                argument_type,
+                ExceptionStringField::ParameterName,
+                param_name,
+            );
         }
         result
     }
@@ -88,19 +117,12 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
 
         let base_exception_type =
             dotnet_vm_ops::vm_try!(self.shared.loader.corlib_wkt(WellKnown::Exception));
-        if !message.is_empty() {
-            let message_ref = StackValue::string(gc, CLRString::from(message)).as_object_ref();
-            self.register_new_object(&message_ref);
-            // `Exception._message` is private BCL layout, so it is looked up by name and skipped if absent.
-            obj_ref.as_object_mut(gc, |obj| {
-                if let Some(field) = obj
-                    .instance_storage
-                    .field::<ObjectRef>(base_exception_type, "_message")
-                {
-                    field.write(message_ref);
-                }
-            });
-        }
+        self.initialize_exception_string(
+            obj_ref,
+            base_exception_type,
+            ExceptionStringField::Message,
+            message,
+        );
 
         if let ExceptionState::ExecutingHandler(state) = *self.exception_mode {
             self.push_handler_unwind(state);
@@ -123,18 +145,12 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
 
         let base_exception_type =
             dotnet_vm_ops::vm_try!(self.shared.loader.corlib_wkt(WellKnown::Exception));
-        if !message.is_empty() {
-            let message_ref = StackValue::string(gc, CLRString::from(message)).as_object_ref();
-            self.register_new_object(&message_ref);
-            obj_ref.as_object_mut(gc, |obj| {
-                if let Some(field) = obj
-                    .instance_storage
-                    .field::<ObjectRef>(base_exception_type.clone(), "_message")
-                {
-                    field.write(message_ref);
-                }
-            });
-        }
+        self.initialize_exception_string(
+            obj_ref,
+            base_exception_type.clone(),
+            ExceptionStringField::Message,
+            message,
+        );
 
         obj_ref.as_object_mut(gc, |obj| {
             if let Some(field) = obj

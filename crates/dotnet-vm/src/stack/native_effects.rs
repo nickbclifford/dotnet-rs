@@ -1,6 +1,7 @@
 use super::{
     VesContext,
     context::{InstructionCompletion, NativeActivation, NativeFutureOwner, NativeOutput},
+    exception_ops_impl::ExceptionStringField,
     ops::*,
 };
 use crate::StepResult;
@@ -557,34 +558,24 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
             .shared
             .loader
             .corlib_wkt(WellKnown::Exception)?;
-        if !message.is_empty() {
-            let text = StackValue::string(gc, CLRString::from(message)).as_object_ref();
-            self.context.register_new_object(&text);
-            object.as_object_mut(gc, |obj| {
-                if let Some(field) = obj.instance_storage.field::<ObjectRef>(base, "_message") {
-                    field.write(text);
-                }
-            });
-        }
+        self.context.initialize_exception_string(
+            object,
+            base,
+            ExceptionStringField::Message,
+            message,
+        );
         if let Some(parameter) = parameter {
             let argument_type = self
                 .context
                 .shared
                 .loader
                 .corlib_type("System.ArgumentException")?;
-            let text = StackValue::string(gc, CLRString::from(parameter)).as_object_ref();
-            self.context.register_new_object(&text);
-            object.as_object_mut(gc, |obj| {
-                if obj
-                    .instance_storage
-                    .has_field(argument_type.clone(), "_paramName")
-                {
-                    let mut field = obj
-                        .instance_storage
-                        .get_field_mut_local(argument_type, "_paramName");
-                    text.write(&mut field);
-                }
-            });
+            self.context.initialize_exception_string(
+                object,
+                argument_type,
+                ExceptionStringField::ParameterName,
+                parameter,
+            );
         }
         Ok(object)
     }

@@ -13,6 +13,12 @@ Exception handling is split across four crates:
 
 The system handles `try`/`catch`/`finally`/`fault`/`filter` blocks and coordinates with the call stack for two-pass exception processing (search phase, then unwind phase).
 
+The synchronous throw operations and native-effects adapter initialize private exception string
+fields through `VesContext::initialize_exception_string`: newly allocated strings are registered
+before the write, an empty message leaves `_message` unset, and absent fields are skipped. A
+present `_paramName` must be an object-reference slot. Exception-state transitions remain separate
+from native effect construction, and metadata failures remain host errors.
+
 ## State Machine
 
 The core type is `ExceptionState`, an enum with these transitions:

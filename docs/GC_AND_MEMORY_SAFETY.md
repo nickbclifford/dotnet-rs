@@ -307,7 +307,9 @@ Defined in `dotnet_utils::gc::GCCommand`, split into two phase-typed inner enums
 
 `SharedGlobalState` tracks whether each arena has queued or in-progress finalizers and counts each
 contributing arena once. Collection publishes newly queued work before the stop-the-world cycle
-ends; finalizer-segment retirement and arena teardown update the same contribution. Ordinary
+ends; finalizer-segment retirement and arena teardown update the same contribution.
+`Executor::publish_pending_finalizers` is called independently during unregister and drop, so each
+lifecycle phase publishes before its own ownership transition. Ordinary
 `GC.WaitForPendingFinalizers` completes only when no live or retired arena has pending or active
 finalizer work. Its effects path waits outside an arena mutation and rechecks the global count while
 servicing GC stops. A call made from within a finalizer returns immediately through the synchronous

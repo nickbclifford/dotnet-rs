@@ -1372,10 +1372,7 @@ impl Drop for ArenaGuard {
 }
 
 impl Executor {
-    fn unregister(&mut self) {
-        if !self.registered {
-            return;
-        }
+    fn publish_pending_finalizers(&self) {
         let _ = self.with_arena_ref(|arena| {
             arena.mutate(|_, c| {
                 c.stack
@@ -1383,6 +1380,13 @@ impl Executor {
                     .publish_finalizers(&c.stack.local.heap, false);
             })
         });
+    }
+
+    fn unregister(&mut self) {
+        if !self.registered {
+            return;
+        }
+        self.publish_pending_finalizers();
         #[cfg(feature = "multithreading")]
         self.shared.gc_coordinator.unregister_arena(self.thread_id);
 
@@ -1395,13 +1399,7 @@ impl Executor {
 
 impl Drop for Executor {
     fn drop(&mut self) {
-        let _ = self.with_arena_ref(|arena| {
-            arena.mutate(|_, c| {
-                c.stack
-                    .shared
-                    .publish_finalizers(&c.stack.local.heap, false);
-            })
-        });
+        self.publish_pending_finalizers();
         #[cfg(feature = "multithreading")]
         let retained = self.owner.take().map(RetainedArena::new);
         #[cfg(all(test, feature = "multithreading"))]

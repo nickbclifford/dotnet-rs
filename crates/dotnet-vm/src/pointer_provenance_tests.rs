@@ -80,6 +80,14 @@ fn corlib_resolution(module: &'static str, assembly: &'static str) -> Resolution
     let mut exception = TypeDefinition::new(None, "Exception");
     exception.namespace = Some("System".into());
     let exception_idx = res.push_type_definition(exception);
+    res.push_field(
+        exception_idx,
+        Field::instance(
+            Accessibility::Private,
+            "_message",
+            MemberType::Base(Box::new(BaseType::String)),
+        ),
+    );
     res.push_method(
         exception_idx,
         Method::new(
@@ -101,6 +109,10 @@ fn corlib_resolution(module: &'static str, assembly: &'static str) -> Resolution
     invalid_program.namespace = Some("System".into());
     invalid_program.extends = Some(exception_idx.into());
     res.push_type_definition(invalid_program);
+    let mut access_violation = TypeDefinition::new(None, "AccessViolationException");
+    access_violation.namespace = Some("System".into());
+    access_violation.extends = Some(exception_idx.into());
+    res.push_type_definition(access_violation);
     let mut invalid_cast = TypeDefinition::new(None, "InvalidCastException");
     invalid_cast.namespace = Some("System".into());
     invalid_cast.extends = Some(exception_idx.into());
@@ -1362,6 +1374,130 @@ fn stale_frame_home_byref_write_is_rejected_after_frame_reuse() {
         )
     });
     assert_stale_frame_home(error);
+}
+
+#[test]
+fn stale_frame_home_object_writes_are_host_errors() {
+    for initialize in [true, false] {
+        let error = run_expecting_error("StaleObjectWrite", |res, type_idx| {
+            let leak = push_leaking_method(res, type_idx);
+            let ty = MethodType::Base(Box::new(BaseType::Int32));
+            let mut instructions = vec![Instruction::Call {
+                tail_call: false,
+                param0: MethodSource::User(UserMethod::Definition(leak)),
+            }];
+            if initialize {
+                instructions.push(Instruction::InitializeForObject(ty));
+            } else {
+                instructions.push(Instruction::LoadConstantInt32(7));
+                instructions.push(Instruction::StoreObject {
+                    param0: ty,
+                    unaligned: None,
+                    volatile: false,
+                });
+            }
+            instructions.extend([Instruction::LoadConstantInt32(0), Instruction::Return]);
+            (2, vec![], instructions)
+        });
+        assert_stale_frame_home(error);
+    }
+}
+
+#[test]
+fn out_of_bounds_object_writes_throw_access_violation() {
+    for (initialize, reference) in [(true, false), (false, false), (true, true), (false, true)] {
+        let (shared, entrypoint) = build_program("ObjectWriteBounds", |_, _| {
+            let base = if reference {
+                BaseType::Object
+            } else {
+                BaseType::Int32
+            };
+            let ty = MethodType::Base(Box::new(base.clone()));
+            let mut instructions = vec![
+                Instruction::LoadLocalAddress(0),
+                Instruction::LoadConstantInt32(4096),
+                Instruction::Add,
+            ];
+            if initialize {
+                instructions.push(Instruction::InitializeForObject(ty));
+            } else {
+                instructions.push(if reference {
+                    Instruction::LoadNull
+                } else {
+                    Instruction::LoadConstantInt32(7)
+                });
+                instructions.push(Instruction::StoreObject {
+                    param0: ty,
+                    unaligned: None,
+                    volatile: false,
+                });
+            }
+            instructions.extend([Instruction::LoadConstantInt32(0), Instruction::Return]);
+            (2, vec![local(base)], instructions)
+        });
+        let exception_type = shared.loader.corlib_type("System.Exception").unwrap();
+        let mut observed = false;
+        run_entrypoint_observed(shared, entrypoint, |engine, step| {
+            if *step == StepResult::Exception
+                && let dotnet_vm_data::ExceptionState::Throwing(exception, _) =
+                    engine.stack.execution.exception_mode
+            {
+                assert_eq!(
+                    exception.as_object(|obj| obj.description.type_name()),
+                    "System.AccessViolationException"
+                );
+                let message = exception.as_object(|obj| {
+                    obj.instance_storage
+                        .field::<ObjectRef>(exception_type.clone(), "_message")
+                        .unwrap()
+                        .read()
+                });
+                let handle = message.0.unwrap();
+                let inner = handle.borrow();
+                match &inner.storage {
+                    HeapStorage::Str(chars) => assert_eq!(
+                        String::from_utf16_lossy(chars),
+                        "Attempted to read or write protected memory."
+                    ),
+                    _ => panic!("message is not a string"),
+                }
+                observed = true;
+                return Observe::Stop;
+            }
+            assert!(
+                !matches!(step, StepResult::Error(_) | StepResult::Return),
+                "unexpected {step:?}"
+            );
+            Observe::Continue
+        });
+        assert!(observed, "object write did not throw");
+    }
+}
+
+#[test]
+fn object_store_and_initialize_use_frame_home() {
+    let ty = MethodType::Base(Box::new(BaseType::Int32));
+    let result = run_il(
+        "ObjectHomeWrites",
+        2,
+        vec![local(BaseType::Int32)],
+        vec![
+            Instruction::LoadLocalAddress(0),
+            Instruction::LoadConstantInt32(42),
+            Instruction::StoreObject {
+                param0: ty.clone(),
+                unaligned: None,
+                volatile: false,
+            },
+            Instruction::LoadLocal(0),
+            Instruction::LoadLocalAddress(0),
+            Instruction::InitializeForObject(ty),
+            Instruction::LoadLocal(0),
+            Instruction::Add,
+            Instruction::Return,
+        ],
+    );
+    assert_eq!(result, 42);
 }
 
 // Indirect native-int transfers of a homed byref must preserve its full origin:

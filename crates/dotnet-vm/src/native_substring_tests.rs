@@ -6887,6 +6887,10 @@ fn static_fields_complete_without_activation(recursive: bool) {
 
 /// CoreLib layout sufficient to inspect exceptions created without constructors.
 fn validation_executor() -> Executor {
+    validation_executor_with_fields(true)
+}
+
+fn validation_executor_with_fields(fields: bool) -> Executor {
     let executor = executor();
     let mut core = Resolution::new(Module::new("System.Private.CoreLib.dll"));
     core.assembly = Some(Assembly::new("System.Private.CoreLib"));
@@ -6897,26 +6901,30 @@ fn validation_executor() -> Executor {
     ty.namespace = Some("System".into());
     ty.extends = Some(object.into());
     let exception = core.push_type_definition(ty);
-    core.push_field(
-        exception,
-        Field::instance(
-            Accessibility::Private,
-            "_message",
-            MemberType::Base(Box::new(BaseType::String)),
-        ),
-    );
+    if fields {
+        core.push_field(
+            exception,
+            Field::instance(
+                Accessibility::Private,
+                "_message",
+                MemberType::Base(Box::new(BaseType::String)),
+            ),
+        );
+    }
     let mut ty = TypeDefinition::new(None, "ArgumentException");
     ty.namespace = Some("System".into());
     ty.extends = Some(exception.into());
     let argument = core.push_type_definition(ty);
-    core.push_field(
-        argument,
-        Field::instance(
-            Accessibility::Private,
-            "_paramName",
-            MemberType::Base(Box::new(BaseType::String)),
-        ),
-    );
+    if fields {
+        core.push_field(
+            argument,
+            Field::instance(
+                Accessibility::Private,
+                "_paramName",
+                MemberType::Base(Box::new(BaseType::String)),
+            ),
+        );
+    }
     for (namespace, name, parent) in [
         ("System", "ArgumentNullException", argument),
         ("System", "ArgumentOutOfRangeException", argument),
@@ -7004,6 +7012,188 @@ fn assert_validation_exception<'gc>(
         );
     }
     assert!(ctx.call_state.native.is_empty());
+}
+
+#[test]
+fn synchronous_exception_fields_and_address_failures() {
+    use crate::stack::ops::ExceptionOps;
+    let mut executor = validation_executor();
+    executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: F1.GcHandleRooted — the engine is the live arena root for this mutation.
+                let gc = unsafe { test_gc_handle(gc, engine) };
+                let mut ctx = engine.ves_context(gc);
+                let result = ctx.throw_argument_out_of_range("index");
+                assert_validation_exception(
+                    &mut ctx,
+                    result,
+                    "System.ArgumentOutOfRangeException",
+                    "index",
+                    Some("index"),
+                );
+                for argument in [true, false] {
+                    *ctx.exception_mode = ExceptionState::None;
+                    let result = if argument {
+                        crate::instructions::stack_ops::ldarga(&mut ctx, u16::MAX)
+                    } else {
+                        crate::instructions::stack_ops::ldloca(&mut ctx, u16::MAX)
+                    };
+                    assert_validation_exception(
+                        &mut ctx,
+                        result,
+                        "System.InvalidProgramException",
+                        "Common Language Runtime detected an invalid program.",
+                        None,
+                    );
+                }
+            });
+        })
+        .unwrap();
+}
+
+#[test]
+fn exception_fields_are_optional_and_empty_message_stays_null() {
+    use crate::stack::ops::{ExceptionOps, UnifiedDispatchTarget, VmCallOps};
+    for native in [false, true] {
+        let mut executor = validation_executor_with_fields(false);
+        let method = substring_method(&executor, true);
+        executor
+            .with_arena(|arena| {
+                arena.mutate_root(|gc, engine| {
+                    // SAFETY: F1.GcHandleRooted — the engine is the live arena root for this mutation.
+                    let gc = unsafe { test_gc_handle(gc, engine) };
+                    let mut ctx = engine.ves_context(gc);
+                    let result = if native {
+                        ctx.frame_stack
+                            .current_frame_mut()
+                            .state
+                            .info_handle
+                            .exceptions = vec![Arc::new(boundary_section(
+                            dotnet_vm_data::exceptions::HandlerKind::Filter { clause_offset: 1 },
+                            0..1,
+                            1..2,
+                        ))];
+                        let source = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("abc")));
+                        ctx.push(StackValue::ObjectRef(source));
+                        ctx.push(StackValue::Int32(-1));
+                        ctx.push(StackValue::Int32(0));
+                        ctx.unified_dispatch(
+                            UnifiedDispatchTarget::Resolved(method, GenericLookup::default()),
+                            None,
+                            None,
+                        )
+                    } else {
+                        ctx.throw_argument_out_of_range("index")
+                    };
+                    assert_eq!(result, StepResult::Exception);
+                    let exception = match *ctx.exception_mode {
+                        ExceptionState::Filtering(state) => state.exception,
+                        ExceptionState::Throwing(exception, _) => exception,
+                        _ => panic!("expected managed exception"),
+                    };
+                    assert_eq!(
+                        exception.as_object(|obj| obj.description.type_name()),
+                        "System.ArgumentOutOfRangeException"
+                    );
+                    for (owner, name) in [
+                        ("System.Exception", "_message"),
+                        ("System.ArgumentException", "_paramName"),
+                    ] {
+                        let owner = ctx.shared.loader.corlib_type(owner).unwrap();
+                        assert!(
+                            !exception.as_object(|obj| obj.instance_storage.has_field(owner, name))
+                        );
+                    }
+                })
+            })
+            .unwrap();
+    }
+    let mut executor = validation_executor();
+    executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: F1.GcHandleRooted — the engine is the live arena root for this mutation.
+                let gc = unsafe { test_gc_handle(gc, engine) };
+                let mut ctx = engine.ves_context(gc);
+                assert_eq!(
+                    ctx.throw_by_name_with_message("System.ArgumentException", ""),
+                    StepResult::Exception
+                );
+                let ExceptionState::Throwing(exception, _) = *ctx.exception_mode else {
+                    panic!("expected managed exception")
+                };
+                let owner = ctx.shared.loader.corlib_type("System.Exception").unwrap();
+                let message = exception.as_object(|obj| {
+                    obj.instance_storage
+                        .field::<ObjectRef>(owner, "_message")
+                        .unwrap()
+                        .read()
+                });
+                assert!(message.0.is_none());
+            })
+        })
+        .unwrap();
+}
+
+#[test]
+fn exception_fields_survive_collection_for_sync_and_native_dispatch() {
+    use crate::stack::ops::{ExceptionOps, UnifiedDispatchTarget, VmCallOps};
+    for native in [false, true] {
+        let mut executor = validation_executor();
+        let method = substring_method(&executor, true);
+        executor
+            .with_arena(|arena| {
+                arena.mutate_root(|gc, engine| {
+                    // SAFETY: F1.GcHandleRooted — the engine is the live arena root for this mutation.
+                    let gc = unsafe { test_gc_handle(gc, engine) };
+                    let mut ctx = engine.ves_context(gc);
+                    let result = if native {
+                        ctx.frame_stack
+                            .current_frame_mut()
+                            .state
+                            .info_handle
+                            .exceptions = vec![Arc::new(boundary_section(
+                            dotnet_vm_data::exceptions::HandlerKind::Filter { clause_offset: 1 },
+                            0..1,
+                            1..2,
+                        ))];
+                        let source = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("abc")));
+                        ctx.push(StackValue::ObjectRef(source));
+                        ctx.push(StackValue::Int32(-1));
+                        ctx.push(StackValue::Int32(0));
+                        ctx.unified_dispatch(
+                            UnifiedDispatchTarget::Resolved(method, GenericLookup::default()),
+                            None,
+                            None,
+                        )
+                    } else {
+                        ctx.throw_argument_out_of_range("startIndex")
+                    };
+                    assert_validation_exception(
+                        &mut ctx,
+                        result,
+                        "System.ArgumentOutOfRangeException",
+                        "startIndex",
+                        Some("startIndex"),
+                    );
+                });
+                arena.finish_cycle();
+                arena.mutate_root(|gc, engine| {
+                    // SAFETY: F1.GcHandleRooted — the engine is the live arena root for this mutation.
+                    let gc = unsafe { test_gc_handle(gc, engine) };
+                    let mut ctx = engine.ves_context(gc);
+                    assert_validation_exception(
+                        &mut ctx,
+                        StepResult::Exception,
+                        "System.ArgumentOutOfRangeException",
+                        "startIndex",
+                        Some("startIndex"),
+                    );
+                });
+            })
+            .unwrap();
+    }
 }
 
 #[test]

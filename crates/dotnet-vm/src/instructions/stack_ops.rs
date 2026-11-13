@@ -5,6 +5,19 @@ use crate::{
 use dotnet_macros::dotnet_instruction;
 use dotnet_value::StackValue;
 
+fn address_error<'gc, T: ExceptionOps<'gc>>(
+    ctx: &mut T,
+    error: crate::error::TypeResolutionError,
+) -> StepResult {
+    match error {
+        crate::error::TypeResolutionError::InvalidLayout(_) => ctx.throw_by_name_with_message(
+            "System.InvalidProgramException",
+            "Common Language Runtime detected an invalid program.",
+        ),
+        error => StepResult::Error(error.into()),
+    }
+}
+
 /// `break` is a debugger hook with no effect here, except in the slot a synchronized method
 /// reserves at index 0 for acquiring its monitor.
 #[dotnet_instruction(Breakpoint)]
@@ -80,13 +93,7 @@ pub fn ldarga<'gc, T: VmStackOps<'gc> + EvalStackOps<'gc> + ExceptionOps<'gc>>(
 ) -> StepResult {
     let pointer = match ctx.argument_address(ArgumentIndex::new(index as usize)) {
         Ok(pointer) => pointer,
-        Err(crate::error::TypeResolutionError::InvalidLayout(_)) => {
-            return ctx.throw_by_name_with_message(
-                "System.InvalidProgramException",
-                "Common Language Runtime detected an invalid program.",
-            );
-        }
-        Err(error) => return StepResult::Error(error.into()),
+        Err(error) => return address_error(ctx, error),
     };
     ctx.push(pointer);
     StepResult::Continue
@@ -114,13 +121,7 @@ pub fn ldloca<'gc, T: VmStackOps<'gc> + EvalStackOps<'gc> + ExceptionOps<'gc>>(
 ) -> StepResult {
     let pointer = match ctx.local_address(LocalIndex::new(index as usize)) {
         Ok(pointer) => pointer,
-        Err(crate::error::TypeResolutionError::InvalidLayout(_)) => {
-            return ctx.throw_by_name_with_message(
-                "System.InvalidProgramException",
-                "Common Language Runtime detected an invalid program.",
-            );
-        }
-        Err(error) => return StepResult::Error(error.into()),
+        Err(error) => return address_error(ctx, error),
     };
     ctx.push(pointer);
     StepResult::Continue

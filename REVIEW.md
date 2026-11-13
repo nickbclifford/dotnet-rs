@@ -7,7 +7,7 @@
 - **Low:** qualification noise, assertion diagnostics and unnecessarily elaborate signatures/control flow obscure the important invariants. Fix selectively, preserving macro hygiene, named arena relationships and synchronization identity.
 - **Informational:** workflow input warnings, detached fuzz/generated files and the intentional rerun probe are IDE limitations. Major dependency notices are separate migration work, not authorization to change GC or synchronization semantics.
 
-The ledger preserves the original inspection dispositions. “Fix” denotes an authorized resolution; rows marked **resolved** have been implemented and verified as recorded below. Four of the 29 duplicate-fix occurrences are resolved; the remaining 25 are planned. Every exported problem has an individual ledger row; aggregate duplicate fragments are not counted twice. XML inputs are unchanged.
+The ledger preserves the original inspection dispositions. “Fix” denotes an authorized resolution; rows marked **resolved** have been implemented and verified as recorded below. Twenty-two of the 29 duplicate-fix occurrences are resolved; the remaining seven are planned. Every exported problem has an individual ledger row; aggregate duplicate fragments are not counted twice. XML inputs are unchanged.
 
 ## Methodology
 
@@ -43,7 +43,7 @@ The generated table below partitions each problem into **fix / refute / keep / d
 |---|---:|---|---|---|
 | Annotator | 5 | dotnet-assemblies (2), dotnet-vm (3) | 0 / 5 / 0 / 0 | F-INFRA-001 |
 | CargoUnusedDependency | 4 | dotnet-benchmarks (2), dotnet-cli (1), dotnet-value (1) | 4 / 0 / 0 / 0 | F-DEP-001 |
-| DuplicatedCode | 70 | dotnet-intrinsics-core (2), dotnet-intrinsics-reflection (3), dotnet-intrinsics-span (8), dotnet-intrinsics-string (4), dotnet-simd (2), dotnet-utils (2), dotnet-value (1), dotnet-vm (48) | 29 (12 resolved) / 0 / 41 / 0 | F-DUP-001 / F-DUP-002 / F-DUP-003 / F-DUP-004 / F-DUP-005 |
+| DuplicatedCode | 70 | dotnet-intrinsics-core (2), dotnet-intrinsics-reflection (3), dotnet-intrinsics-span (8), dotnet-intrinsics-string (4), dotnet-simd (2), dotnet-utils (2), dotnet-value (1), dotnet-vm (48) | 29 (22 resolved) / 0 / 41 / 0 | F-DUP-001 / F-DUP-002 / F-DUP-003 / F-DUP-004 / F-DUP-005 |
 | NewCrateVersionAvailable | 12 | Cargo.toml (3), dotnet-benchmarks (1), dotnet-macros (1), dotnet-macros-core (1), dotnet-value (1), dotnet-vm (4), xtask (1) | 0 / 0 / 0 / 12 | F-DEP-002 |
 | RsAssertEqual | 19 | dotnet-value (17), dotnet-vm (2) | 19 / 0 / 0 / 0 | F-IDIOM-002 |
 | RsDeprecation | 4 | dotnet-utils (2), dotnet-vm (2) | 3 / 0 / 1 / 0 | F-DEPR-001 |
@@ -90,13 +90,16 @@ not an inline-storage window.
 <a id="F-DUP-003"></a>
 #### F-DUP-003 — Exception field initialization and lifecycle operations
 
-**Medium; high effort.** `dotnet-vm/src/stack/exception_ops_impl.rs:55–103` and stack/native_effects.rs:550–590 repeat `_message`/`_paramName` writes (groups 22–23). Share the field-initialization contract, not the synchronous and effect invocation protocols. Both paths must use it immediately; preserve optional-field behavior, rooting before writes and host-error versus managed-exception boundaries.
-
-`executor.rs:1379,1398` repeats finalizer publication traversal (group 12) in distinct lifecycle phases. A narrowly named Executor publication operation prevents traversal drift without merging phases. `instructions/objects/mod.rs:368,410` and instructions/stack_ops.rs:81,115 repeat write-failure and address-layout error policies (groups 20–21). Share each semantic translation separately. Preserve stale-home failures, AccessViolation versus InvalidProgram, exact guest messages, and separate unsafe writes.
-
-Group 24's monitor polls at native_effects.rs:1736,1748 remain separate: state can change between readiness checks. Do not delete a poll or introduce a general callback framework to satisfy the detector.
-
-Risk: rooting, finalizer order, effect activation and error routing. Verify enabled sync/effect exceptions, object store/init, ldarga/ldloca, executor teardown/collection and dependent CLI paths in no-feature/MT/MT+validation-all. Focused Miri for changed GC boundaries, release clippy, provenance and doc drift are required. No guest-behavior redesign.
+**Medium; high effort; resolved.** `VesContext::initialize_exception_string` shares string
+allocation, registration and optional field writes across synchronous throws and native effects,
+without merging their control protocols. A present parameter-name field is checked as a reference
+slot; the typed write avoids the existing byte-vector alignment assertion. Empty messages remain
+unset. `Executor::publish_pending_finalizers` is called at both original lifecycle positions.
+`object_write_error` preserves stale-home host errors and AccessViolation messages for all store
+and initialization paths, while `address_error` retains InvalidProgram versus host-error mapping.
+The unsafe writes remain separate. Group 24's monitor polls remain distinct because readiness can
+change between them. Enabled sync/effect collection, optional-field, address, object-write and
+teardown tests exercise the contracts; execution evidence is in the session memory.
 
 <a id="F-DUP-004"></a>
 #### F-DUP-004 — Event transitions and allocation accounting
@@ -296,9 +299,9 @@ Test hook boilerplate: distinct wait phases/reentrancy; keep without generic cal
 - `crates/dotnet-vm/src/executor.rs:1065` — `run_inner`.
 - `crates/dotnet-vm/src/threading/basic.rs:323` — `register_thread`.
 
-### Aggregate group 12 — fix
+### Aggregate group 12 — fix (resolved)
 
-True lifecycle operation: share finalizer publication traversal, preserve both phase positions.
+`Executor::publish_pending_finalizers` preserves both publication positions.
 
 - `crates/dotnet-vm/src/executor.rs:1379` — `unregister`.
 - `crates/dotnet-vm/src/executor.rs:1398` — `drop`.
@@ -353,30 +356,30 @@ Test boilerplate: constructor metadata in distinct fault scenarios; keep local I
 - `crates/dotnet-vm/src/fault_tests.rs:352` — `test_fault_inside_finally_resumes_outer_handler`.
 - `crates/dotnet-vm/src/fault_tests.rs:440` — `test_fault_inside_finally_with_pending_exception`.
 
-### Aggregate group 20 — fix
+### Aggregate group 20 — fix (resolved)
 
-True write-error policy: share stale-home versus AccessViolation translation, not unsafe writes.
+`object_write_error` translates stale-home and other failures for both writes; unsafe operations stay separate.
 
 - `crates/dotnet-vm/src/instructions/objects/mod.rs:368` — `stobj`.
 - `crates/dotnet-vm/src/instructions/objects/mod.rs:410` — `initobj`.
 
-### Aggregate group 21 — fix
+### Aggregate group 21 — fix (resolved)
 
-True address-layout error policy: share InvalidProgram mapping, retain local/argument identity.
+`address_error` maps layout failures consistently without changing argument/local lookup.
 
 - `crates/dotnet-vm/src/instructions/stack_ops.rs:81` — `ldarga`.
 - `crates/dotnet-vm/src/instructions/stack_ops.rs:115` — `ldloca`.
 
-### Aggregate group 22 — fix
+### Aggregate group 22 — fix (resolved)
 
-True optional exception param-name initialization; share across sync/effect paths.
+`initialize_exception_string` registers and writes optional parameter names for both producers.
 
 - `crates/dotnet-vm/src/stack/exception_ops_impl.rs:67` — `throw_argument_out_of_range`.
 - `crates/dotnet-vm/src/stack/native_effects.rs:577` — `exception`.
 
-### Aggregate group 23 — fix
+### Aggregate group 23 — fix (resolved)
 
-True optional exception message initialization; share with field contract of group 22.
+`initialize_exception_string` shares message construction and skips empty or absent fields.
 
 - `crates/dotnet-vm/src/stack/exception_ops_impl.rs:95` — `throw_by_name_with_message`.
 - `crates/dotnet-vm/src/stack/native_effects.rs:563` — `exception`.
@@ -505,8 +508,8 @@ Each row is one exported problem, identified by inspection and one-based XML ord
 | 21 | `crates/dotnet-utils/src/gc/cross_arena.rs:1233` — `stress_stw_flag_transitions_with_lease_acquisition` | keep | Aggregate group 10 below/above; `let writer_locks: Arc<Vec<crate::sync::Mutex<()>>> =` |
 | 22 | `crates/dotnet-value/src/cts_cli_conversion.rs:58` — `from_enum_underlying` | keep | Aggregate group 3 below/above; `Some(match base {` |
 | 23 | `crates/dotnet-vm/src/executor.rs:1065` — `run_inner` | keep | Aggregate group 11 below/above; `#[cfg(test)]` |
-| 24 | `crates/dotnet-vm/src/executor.rs:1379` — `unregister` | fix | Aggregate group 12 below/above; `let _ = self.with_arena_ref(\|arena\| {` |
-| 25 | `crates/dotnet-vm/src/executor.rs:1398` — `drop` | fix | Aggregate group 12 below/above; `let _ = self.with_arena_ref(\|arena\| {` |
+| 24 | `crates/dotnet-vm/src/executor.rs:1379` — `unregister` | fix (resolved) | Aggregate group 12 below/above; `let _ = self.with_arena_ref(\|arena\| {` |
+| 25 | `crates/dotnet-vm/src/executor.rs:1398` — `drop` | fix (resolved) | Aggregate group 12 below/above; `let _ = self.with_arena_ref(\|arena\| {` |
 | 26 | `crates/dotnet-vm/src/executor_collection_tests.rs:118` — `run_vm_collection` | keep | Aggregate group 13 below/above; `let storage = b` |
 | 27 | `crates/dotnet-vm/src/executor_collection_tests.rs:150` — `run_vm_collection` | keep | Aggregate group 14 below/above; `a.with_arena(\|arena\| {` |
 | 28 | `crates/dotnet-vm/src/executor_collection_tests.rs:322` — `spawn_owner` | keep | Aggregate group 13 below/above; `let storage = owner` |
@@ -520,15 +523,15 @@ Each row is one exported problem, identified by inspection and one-based XML ord
 | 36 | `crates/dotnet-vm/src/fault_tests.rs:255` — `test_fault_handler_executed_on_exception` | keep | Aggregate group 19 below/above; `let exc_ctor = res.push_method_reference(ExternalMethodReference {` |
 | 37 | `crates/dotnet-vm/src/fault_tests.rs:352` — `test_fault_inside_finally_resumes_outer_handler` | keep | Aggregate group 19 below/above; `let exc_ctor = res.push_method_reference(ExternalMethodReference {` |
 | 38 | `crates/dotnet-vm/src/fault_tests.rs:440` — `test_fault_inside_finally_with_pending_exception` | keep | Aggregate group 19 below/above; `let exc_ctor = res.push_method_reference(ExternalMethodReference {` |
-| 39 | `crates/dotnet-vm/src/instructions/objects/mod.rs:368` — `stobj` | fix | Aggregate group 20 below/above; `if let Err(error) = unsafe { ctx.write_bytes(origin.clone(), offset, bytes) } {` |
-| 40 | `crates/dotnet-vm/src/instructions/objects/mod.rs:410` — `initobj` | fix | Aggregate group 20 below/above; `if let Err(error) = unsafe { ctx.write_bytes(origin.clone(), offset, zero_bytes) } {` |
-| 41 | `crates/dotnet-vm/src/instructions/stack_ops.rs:81` — `ldarga` | fix | Aggregate group 21 below/above; `{` |
-| 42 | `crates/dotnet-vm/src/instructions/stack_ops.rs:115` — `ldloca` | fix | Aggregate group 21 below/above; `{` |
+| 39 | `crates/dotnet-vm/src/instructions/objects/mod.rs:368` — `stobj` | fix (resolved) | Aggregate group 20 below/above; `if let Err(error) = unsafe { ctx.write_bytes(origin.clone(), offset, bytes) } {` |
+| 40 | `crates/dotnet-vm/src/instructions/objects/mod.rs:410` — `initobj` | fix (resolved) | Aggregate group 20 below/above; `if let Err(error) = unsafe { ctx.write_bytes(origin.clone(), offset, zero_bytes) } {` |
+| 41 | `crates/dotnet-vm/src/instructions/stack_ops.rs:81` — `ldarga` | fix (resolved) | Aggregate group 21 below/above; `{` |
+| 42 | `crates/dotnet-vm/src/instructions/stack_ops.rs:115` — `ldloca` | fix (resolved) | Aggregate group 21 below/above; `{` |
 | 43 | `crates/dotnet-vm/src/jmp_tests.rs:178` — `test_jmp_instruction` | keep | Aggregate group 18 below/above; `if let StepResult::Return = res {` |
-| 44 | `crates/dotnet-vm/src/stack/exception_ops_impl.rs:67` — `throw_argument_out_of_range` | fix | Aggregate group 22 below/above; `exception.as_object_mut(gc, \|obj\| {` |
-| 45 | `crates/dotnet-vm/src/stack/exception_ops_impl.rs:95` — `throw_by_name_with_message` | fix | Aggregate group 23 below/above; `obj_ref.as_object_mut(gc, \|obj\| {` |
-| 46 | `crates/dotnet-vm/src/stack/native_effects.rs:563` — `exception` | fix | Aggregate group 23 below/above; `object.as_object_mut(gc, \|obj\| {` |
-| 47 | `crates/dotnet-vm/src/stack/native_effects.rs:577` — `exception` | fix | Aggregate group 22 below/above; `object.as_object_mut(gc, \|obj\| {` |
+| 44 | `crates/dotnet-vm/src/stack/exception_ops_impl.rs:67` — `throw_argument_out_of_range` | fix (resolved) | Aggregate group 22 below/above; `exception.as_object_mut(gc, \|obj\| {` |
+| 45 | `crates/dotnet-vm/src/stack/exception_ops_impl.rs:95` — `throw_by_name_with_message` | fix (resolved) | Aggregate group 23 below/above; `obj_ref.as_object_mut(gc, \|obj\| {` |
+| 46 | `crates/dotnet-vm/src/stack/native_effects.rs:563` — `exception` | fix (resolved) | Aggregate group 23 below/above; `object.as_object_mut(gc, \|obj\| {` |
+| 47 | `crates/dotnet-vm/src/stack/native_effects.rs:577` — `exception` | fix (resolved) | Aggregate group 22 below/above; `object.as_object_mut(gc, \|obj\| {` |
 | 48 | `crates/dotnet-vm/src/stack/native_effects.rs:1736` — `advance_monitor_wait` | keep | Aggregate group 24 below/above; `if let Some(pulsed) = pending.wait.poll(self.thread_id()) {` |
 | 49 | `crates/dotnet-vm/src/stack/native_effects.rs:1748` — `advance_monitor_wait` | keep | Aggregate group 24 below/above; `if let Some(pulsed) = pending.wait.poll(self.thread_id()) {` |
 | 50 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:33` — `write_to_inline_storage` | fix (resolved) | Aggregate group 25 below/above; `if offset` |
