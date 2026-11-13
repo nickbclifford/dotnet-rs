@@ -10,6 +10,9 @@ In priority order. Each plan's own `Status:` line is the only record of its stat
 
 | ID | Plan | Note |
 |---|---|---|
+| 18 | [Managed API gaps against the CLR](18-managed-api-clr-gaps.md) | Newtonsoft `unbox.any` regression first, then delegate, type-name and `IsByRefLike` gaps |
+| 19 | [Reflection invocation matches the CLR](19-reflection-invoke-clr-parity.md) | Reverses plan 08's transparent-exception and byref-return decisions |
+| 20 | [Shared GC handles and a dedicated finalizer thread](20-gc-handles-and-finalizer-thread.md) | Starts with untraced dependent handles (likely use-after-free) |
 | 17 | [Inspection-driven code quality refactor](17-inspection-quality-refactor.md) | Ordered semantic, readability and dependency slices with an inspection ledger |
 | 16 | [Retire legacy continuations and move suspending intrinsics to effects](16-retire-legacy-continuations.md) | Complete (slices 1–8); the multicast continuation for excluded shapes is deliberately kept |
 | 15 | [CoreLib `Task` and the thread pool](15-corelib-task-and-thread-pool.md) | CoreLib tasks/resources, capped background pool workers, unnamed events and managed timers are active |
@@ -34,6 +37,8 @@ while executing a plan gets the next free ID, even when it must precede that pla
 ## Not yet planned
 
 Known problems without a plan. Write a plan for one only when it is chosen as the next work.
+Entries that plans 18–20 cover stay here until the plan's docs slice removes them; each plan
+lists the entries it closes.
 Evidence and IDs (p01…, R01…) are defined in the
 [pointer-provenance inventory](../pointer-provenance/INVENTORY.md).
 
