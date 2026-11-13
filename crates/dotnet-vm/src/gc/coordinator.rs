@@ -65,6 +65,7 @@ pub struct GCCoordinator {
     stw_in_progress: Arc<AtomicBool>,
     /// Sticky flag set by allocation pressure to accelerate `should_collect`.
     needs_any_collection: Arc<AtomicBool>,
+    pub(crate) dependents_changed: AtomicBool,
     /// Cross-arena references found during marking
     cross_arena_refs: OrderedMutex<
         levels::CrossArenaRefs,
@@ -140,6 +141,7 @@ impl GCCoordinator {
             collection_lock: OrderedMutex::new(()),
             stw_in_progress,
             needs_any_collection: Arc::new(AtomicBool::new(false)),
+            dependents_changed: AtomicBool::new(false),
             cross_arena_refs: OrderedMutex::new(HashMap::new()),
         }
     }
@@ -553,6 +555,20 @@ impl CollectionSession<'_> {
         #[cfg(feature = "bench-instrumentation")]
         let mut fixed_point_iterations = 0u64;
         loop {
+            self.coordinator
+                .dependents_changed
+                .store(false, Ordering::SeqCst);
+            self.send_command_to_all_and_wait(
+                initiating_thread_id,
+                GCCommand::Mark(MarkPhaseCommand::Dependents),
+            );
+            let dependents_changed = self.coordinator.dependents_changed.load(Ordering::SeqCst);
+            if dependents_changed {
+                self.send_command_to_all_and_wait(
+                    initiating_thread_id,
+                    GCCommand::Mark(MarkPhaseCommand::TraceDependents),
+                );
+            }
             let cross_refs = {
                 let mut refs = self
                     .coordinator
@@ -566,7 +582,9 @@ impl CollectionSession<'_> {
                     !ptrs.is_empty()
                 });
                 if refs.is_empty() {
-                    // No cross-arena references found, we're done
+                    if dependents_changed {
+                        continue;
+                    }
                     break;
                 }
                 // Move the current references out without cloning so capacity can be reused.
@@ -625,19 +643,7 @@ impl CollectionSession<'_> {
             // Wait for all MarkObjects commands to complete (excluding initiating thread)
             self.wait_on_other_arenas(initiating_thread_id);
 
-            // Check if any new cross-arena references were discovered
-            let has_new_refs = {
-                let refs = self
-                    .coordinator
-                    .cross_arena_refs
-                    .lock_after(self.collection_lock_level());
-                !refs.is_empty()
-            };
-
-            if !has_new_refs {
-                // Fixed point reached - no new cross-arena references found
-                break;
-            }
+            // Newly marked objects can activate further dependent handles.
         }
         #[cfg(feature = "bench-instrumentation")]
         dotnet_metrics::record_active_gc_fixed_point_cycle(fixed_point_iterations);
@@ -916,6 +922,9 @@ mod tests {
                 let command = worker_handle.current_command().lock().clone();
                 if let Some(command) = command {
                     match command {
+                        GCCommand::Mark(
+                            MarkPhaseCommand::Dependents | MarkPhaseCommand::TraceDependents,
+                        ) => {}
                         GCCommand::Mark(MarkPhaseCommand::All) => {
                             worker_coordinator.record_cross_arena_ref(reference);
                         }

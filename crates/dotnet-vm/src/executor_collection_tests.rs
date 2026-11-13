@@ -665,3 +665,64 @@ fn collection_request_retries_when_coordinator_is_busy() {
     executor.perform_full_gc().unwrap();
     assert_eq!(executor.collection_check().unwrap(), (false, false));
 }
+
+#[cfg(feature = "multithreading")]
+#[test]
+fn dependent_handle_chain_survives_and_clears() {
+    use crate::{gc::coordinator::GcCycleGuard, threading::ThreadManagerOps};
+    use dotnet_utils::gc::GCHandleType;
+
+    let state = shared();
+    let mut executor = Executor::new(Arc::clone(&state));
+    executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: The objects and handles stay within this live arena.
+                let handle = unsafe { crate::test_utils::test_gc_handle(gc, engine) };
+                let key = ObjectRef::new(handle, HeapStorage::Str(CLRString::from("key")));
+                let middle = ObjectRef::new(handle, HeapStorage::Str(CLRString::from("middle")));
+                let tail = ObjectRef::new(handle, HeapStorage::Str(CLRString::from("tail")));
+                let heap = &engine.stack.local.heap;
+                heap.gchandles
+                    .borrow_mut()
+                    .push(Some((key, GCHandleType::Normal)));
+                heap.gchandles
+                    .borrow_mut()
+                    .push(Some((tail, GCHandleType::Weak)));
+                // Reverse order requires another mark round after the first dependent activates.
+                heap.dependent_handles
+                    .borrow_mut()
+                    .extend([Some((middle, tail)), Some((key, middle))]);
+            })
+        })
+        .unwrap();
+    let thread_id = executor.thread_id;
+    let collect = || {
+        let session = state.gc_coordinator.begin_collection().unwrap();
+        let stw = state.thread_manager.request_stop_the_world();
+        let cycle = GcCycleGuard::new(session, stw);
+        cycle.collect_all_arenas(thread_id);
+    };
+    collect();
+    executor
+        .with_arena(|arena| {
+            arena.mutate_root(|_, engine| {
+                let heap = &engine.stack.local.heap;
+                assert!(heap.gchandles.borrow()[1].as_ref().unwrap().0.0.is_some());
+                heap.gchandles.borrow_mut()[0] = None;
+            })
+        })
+        .unwrap();
+    collect();
+    executor
+        .with_arena(|arena| {
+            arena.mutate(|_, engine| {
+                let heap = &engine.stack.local.heap;
+                assert!(heap.gchandles.borrow()[1].as_ref().unwrap().0.0.is_none());
+                for (key, value) in heap.dependent_handles.borrow().iter().flatten() {
+                    assert!(key.0.is_none() && value.0.is_none());
+                }
+            })
+        })
+        .unwrap();
+}

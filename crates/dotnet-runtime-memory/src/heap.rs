@@ -32,6 +32,8 @@ pub struct HeapManager<'gc> {
     pub pinned_objects: RefCell<PinnedObjects<'gc>>,
     pub gchandles: RefCell<Vec<Option<(ObjectRef<'gc>, GCHandleType)>>>,
     pub dependent_handles: RefCell<Vec<Option<(ObjectRef<'gc>, ObjectRef<'gc>)>>>,
+    /// Slots activated during the current mark cycle; their values are traced as roots.
+    pub active_dependents: RefCell<HashSet<usize>>,
     pub processing_finalizer: Cell<bool>,
     pub finalizers_published: Cell<bool>,
     pub needs_full_collect: Cell<bool>,
@@ -55,6 +57,7 @@ impl<'gc> HeapManager<'gc> {
             pinned_objects: RefCell::new(SmallVec::new()),
             gchandles: RefCell::new(Vec::new()),
             dependent_handles: RefCell::new(Vec::new()),
+            active_dependents: RefCell::new(HashSet::new()),
             processing_finalizer: Cell::new(false),
             finalizers_published: Cell::new(false),
             needs_full_collect: Cell::new(false),
@@ -147,6 +150,31 @@ impl<'gc> HeapManager<'gc> {
         !self.pending_finalization.borrow().is_empty()
     }
 
+    /// Activate values whose keys have become reachable. The caller must retrace the root
+    /// and repeat marking until no more entries activate.
+    pub fn activate_dependents(&self, fc: &'gc gc_arena::Finalization<'gc>) -> bool {
+        let handles = self.dependent_handles.borrow();
+        let mut active = self.active_dependents.borrow_mut();
+        let mut changed = false;
+        for (index, entry) in handles.iter().enumerate() {
+            if let Some((ObjectRef(Some(key)), _)) = entry
+                && !Gc::is_dead(fc, *key)
+            {
+                changed |= active.insert(index);
+            }
+        }
+        changed
+    }
+
+    fn clear_dead_dependents(&self, fc: &'gc gc_arena::Finalization<'gc>) {
+        for (key, value) in self.dependent_handles.borrow_mut().iter_mut().flatten() {
+            if key.0.is_none_or(|ptr| Gc::is_dead(fc, ptr)) {
+                *key = ObjectRef(None);
+                *value = ObjectRef(None);
+            }
+        }
+    }
+
     /// Zero short weak handles whose targets are unreachable.
     ///
     /// Read-only with respect to object colors, so every arena can run it concurrently. In a
@@ -155,6 +183,7 @@ impl<'gc> HeapManager<'gc> {
     /// resurrects (recolors) it.
     #[cfg(feature = "multithreading")]
     pub fn clear_dead_weak_handles(&self, fc: &'gc gc_arena::Finalization<'gc>) {
+        self.clear_dead_dependents(fc);
         let mut handles = self.gchandles.borrow_mut();
         for (obj_ref, handle_type) in handles.iter_mut().flatten() {
             if *handle_type == GCHandleType::Weak
@@ -172,6 +201,8 @@ impl<'gc> HeapManager<'gc> {
         shared: &impl MemorySharedStateHost,
         indent: usize,
     ) {
+        #[cfg(not(feature = "multithreading"))]
+        self.clear_dead_dependents(fc);
         let mut queue = self.finalization_queue.borrow_mut();
         let mut handles = self.gchandles.borrow_mut();
         let mut resurrected = HashSet::new();
@@ -433,8 +464,8 @@ fn bucket_range(start: usize, size: usize) -> std::ops::RangeInclusive<usize> {
 
 // SAFETY: F5.TracesEveryGcRef — `HeapManager::trace` correctly traces GC-managed object references based on their
 // handle type. Normal and Pinned handles trace their objects to keep them alive. Weak handles
-// do not trace to allow collection. The finalization queues and cross-arena roots are also
-// traced. All other fields are non-GC metadata or control state that does not need tracing.
+// do not trace to allow collection. Activated dependent values, pending finalizers and
+// cross-arena roots are also traced. All other fields are non-GC metadata or control state that does not need tracing.
 unsafe impl<'gc> Collect<'gc> for HeapManager<'gc> {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         // Normal and Pinned handles keep objects alive.
@@ -447,6 +478,13 @@ unsafe impl<'gc> Collect<'gc> for HeapManager<'gc> {
                 GCHandleType::Weak | GCHandleType::WeakTrackResurrection => {
                     // Weak handles don't trace
                 }
+            }
+        }
+
+        let handles = self.dependent_handles.borrow();
+        for index in self.active_dependents.borrow().iter() {
+            if let Some(Some((_, value))) = handles.get(*index) {
+                value.trace(cc);
             }
         }
 

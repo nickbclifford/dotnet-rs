@@ -307,6 +307,10 @@ impl IntoIterator for MarkObjectPointers {
 pub enum MarkPhaseCommand {
     /// Start the marking phase (clear roots, mark local roots).
     All,
+    /// Activate newly reachable dependent handles.
+    Dependents,
+    /// Trace the dependent values activated in the preceding phase.
+    TraceDependents,
     /// Mark specific objects in the local arena (for cross-arena resurrection).
     Objects(MarkObjectPointers),
 }

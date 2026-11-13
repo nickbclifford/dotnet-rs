@@ -1055,3 +1055,8 @@ diff_test!(
     reflection_smoke_matches_dotnet,
     "tests/fixtures/reflection/reflection_smoke_42.cs"
 );
+
+diff_test!(
+    conditional_weak_table_matches_dotnet,
+    "tests/fixtures/gc/conditional_weak_table_42.cs"
+);

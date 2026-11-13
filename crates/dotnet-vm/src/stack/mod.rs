@@ -195,9 +195,17 @@ impl GCArena {
                     if self.arena.collection_phase() == CollectionPhase::Sleeping {
                         self.cycle_completed();
                     }
-                } else if let Some(marked) = self.arena.mark_debt() {
-                    crate::gc::finalize_arena(marked);
-                    self.start_sweeping();
+                } else {
+                    if self.arena.collection_phase() == CollectionPhase::Sleeping {
+                        self.arena.mutate_root(|_, c| {
+                            c.stack.local.heap.active_dependents.borrow_mut().clear()
+                        });
+                    }
+                    if let Some(marked) = self.arena.mark_debt() {
+                        drop(marked);
+                        self.finish_single_dependents();
+                        self.start_sweeping();
+                    }
                 }
             }
             crate::gc::CollectionWork::Full => {
@@ -206,12 +214,33 @@ impl GCArena {
                     // The requested full collection still needs a fresh cycle.
                     self.finish_cycle();
                 }
+                if self.arena.collection_phase() == CollectionPhase::Sleeping {
+                    self.arena.mutate_root(|_, c| {
+                        c.stack.local.heap.active_dependents.borrow_mut().clear()
+                    });
+                }
                 if let Some(marked) = self.arena.finish_marking() {
-                    crate::gc::finalize_arena(marked);
+                    drop(marked);
+                    self.finish_single_dependents();
                     self.start_sweeping();
                 }
                 self.finish_cycle();
             }
+        }
+    }
+
+    #[cfg(not(feature = "multithreading"))]
+    fn finish_single_dependents(&mut self) {
+        while let Some(marked) = self.arena.finish_marking() {
+            let mut changed = false;
+            marked.finalize(|fc, c| changed = c.stack.local.heap.activate_dependents(fc));
+            if !changed {
+                break;
+            }
+            self.arena.mutate_root(|_, _| {});
+        }
+        if let Some(marked) = self.arena.finish_marking() {
+            crate::gc::finalize_arena(marked);
         }
     }
 

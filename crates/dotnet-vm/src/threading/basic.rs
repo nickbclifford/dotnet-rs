@@ -773,6 +773,7 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                         // goes through `mutate_root` (the root barrier).
                         arena.mutate_root(|_, c| {
                             c.stack.local.heap.cross_arena_roots.borrow_mut().clear();
+                            c.stack.local.heap.active_dependents.borrow_mut().clear();
                         });
                         #[cfg(feature = "bench-instrumentation")]
                         dotnet_metrics::record_active_gc_trace_root_timing(
@@ -800,6 +801,33 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                             "mark_all.harvest_cross_arena_refs",
                             harvest_cross_arena_refs_start.elapsed(),
                         );
+                    }
+                });
+            }
+            MarkPhaseCommand::Dependents => {
+                with_current(|arena| {
+                    if let Some(arena) = arena
+                        && let Some(marked) = arena.finish_marking()
+                    {
+                        let mut changed = false;
+                        marked
+                            .finalize(|fc, c| changed = c.stack.local.heap.activate_dependents(fc));
+                        if changed {
+                            coordinator
+                                .dependents_changed
+                                .store(true, std::sync::atomic::Ordering::SeqCst);
+                        }
+                    }
+                });
+            }
+            MarkPhaseCommand::TraceDependents => {
+                with_current(|arena| {
+                    if let Some(arena) = arena {
+                        set_currently_tracing(Some(get_current_thread_id()));
+                        arena.mutate_root(|_, _| {});
+                        let _ = arena.finish_marking();
+                        set_currently_tracing(None);
+                        record_found_cross_arena_refs(coordinator);
                     }
                 });
             }
