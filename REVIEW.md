@@ -7,7 +7,7 @@
 - **Low:** qualification noise, assertion diagnostics and unnecessarily elaborate signatures/control flow obscure the important invariants. Fix selectively, preserving macro hygiene, named arena relationships and synchronization identity.
 - **Informational:** workflow input warnings, detached fuzz/generated files and the intentional rerun probe are IDE limitations. Major dependency notices are separate migration work, not authorization to change GC or synchronization semantics.
 
-The ledger preserves the original inspection dispositions. “Fix” denotes an authorized resolution; rows marked **resolved** have been implemented and verified as recorded below. Twenty-two of the 29 duplicate-fix occurrences are resolved; the remaining seven are planned. Every exported problem has an individual ledger row; aggregate duplicate fragments are not counted twice. XML inputs are unchanged.
+The ledger preserves the original inspection dispositions. “Fix” denotes an authorized resolution; rows marked **resolved** have been implemented and verified as recorded below. All 29 duplicate-fix occurrences are resolved. Every exported problem has an individual ledger row; aggregate duplicate fragments are not counted twice. XML inputs are unchanged.
 
 ## Methodology
 
@@ -43,7 +43,7 @@ The generated table below partitions each problem into **fix / refute / keep / d
 |---|---:|---|---|---|
 | Annotator | 5 | dotnet-assemblies (2), dotnet-vm (3) | 0 / 5 / 0 / 0 | F-INFRA-001 |
 | CargoUnusedDependency | 4 | dotnet-benchmarks (2), dotnet-cli (1), dotnet-value (1) | 4 / 0 / 0 / 0 | F-DEP-001 |
-| DuplicatedCode | 70 | dotnet-intrinsics-core (2), dotnet-intrinsics-reflection (3), dotnet-intrinsics-span (8), dotnet-intrinsics-string (4), dotnet-simd (2), dotnet-utils (2), dotnet-value (1), dotnet-vm (48) | 29 (22 resolved) / 0 / 41 / 0 | F-DUP-001 / F-DUP-002 / F-DUP-003 / F-DUP-004 / F-DUP-005 |
+| DuplicatedCode | 70 | dotnet-intrinsics-core (2), dotnet-intrinsics-reflection (3), dotnet-intrinsics-span (8), dotnet-intrinsics-string (4), dotnet-simd (2), dotnet-utils (2), dotnet-value (1), dotnet-vm (48) | 29 (29 resolved) / 0 / 41 / 0 | F-DUP-001 / F-DUP-002 / F-DUP-003 / F-DUP-004 / F-DUP-005 |
 | NewCrateVersionAvailable | 12 | Cargo.toml (3), dotnet-benchmarks (1), dotnet-macros (1), dotnet-macros-core (1), dotnet-value (1), dotnet-vm (4), xtask (1) | 0 / 0 / 0 / 12 | F-DEP-002 |
 | RsAssertEqual | 19 | dotnet-value (17), dotnet-vm (2) | 19 / 0 / 0 / 0 | F-IDIOM-002 |
 | RsDeprecation | 4 | dotnet-utils (2), dotnet-vm (2) | 3 / 0 / 1 / 0 | F-DEPR-001 |
@@ -104,11 +104,16 @@ teardown tests exercise the contracts; execution evidence is in the session memo
 <a id="F-DUP-004"></a>
 #### F-DUP-004 — Event transitions and allocation accounting
 
-**Medium; high effort.** `dotnet-vm/src/threading/events.rs:65,197` expire waiters and :77,202 signal a waiter or retain a signal (groups 30–31). Put these transitions on locked event state and use them in signal and cleanup at the same protocol positions. A state transition owns timeout eligibility; a generic loop helper does not. Never reacquire the lock inside the transition. Tests cover cancellation, expired waiters, auto-reset handoff with no successor, manual reset and timeout/signal ordering.
-
-`stack/stack_ops_impl.rs:106,297,335` repeats value-type-write debt and instrumentation (group 29). One item-gated semantic accounting method must be called by every existing write and preserve exactly-once byte debt and source classification. Reject a macro hiding scattered cfg branches.
-
-Risk: scheduler ordering and debt regressions. Verify native VM-facing event paths, value-type writes under instrumentation, no-feature/MT/MT+validation-all tests/clippy, bench-instrumentation guards, release clippy, Loom and doc drift. The STW Loom model is useful but is not production event coverage; enabled native regressions remain necessary.
+**Medium; high effort; resolved.** `State::expire_waiters` and
+`State::deliver_auto_reset_signal` run under the existing event lock at both Set and canceled-grant
+handoff. Waiters expired before selection cannot receive a new grant, while existing grants survive
+deadlines and Reset; an auto-reset signal goes to the first live waiter or remains pending.
+`VesContext::account_value_type_write` centralizes the three stack-slot write
+charges, leaving frame-home writes uncharged and keeping metric classification aligned with GC debt.
+Enabled executor cancellation, timeout ordering and stack-write tests cover the transitions and
+per-write accounting; manual-reset coverage remains enabled. The Loom STW model is separate from
+production event coverage. See [plan 17's event/accounting slice](docs/plans/17-inspection-quality-refactor.md#14-centralize-event-transitions-and-value-type-allocation-accounting)
+and AGENT_MEMORY.md for execution evidence.
 
 <a id="F-DUP-005"></a>
 #### F-DUP-005 — Keep parallel specializations and explicit test premises
@@ -419,24 +424,24 @@ Pointer-sized slots use `checked_window` while retaining their storage guards.
 - `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:487` — `object_atomic`.
 - `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:518` — `object_atomic`.
 
-### Aggregate group 29 — fix
+### Aggregate group 29 — fix (resolved)
 
-True value-type allocation debt/instrumentation event; unify with all callers active.
+All three stack-slot writes use `account_value_type_write`; homed writes retain their separate path.
 
 - `crates/dotnet-vm/src/stack/stack_ops_impl.rs:106` — `set_local`.
 - `crates/dotnet-vm/src/stack/stack_ops_impl.rs:297` — `set_argument`.
 - `crates/dotnet-vm/src/stack/stack_ops_impl.rs:335` — `set_slot`.
 
-### Aggregate group 30 — fix
+### Aggregate group 30 — fix (resolved)
 
-True locked-event transition: expire eligible waiters; unify.
+`State::expire_waiters` marks eligible deadlines at both locked transition sites.
 
 - `crates/dotnet-vm/src/threading/events.rs:65` — `set`.
 - `crates/dotnet-vm/src/threading/events.rs:197` — `drop`.
 
-### Aggregate group 31 — fix
+### Aggregate group 31 — fix (resolved)
 
-True locked-event transition: deliver auto-reset signal or retain it; unify.
+`State::deliver_auto_reset_signal` grants the first eligible waiter or retains the signal.
 
 - `crates/dotnet-vm/src/threading/events.rs:77` — `set`.
 - `crates/dotnet-vm/src/threading/events.rs:202` — `drop`.
@@ -542,15 +547,15 @@ Each row is one exported problem, identified by inspection and one-based XML ord
 | 55 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:261` — `read_unaligned` | fix (resolved) | Aggregate group 27 below/above; `let layout = if matches!(layout, LayoutManager::Scalar(Scalar::NativeInt))` |
 | 56 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:487` — `object_atomic` | fix (resolved) | Aggregate group 28 below/above; `if end.is_none_or(\|end\| end > data.len()) {` |
 | 57 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:518` — `object_atomic` | fix (resolved) | Aggregate group 28 below/above; `if end.is_none_or(\|end\| end > data.len()) {` |
-| 58 | `crates/dotnet-vm/src/stack/stack_ops_impl.rs:106` — `set_local` | fix | Aggregate group 29 below/above; `#[cfg(feature = "multithreading")]` |
-| 59 | `crates/dotnet-vm/src/stack/stack_ops_impl.rs:297` — `set_argument` | fix | Aggregate group 29 below/above; `#[cfg(feature = "multithreading")]` |
-| 60 | `crates/dotnet-vm/src/stack/stack_ops_impl.rs:335` — `set_slot` | fix | Aggregate group 29 below/above; `#[cfg(feature = "multithreading")]` |
+| 58 | `crates/dotnet-vm/src/stack/stack_ops_impl.rs:106` — `set_local` | fix (resolved) | Aggregate group 29 below/above; `#[cfg(feature = "multithreading")]` |
+| 59 | `crates/dotnet-vm/src/stack/stack_ops_impl.rs:297` — `set_argument` | fix (resolved) | Aggregate group 29 below/above; `#[cfg(feature = "multithreading")]` |
+| 60 | `crates/dotnet-vm/src/stack/stack_ops_impl.rs:335` — `set_slot` | fix (resolved) | Aggregate group 29 below/above; `#[cfg(feature = "multithreading")]` |
 | 61 | `crates/dotnet-vm/src/tail_calls_tests.rs:178` — `run_tail_chain_and_measure_max_depth` | keep | Aggregate group 17 below/above; `arena.mutate_root(\|gc, engine\| {` |
 | 62 | `crates/dotnet-vm/src/threading/basic.rs:323` — `register_thread` | keep | Aggregate group 11 below/above; `#[cfg(test)]` |
-| 63 | `crates/dotnet-vm/src/threading/events.rs:65` — `set` | fix | Aggregate group 30 below/above; `for waiter in &mut state.waiters {` |
-| 64 | `crates/dotnet-vm/src/threading/events.rs:77` — `set` | fix | Aggregate group 31 below/above; `if let Some(waiter) = state.waiters.iter_mut().find(\|w\| w.result.is_none()) {` |
-| 65 | `crates/dotnet-vm/src/threading/events.rs:197` — `drop` | fix | Aggregate group 30 below/above; `for waiter in &mut state.waiters {` |
-| 66 | `crates/dotnet-vm/src/threading/events.rs:202` — `drop` | fix | Aggregate group 31 below/above; `if let Some(next) = state.waiters.iter_mut().find(\|w\| w.result.is_none()) {` |
+| 63 | `crates/dotnet-vm/src/threading/events.rs:65` — `set` | fix (resolved) | Aggregate group 30 below/above; `for waiter in &mut state.waiters {` |
+| 64 | `crates/dotnet-vm/src/threading/events.rs:77` — `set` | fix (resolved) | Aggregate group 31 below/above; `if let Some(waiter) = state.waiters.iter_mut().find(\|w\| w.result.is_none()) {` |
+| 65 | `crates/dotnet-vm/src/threading/events.rs:197` — `drop` | fix (resolved) | Aggregate group 30 below/above; `for waiter in &mut state.waiters {` |
+| 66 | `crates/dotnet-vm/src/threading/events.rs:202` — `drop` | fix (resolved) | Aggregate group 31 below/above; `if let Some(next) = state.waiters.iter_mut().find(\|w\| w.result.is_none()) {` |
 | 67 | `crates/dotnet-vm/src/threading/workers.rs:544` — `completed_outcomes_remain_consumable_after_retirement` | keep | Aggregate group 32 below/above; `let state = Arc::new(Mutex::new(RegistryState {` |
 | 68 | `crates/dotnet-vm/src/threading/workers.rs:586` — `abort_prevents_retired_worker_from_starting_finalizers` | keep | Aggregate group 32 below/above; `let state = Arc::new(Mutex::new(RegistryState {` |
 | 69 | `crates/dotnet-vm/src/threading/workers.rs:614` — `finalizing_preserves_managed_completion` | keep | Aggregate group 32 below/above; `let state = Arc::new(Mutex::new(RegistryState {` |

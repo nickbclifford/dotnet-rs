@@ -277,6 +277,9 @@ Two implementations are selected via the `multithreading` feature flag:
 **Multi-threaded (`cfg(feature = "multithreading")`)**:
 - Tracks all arena handles via `register_arena`/`unregister_arena`.
 - Monitors allocation pressure via `ArenaHandleInner::record_allocation`. If `allocation_counter + size > ALLOCATION_THRESHOLD`, sets a `needs_collection` flag. The coordinator checks this flag in `should_collect`.
+- `VesContext::account_value_type_write` charges each value-type stack-slot write once, including
+  its `ValueTypeWrite` instrumentation when enabled. Frame-home writes use the existing block and
+  do not incur this stack-slot charge.
 - Uses a lock-backed RAII session model:
   - `begin_collection()` `try_lock`s the coordinator lock and returns `Option<CollectionSession>`. `None` means another thread is already collecting, so the caller bails out (no blocking acquire).
   - While `CollectionSession` is alive, collecting-only operations (command dispatch / wait / fixed-point marking) flow through the session.

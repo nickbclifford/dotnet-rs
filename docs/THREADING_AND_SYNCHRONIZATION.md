@@ -234,9 +234,10 @@ unsupported.
 
 `EventWait` registers and probes under the event lock. An auto-reset Set grants one live waiter or
 stores one signal; a manual-reset Set grants every live waiter and stays signaled until Reset.
-Reset cannot revoke a grant; timeouts, Set and cancellation are serialized, with a canceled auto
-waiter's grant transferred to another waiter or retained as a signal. Each wait keeps its absolute
-deadline across stops. The native effect driver probes, records an epoch and rechecks; the executor
+Reset cannot revoke a grant; timeouts, Set and cancellation are serialized. Before Set or a
+canceled auto waiter's grant selects a successor, `State::expire_waiters` marks eligible timeouts;
+`State::deliver_auto_reset_signal` then grants the first live waiter or retains the signal. Each
+wait keeps its absolute deadline across stops. The native effect driver probes, records an epoch and rechecks; the executor
 parks outside mutation with no branded reference or arena lease, bounded by the deadline and the
 GC/abort polling interval. Wakeups merely cause another probe. In single-threaded mode a signaled
 wait succeeds, a finite wait can time out, and an unsignaled infinite wait reports a host deadlock.

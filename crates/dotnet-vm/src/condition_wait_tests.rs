@@ -4321,3 +4321,31 @@ fn static_storage_identity_ignores_generic_argument_resolution() {
         })
         .unwrap();
 }
+
+#[cfg(feature = "multithreading")]
+#[test]
+fn event_wait_cancelled_grant_hands_off_or_is_retained() {
+    use std::time::{Duration, Instant};
+    for successor in [false, true] {
+        let mut executor = executor();
+        let id = executor.shared.events.create(false, false).unwrap();
+        let event = executor.shared.events.get(id).unwrap();
+        assert_eq!(
+            start_sleep(&mut executor, event_wait_body),
+            StepResult::Yield
+        );
+        let mut expired = event.begin(Some(Instant::now() + Duration::from_secs(60)));
+        let mut next = successor.then(|| event.begin(None));
+        event.set();
+        // The executor owns the grant; the timed registration expires before cancellation.
+        event.expire_waiters_for_test();
+        executor.shared.abort_signal().request_abort();
+        assert!(matches!(executor.run(), ExecutorResult::Error(_)));
+        assert_eq!(expired.poll(), Some(false));
+        if let Some(ref mut next) = next {
+            assert_eq!(next.poll(), Some(true));
+        }
+        assert_eq!(event.begin(Some(Instant::now())).poll(), Some(!successor));
+        assert_eq!(event.begin(Some(Instant::now())).poll(), Some(false));
+    }
+}

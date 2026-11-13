@@ -52,6 +52,24 @@ struct State {
     epoch: u64,
     waiters: VecDeque<Waiter>,
 }
+impl State {
+    // INVARIANT: F6.EventWaitRegistration — callers hold the event lock across expiration and signal selection.
+    fn expire_waiters(&mut self, now: Instant) {
+        for waiter in &mut self.waiters {
+            if waiter.result.is_none() && waiter.deadline.is_some_and(|d| now >= d) {
+                waiter.result = Some(false);
+            }
+        }
+    }
+
+    fn deliver_auto_reset_signal(&mut self) {
+        if let Some(waiter) = self.waiters.iter_mut().find(|w| w.result.is_none()) {
+            waiter.result = Some(true);
+        } else {
+            self.signaled = true;
+        }
+    }
+}
 pub(crate) struct Event {
     manual: bool,
     state: Mutex<State>,
@@ -61,12 +79,7 @@ pub(crate) struct Event {
 impl Event {
     pub(crate) fn set(&self) {
         let mut state = self.state.lock();
-        let now = Instant::now();
-        for waiter in &mut state.waiters {
-            if waiter.result.is_none() && waiter.deadline.is_some_and(|d| now >= d) {
-                waiter.result = Some(false);
-            }
-        }
+        state.expire_waiters(Instant::now());
         if self.manual {
             state.signaled = true;
             for waiter in &mut state.waiters {
@@ -74,10 +87,8 @@ impl Event {
                     waiter.result = Some(true);
                 }
             }
-        } else if let Some(waiter) = state.waiters.iter_mut().find(|w| w.result.is_none()) {
-            waiter.result = Some(true);
         } else {
-            state.signaled = true;
+            state.deliver_auto_reset_signal();
         }
         state.epoch = state
             .epoch
@@ -130,7 +141,9 @@ impl Event {
     pub(crate) fn expire_waiters_for_test(&self) {
         let mut state = self.state.lock();
         for waiter in &mut state.waiters {
-            waiter.deadline = Some(Instant::now() - Duration::from_secs(1));
+            if waiter.deadline.is_some() {
+                waiter.deadline = Some(Instant::now() - Duration::from_secs(1));
+            }
         }
     }
     #[cfg(test)]
@@ -193,17 +206,8 @@ impl Drop for EventWait {
                 .remove(index)
                 .is_some_and(|w| w.result == Some(true));
             if granted && !self.event.manual {
-                let now = Instant::now();
-                for waiter in &mut state.waiters {
-                    if waiter.result.is_none() && waiter.deadline.is_some_and(|d| now >= d) {
-                        waiter.result = Some(false);
-                    }
-                }
-                if let Some(next) = state.waiters.iter_mut().find(|w| w.result.is_none()) {
-                    next.result = Some(true);
-                } else {
-                    state.signaled = true;
-                }
+                state.expire_waiters(Instant::now());
+                state.deliver_auto_reset_signal();
                 state.epoch = state
                     .epoch
                     .checked_add(1)

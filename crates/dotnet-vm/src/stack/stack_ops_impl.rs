@@ -103,15 +103,7 @@ impl<'a, 'gc> LocalOps<'gc> for VesContext<'a, 'gc> {
         if let Some(slot) = frame.homes.local(index.as_usize()) {
             return self.store_home(slot.address, slot.home, value);
         }
-        #[cfg(feature = "multithreading")]
-        if matches!(value, StackValue::ValueType(..)) {
-            #[cfg(feature = "bench-instrumentation")]
-            dotnet_metrics::record_active_allocation_pressure(
-                dotnet_metrics::AllocationPressureSource::ValueTypeWrite,
-                value.size_bytes(),
-            );
-            self.gc.record_allocation(value.size_bytes());
-        }
+        self.account_value_type_write(&value);
         let bp = self.frame_stack.current_frame().base;
         self.evaluation_stack.set_slot(bp.locals + index, value);
         Ok(())
@@ -119,6 +111,34 @@ impl<'a, 'gc> LocalOps<'gc> for VesContext<'a, 'gc> {
 }
 
 impl<'a, 'gc> VesContext<'a, 'gc> {
+    /// Account only stack-slot writes: frame-home writes do not allocate a stack payload.
+    #[cfg(feature = "multithreading")]
+    #[inline]
+    fn account_value_type_write(&self, value: &StackValue<'gc>) {
+        if matches!(value, StackValue::ValueType(..)) {
+            let bytes = value.size_bytes();
+            Self::record_value_type_write_metrics(bytes);
+            self.gc.record_allocation(bytes);
+        }
+    }
+
+    #[cfg(not(feature = "multithreading"))]
+    #[inline]
+    fn account_value_type_write(&self, _value: &StackValue<'gc>) {}
+
+    #[cfg(all(feature = "multithreading", feature = "bench-instrumentation"))]
+    #[inline]
+    fn record_value_type_write_metrics(bytes: usize) {
+        dotnet_metrics::record_active_allocation_pressure(
+            dotnet_metrics::AllocationPressureSource::ValueTypeWrite,
+            bytes,
+        );
+    }
+
+    #[cfg(all(feature = "multithreading", not(feature = "bench-instrumentation")))]
+    #[inline]
+    fn record_value_type_write_metrics(_bytes: usize) {}
+
     /// Installs `homes` in the frame just pushed and copies its homed arguments from their
     /// evaluation-stack slots into the block, so the homes hold the values the caller passed.
     pub(crate) fn install_frame_homes(
@@ -294,15 +314,7 @@ impl<'a, 'gc> ArgumentOps<'gc> for VesContext<'a, 'gc> {
         if let Some(slot) = frame.homes.argument(index.as_usize()) {
             return self.store_home(slot.address, slot.home, value);
         }
-        #[cfg(feature = "multithreading")]
-        if matches!(value, StackValue::ValueType(..)) {
-            #[cfg(feature = "bench-instrumentation")]
-            dotnet_metrics::record_active_allocation_pressure(
-                dotnet_metrics::AllocationPressureSource::ValueTypeWrite,
-                value.size_bytes(),
-            );
-            self.gc.record_allocation(value.size_bytes());
-        }
+        self.account_value_type_write(&value);
         let bp = self.frame_stack.current_frame().base;
         self.evaluation_stack.set_slot(bp.arguments + index, value);
         Ok(())
@@ -332,15 +344,7 @@ impl<'a, 'gc> VmStackOps<'gc> for VesContext<'a, 'gc> {
 
     #[inline]
     fn set_slot(&mut self, index: crate::StackSlotIndex, value: StackValue<'gc>) {
-        #[cfg(feature = "multithreading")]
-        if matches!(value, StackValue::ValueType(..)) {
-            #[cfg(feature = "bench-instrumentation")]
-            dotnet_metrics::record_active_allocation_pressure(
-                dotnet_metrics::AllocationPressureSource::ValueTypeWrite,
-                value.size_bytes(),
-            );
-            self.gc.record_allocation(value.size_bytes());
-        }
+        self.account_value_type_write(&value);
         self.evaluation_stack.set_slot(index, value)
     }
 

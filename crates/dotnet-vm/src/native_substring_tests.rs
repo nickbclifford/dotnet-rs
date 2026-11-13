@@ -7711,3 +7711,169 @@ fn native_newobj_completes_string_and_value_receiver_after_gc() {
             .unwrap();
     }
 }
+
+#[test]
+fn stack_slot_value_type_writes_charge_once() {
+    use crate::stack::ops::{ArgumentOps, LocalOps, VmStackOps};
+    #[cfg(feature = "multithreading")]
+    use dotnet_utils::sync::Ordering;
+    use dotnet_value::{
+        layout::{FieldKey, FieldLayout, FieldLayoutManager, GcDesc, LayoutManager},
+        object::Object,
+        storage::FieldStorage,
+    };
+    use dotnet_vm_data::frame_homes::{FrameHomeLayout, FrameHomes, HomeValueType, VariableHome};
+
+    let mut executor = executor();
+    let mut res = Resolution::new(Module::new("WriteAccounting.dll"));
+    let index = res.push_type_definition(TypeDefinition::new(None, "Value"));
+    let description =
+        TypeDescription::new(executor.shared.loader.register_owned_assembly(res), index);
+    let layout = Arc::new(FieldLayoutManager {
+        fields: Default::default(),
+        total_size: 16,
+        alignment: 4,
+        gc_desc: GcDesc::default(),
+        has_ref_fields: false,
+    });
+    #[cfg(feature = "bench-instrumentation")]
+    #[cfg_attr(
+        not(feature = "multithreading"),
+        allow(
+            clippy::arc_with_non_send_sync,
+            reason = "the metrics scope uses the production Arc on one thread"
+        )
+    )]
+    let metrics = Arc::new(dotnet_metrics::RuntimeMetrics::new());
+    #[cfg(feature = "bench-instrumentation")]
+    let _scope = dotnet_metrics::ActiveRuntimeMetricsGuard::enter(&metrics);
+    executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: F1.GcHandleRooted — the engine is the live arena root during mutation.
+                let gc = unsafe { test_gc_handle(gc, engine) };
+                #[cfg(feature = "multithreading")]
+                // SAFETY: F1.GcHandleRooted — the stack and its arena remain rooted during this mutation.
+                let arena_inner = unsafe { engine.stack.arena_inner_gc() };
+                #[cfg(feature = "multithreading")]
+                let before = arena_inner.allocation_counter.load(Ordering::Relaxed);
+                let mut ctx = engine.ves_context(gc);
+                ctx.current_frame_mut().base.locals = crate::StackSlotIndex::new(1);
+                for _ in 0..3 {
+                    ctx.evaluation_stack.push(StackValue::Int32(0));
+                }
+                let value = StackValue::ValueType(Object::new(
+                    description.clone(),
+                    Default::default(),
+                    FieldStorage::new(layout.clone(), vec![7; 16]),
+                ));
+                let bytes = value.size_bytes();
+                ctx.set_argument(crate::ArgumentIndex::new(0), value.clone())
+                    .unwrap();
+                #[cfg(feature = "multithreading")]
+                assert_eq!(
+                    arena_inner.allocation_counter.load(Ordering::Relaxed) - before,
+                    bytes
+                );
+                ctx.set_local(crate::LocalIndex::new(0), value.clone())
+                    .unwrap();
+                #[cfg(feature = "multithreading")]
+                assert_eq!(
+                    arena_inner.allocation_counter.load(Ordering::Relaxed) - before,
+                    2 * bytes
+                );
+                ctx.set_slot(crate::StackSlotIndex::new(2), value.clone());
+                #[cfg(feature = "multithreading")]
+                assert_eq!(
+                    arena_inner.allocation_counter.load(Ordering::Relaxed) - before,
+                    3 * bytes
+                );
+                ctx.set_argument(crate::ArgumentIndex::new(0), StackValue::Int32(1))
+                    .unwrap();
+                ctx.set_local(crate::LocalIndex::new(0), StackValue::Int32(2))
+                    .unwrap();
+                ctx.set_slot(crate::StackSlotIndex::new(2), StackValue::Int32(3));
+                assert!(matches!(
+                    ctx.get_slot(crate::StackSlotIndex::new(2)),
+                    StackValue::Int32(3)
+                ));
+                // Homed writes use the frame block rather than creating stack-slot debt.
+                let home_layout = Arc::new(LayoutManager::Field((*layout).clone()));
+                let make_home = |offset| VariableHome {
+                    offset,
+                    layout: home_layout.clone(),
+                    scalar_type: None,
+                    value_type: Some(HomeValueType {
+                        description: description.clone(),
+                        generics: Default::default(),
+                        fields: layout.clone(),
+                    }),
+                };
+                let mut fields = layout.fields.clone();
+                for (name, offset) in [("argument", 0usize), ("local", 16)] {
+                    fields.insert(
+                        FieldKey {
+                            owner: description.clone(),
+                            name: name.into(),
+                        },
+                        FieldLayout {
+                            position: offset.into(),
+                            layout: home_layout.clone(),
+                        },
+                    );
+                }
+                let block = FieldLayoutManager {
+                    fields,
+                    total_size: 32,
+                    alignment: 4,
+                    gc_desc: GcDesc::default(),
+                    has_ref_fields: false,
+                };
+                let homes = FrameHomeLayout::new(
+                    block,
+                    Box::new([Some(make_home(16))]),
+                    Box::new([Some(make_home(0))]),
+                );
+                let serial = ctx.frame_stack.issue_home_serial();
+                ctx.current_frame_mut().homes =
+                    FrameHomes::allocate(Arc::new(homes), serial).unwrap();
+                ctx.set_argument(crate::ArgumentIndex::new(0), value.clone())
+                    .unwrap();
+                ctx.set_local(crate::LocalIndex::new(0), value).unwrap();
+                for loaded in [
+                    ctx.get_argument(crate::ArgumentIndex::new(0)),
+                    ctx.get_local(crate::LocalIndex::new(0)),
+                ] {
+                    let StackValue::ValueType(object) = loaded else {
+                        panic!("expected homed value")
+                    };
+                    object.with_data(|data| assert_eq!(data, &[7; 16]));
+                }
+                #[cfg(feature = "multithreading")]
+                assert_eq!(
+                    arena_inner.allocation_counter.load(Ordering::Relaxed) - before,
+                    3 * bytes
+                );
+                #[cfg(not(feature = "multithreading"))]
+                assert!(bytes > 0);
+                #[cfg(all(feature = "multithreading", feature = "bench-instrumentation"))]
+                assert_eq!(
+                    metrics
+                        .bench_snapshot(Default::default())
+                        .allocation_pressure_by_source["value_type_write"],
+                    dotnet_metrics::AllocationPressureSnapshot {
+                        charge_count: 3,
+                        charged_bytes: (3 * bytes) as u64
+                    }
+                );
+                #[cfg(all(not(feature = "multithreading"), feature = "bench-instrumentation"))]
+                assert_eq!(
+                    metrics
+                        .bench_snapshot(Default::default())
+                        .allocation_pressure_by_source["value_type_write"],
+                    dotnet_metrics::AllocationPressureSnapshot::default()
+                );
+            });
+        })
+        .unwrap();
+}

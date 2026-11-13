@@ -37,6 +37,9 @@ Known problems without a plan. Write a plan for one only when it is chosen as th
 Evidence and IDs (p01…, R01…) are defined in the
 [pointer-provenance inventory](../pointer-provenance/INVENTORY.md).
 
+- **VM fuzz lockfile drift:** `crates/dotnet-vm/fuzz/Cargo.lock` lacks the VM's direct
+  `dotnet-simd` dependency. A `cargo check --locked` of that manifest fails; reconcile the
+  standalone fuzz lockfile with the workspace dependencies.
 - **Heap byte-read overflow:** `RawMemoryAccess::read_bytes` adds the owner-relative offset
   and destination length without checked arithmetic. A `VesContext::read_bytes` heap-origin
   call with `usize::MAX` and a one-byte destination panics instead of returning `BoundsCheck`;
