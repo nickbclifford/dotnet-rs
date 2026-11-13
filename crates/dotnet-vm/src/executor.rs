@@ -770,20 +770,8 @@ impl Executor {
         Ok(())
     }
 
-    /// Decides whether the entry point's `StepResult::Return` ends the run.
-    ///
-    /// A collection requested by the last instruction can queue finalizers after `run` has
-    /// already completed the managed entry point. Returns `Ok(None)` to keep the executor alive
-    /// for another iteration so the finalizer-processing phase can start those frames before
-    /// reporting program exit; otherwise returns the process exit code.
+    /// Read the entry point exit code even when finalizers remain queued.
     fn complete_entrypoint_return(&self) -> Result<Option<u8>, VmError> {
-        let has_pending_finalizers = self.with_arena_ref(|arena| {
-            arena.mutate(|_, c| c.stack.local.heap.has_pending_finalizers())
-        })?;
-        if has_pending_finalizers {
-            return Ok(None);
-        }
-
         self.with_arena_ref(|arena| {
             arena.mutate(
                 |_, c| match c.stack.execution.evaluation_stack.stack.first() {
@@ -803,10 +791,7 @@ impl Executor {
     pub fn wait_for_foreground_workers(&mut self) {
         let mut stopping_background = false;
         loop {
-            // Observe cancellation before the registry lock: a worker either published
-            // Finalizing under that lock or observes the cancellation while holding it.
-            let aborted = self.shared.is_abort_requested();
-            let idle = || aborted || !self.shared.has_pending_finalizers();
+            let idle = || true;
             if stopping_background {
                 if self.shared.workers.is_quiescent(idle) {
                     break;
@@ -816,6 +801,10 @@ impl Executor {
                 .workers
                 .foreground_quiescent(idle, || self.shared.abort_signal().request_abort())
             {
+                #[cfg(feature = "multithreading")]
+                if self.shared.has_pending_finalizers() {
+                    self.shared.abort_signal().request_abort();
+                }
                 if !self.shared.is_abort_requested() {
                     break;
                 }
@@ -1085,14 +1074,14 @@ impl Executor {
                                         wait.wait.deadline,
                                     ))
                                 }
-                                crate::stack::native_effects::PendingWait::Finalizers(_)
+                                crate::stack::native_effects::PendingWait::Finalizers(..)
                                     if has_pending
                                         || processing
                                         || c.stack.shared.has_pending_finalizers() =>
                                 {
                                     Some(NativeWaitSleep::Finalizers)
                                 }
-                                crate::stack::native_effects::PendingWait::Finalizers(_) => None,
+                                crate::stack::native_effects::PendingWait::Finalizers(..) => None,
                                 crate::stack::native_effects::PendingWait::Sleep(_, deadline) => {
                                     Some(NativeWaitSleep::Sleep(*deadline))
                                 }
@@ -1524,13 +1513,9 @@ mod tests {
     use dotnet_assemblies::AssemblyLoader;
     use dotnet_value::object::ObjectRef;
 
-    /// Guards the pending-finalizer branch of the entry-point return: a collection requested by
-    /// the final instruction can queue finalizers after `run` completed `Main`, and the executor
-    /// must keep looping so they start before exit. A managed fixture cannot reach this branch
-    /// (the collect intrinsic yields and drains finalizers before `ret` executes), so the
-    /// pending state is seeded directly.
+    /// Pending finalizers do not defer the entry point return.
     #[test]
-    fn entrypoint_return_defers_exit_while_finalizers_pending() {
+    fn entrypoint_return_exits_while_finalizers_pending() {
         #[allow(
             clippy::arc_with_non_send_sync,
             reason = "the executor unit test keeps shared state on its sole executor"
@@ -1561,8 +1546,8 @@ mod tests {
             .unwrap();
         assert_eq!(
             executor.complete_entrypoint_return().unwrap(),
-            None,
-            "pending finalizers must keep the executor running instead of exiting"
+            Some(0),
+            "pending finalizers must not delay exit"
         );
 
         executor

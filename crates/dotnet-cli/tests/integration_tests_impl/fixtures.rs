@@ -341,15 +341,6 @@ fn hello_world() {
 }
 
 #[test]
-fn finalizer_runs_after_entrypoint_completes() {
-    let harness = TestHarness::get();
-    let dll_path = harness.ensure_dll(Path::new(
-        "tests/fixtures/gc/finalizer_after_entrypoint_0.cs",
-    ));
-    harness.assert_finalizer_lifecycle(&dll_path);
-}
-
-#[test]
 #[cfg(all(feature = "multithreading", not(feature = "fuzzing")))]
 fn managed_thread_lifecycle() {
     let harness = TestHarness::get();
@@ -588,49 +579,6 @@ fn finalizer_thread_observes_abort() {
 
 #[test]
 #[cfg(all(feature = "multithreading", not(feature = "fuzzing")))]
-fn finalizer_thread_shutdown_observes_abort() {
-    let harness = TestHarness::get();
-    let dll = harness.ensure_dll(Path::new(
-        "tests/debug_fixtures/retired_finalizer_shutdown.cs",
-    ));
-    let resolution = harness.loader.load_resolution_from_file(&dll).unwrap();
-    let shared = Arc::new(state::SharedGlobalState::new(Arc::clone(&harness.loader)));
-    let signal = shared.abort_signal();
-    let fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let timer_fired = Arc::clone(&fired);
-    let timer = std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(1500));
-        timer_fired.store(true, std::sync::atomic::Ordering::Release);
-        signal.request_abort();
-    });
-    let result = harness.run_with_shared_observed(resolution, shared, |shared, program, _| {
-        let storage = shared
-            .statics
-            .get(program.clone(), &dotnet_vm::GenericLookup::default());
-        let bytes = storage.storage.get_field_atomic(
-            program,
-            "Started",
-            dotnet_utils::sync::Ordering::Acquire,
-        );
-        assert_eq!(
-            i32::from_ne_bytes(bytes.try_into().unwrap()),
-            1,
-            "finalizer never started"
-        );
-    });
-    assert!(
-        fired.load(std::sync::atomic::Ordering::Acquire),
-        "shutdown returned before finalizer abort"
-    );
-    timer.join().unwrap();
-    assert_eq!(
-        result.exit_code, 42,
-        "Main must return before worker shutdown: {result:?}"
-    );
-}
-
-#[test]
-#[cfg(all(feature = "multithreading", not(feature = "fuzzing")))]
 fn harness_timeout_aborts_and_reaps_finalizer_thread() {
     use std::time::Duration;
 
@@ -668,7 +616,7 @@ fn harness_timeout_aborts_and_reaps_finalizer_thread() {
 
 #[test]
 #[cfg(all(feature = "multithreading", not(feature = "fuzzing")))]
-fn shutdown_waits_for_active_retired_finalizer() {
+fn shutdown_interrupts_active_finalizer() {
     use dotnet_types::{TypeDescription, members::MethodDescription};
     use dotnetdll::prelude::{EntryPoint, MethodMemberIndex};
     use std::{sync::mpsc, time::Duration};
@@ -697,7 +645,7 @@ fn shutdown_waits_for_active_retired_finalizer() {
     let shared = Arc::new(state::SharedGlobalState::new(Arc::clone(&harness.loader)));
     let mut executor = dotnet_vm::Executor::new(shared.clone());
     executor.entrypoint(method).unwrap();
-    let result = executor.run_entrypoint();
+    let result = executor.run();
     let storage = shared
         .statics
         .get(program.clone(), &dotnet_vm::GenericLookup::default());
@@ -725,7 +673,7 @@ fn shutdown_waits_for_active_retired_finalizer() {
 
     assert!(matches!(result, dotnet_vm::ExecutorResult::Exited(42)));
     assert_eq!(i32::from_ne_bytes(started.try_into().unwrap()), 1);
-    assert!(entered && !completed_before_abort && completed_after_abort);
+    assert!(entered && completed_before_abort && completed_after_abort);
 }
 
 #[test]

@@ -116,7 +116,7 @@ pub(crate) enum PendingWait {
     Monitor(PendingMonitor),
     MonitorWait(PendingMonitorWait),
     Event(PendingEvent),
-    Finalizers(u64),
+    Finalizers(u64, u64),
     Sleep(u64, Option<std::time::Instant>),
     Initializer(u64, Box<dyn dotnet_vm_ops::effects::NativeInitWait>),
 }
@@ -2005,8 +2005,17 @@ impl<'gc> VesContext<'_, 'gc> {
         &mut self,
         mut work: NativeActivation<'gc>,
         generation: u64,
+        target: u64,
     ) -> StepResult {
         let ready = || {
+            #[cfg(feature = "multithreading")]
+            if self
+                .shared
+                .finalizer_started
+                .load(std::sync::atomic::Ordering::Acquire)
+            {
+                return self.shared.finalizers.completed(target);
+            }
             !self.shared.thread_manager.is_gc_stop_requested()
                 && !self.local.heap.needs_full_collect.get()
                 && !self.gc.needs_collection()
@@ -2015,7 +2024,7 @@ impl<'gc> VesContext<'_, 'gc> {
                 && self.local.heap.pending_finalization.borrow().is_empty()
         };
         if !ready() {
-            work.wait = Some(PendingWait::Finalizers(generation));
+            work.wait = Some(PendingWait::Finalizers(generation, target));
             #[cfg(all(test, feature = "multithreading"))]
             wait_test_hook(WaitTestPoint::FinalizersRegistered);
             // Recheck after registration without moving a branded queue outside the mutation.
@@ -2100,7 +2109,9 @@ impl<'gc> VesContext<'_, 'gc> {
                 PendingWait::Monitor(wait) => self.advance_monitor(work, wait),
                 PendingWait::MonitorWait(wait) => self.advance_monitor_wait(work, wait),
                 PendingWait::Event(wait) => self.advance_event_wait(work, wait),
-                PendingWait::Finalizers(generation) => self.advance_finalizers(work, generation),
+                PendingWait::Finalizers(generation, target) => {
+                    self.advance_finalizers(work, generation, target)
+                }
                 PendingWait::Sleep(generation, deadline) => {
                     self.advance_sleep(work, generation, deadline)
                 }
@@ -2150,7 +2161,11 @@ impl<'gc> VesContext<'_, 'gc> {
                     if let Err(error) = work.owner.control.take_finalizers(generation) {
                         return StepResult::Error(error);
                     }
-                    self.advance_finalizers(work, generation)
+                    #[cfg(feature = "multithreading")]
+                    let target = self.shared.finalizers.snapshot();
+                    #[cfg(not(feature = "multithreading"))]
+                    let target = 0;
+                    self.advance_finalizers(work, generation, target)
                 }
                 Some(NativeEffect::Sleep(generation)) if work.operands.is_empty() => {
                     let deadline = match work.owner.control.take_sleep(generation) {

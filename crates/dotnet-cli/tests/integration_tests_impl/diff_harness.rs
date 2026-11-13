@@ -1105,3 +1105,9 @@ diff_test!(
     cross_arena_resurrection_matches_dotnet,
     "tests/fixtures/gc/cross_arena_resurrection_42.cs"
 );
+
+#[cfg(feature = "multithreading")]
+diff_test!(
+    finalizer_wait_producer_matches_dotnet,
+    "tests/fixtures/gc/finalizer_wait_producer_42.cs"
+);

@@ -6147,7 +6147,7 @@ fn finalizer_exception_cannot_enter_interrupted_filter() {
 }
 
 #[test]
-fn finalizer_after_entrypoint_preserves_exit_value() {
+fn finalizer_frame_preserves_existing_exit_value() {
     let (mut executor, _) = boundary_executor(false);
     enqueue_test_finalizer(&mut executor);
     executor

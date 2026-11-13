@@ -328,6 +328,7 @@ fn main() {
         let is_manually_registered = matches!(
             file_name,
             "cross_arena_resurrection_42"
+                | "finalizer_wait_producer_42"
                 | "cross_thread_dependent_handles_42"
                 | "cross_thread_handles_42"
                 | "pinvoke_last_error_isolation_42"
@@ -340,13 +341,6 @@ fn main() {
 
         if is_manually_registered {
             // The custom test below owns this fixture's registration.
-        } else if test_name == "gc_finalizer_after_entrypoint_0" {
-            writeln!(
-                f,
-                "finalizer_fixture_test!({}{}, {:?});",
-                ignore_prefix, test_name, source_path
-            )
-            .unwrap();
         } else if let Some(thread_count) = multi_arena_threads.filter(|_| is_multithreading_enabled)
         {
             writeln!(

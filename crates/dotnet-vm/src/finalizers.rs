@@ -2,6 +2,7 @@
 use dotnet_utils::sync::{Mutex, get_current_thread_id};
 use dotnet_value::object::{ObjectPtr, ObjectRef};
 use gc_arena::{Collect, Gc, collect::Trace};
+use std::collections::VecDeque;
 
 #[derive(Default)]
 pub(crate) struct Finalizers {
@@ -10,17 +11,23 @@ pub(crate) struct Finalizers {
 
 #[derive(Default)]
 struct State {
-    pending: Vec<ObjectPtr>,
+    pending: VecDeque<ObjectPtr>,
+    enqueued: u64,
+    completed: u64,
     active: Option<ObjectPtr>,
     registrations: Vec<(ObjectPtr, bool)>,
 }
 
 impl Finalizers {
     pub(crate) fn enqueue(&self, object: ObjectRef<'_>) {
-        self.state
-            .lock()
+        let mut state = self.state.lock();
+        state.enqueued = state
+            .enqueued
+            .checked_add(1)
+            .expect("finalizer generation overflow");
+        state
             .pending
-            .push(object.as_ptr().expect("finalizer object"));
+            .push_back(object.as_ptr().expect("finalizer object"));
     }
 
     pub(crate) fn is_pending(&self) -> bool {
@@ -28,16 +35,28 @@ impl Finalizers {
         state.active.is_some() || !state.pending.is_empty()
     }
 
+    // FIFO claim order makes completed a contiguous prefix of enqueue generations.
+    pub(crate) fn snapshot(&self) -> u64 {
+        self.state.lock().enqueued
+    }
+
+    pub(crate) fn completed(&self, generation: u64) -> bool {
+        self.state.lock().completed >= generation
+    }
+
     pub(crate) fn claim(&self) -> Option<ObjectPtr> {
         let mut state = self.state.lock();
         debug_assert!(state.active.is_none());
-        let object = state.pending.pop()?;
+        let object = state.pending.pop_front()?;
         state.active = Some(object);
         Some(object)
     }
 
     pub(crate) fn complete(&self) {
-        self.state.lock().active = None;
+        let mut state = self.state.lock();
+        if state.active.take().is_some() {
+            state.completed += 1;
+        }
     }
 
     pub(crate) fn set_registered(&self, object: ObjectRef<'_>, registered: bool) {

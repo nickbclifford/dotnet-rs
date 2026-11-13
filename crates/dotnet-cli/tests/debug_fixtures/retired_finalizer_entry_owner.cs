@@ -25,7 +25,7 @@ class Program
         worker.Start();
         worker.Join();
         GC.Collect();
-        while (Started == 0) { }
+        GC.WaitForPendingFinalizers();
         return 42;
     }
 }

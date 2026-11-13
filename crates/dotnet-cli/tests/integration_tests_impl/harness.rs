@@ -6,7 +6,7 @@ use std::{
     io,
     path::{Path, PathBuf},
     process::Command,
-    sync::{Arc, atomic::Ordering},
+    sync::Arc,
     time::Duration,
 };
 
@@ -271,47 +271,6 @@ impl TestHarness {
             panic!("Execution timed out after {:?}", timeout);
         }
         result
-    }
-
-    pub fn assert_finalizer_lifecycle(&self, dll_path: &Path) {
-        let resolution = self.loader.load_resolution_from_file(dll_path).unwrap();
-        #[allow(
-            clippy::arc_with_non_send_sync,
-            reason = "the no-MT harness keeps shared state on its sole executor"
-        )]
-        let shared = Arc::new(state::SharedGlobalState::new(Arc::clone(&self.loader)));
-        let result = self.run_with_shared_timeout_observed(
-            resolution,
-            shared,
-            get_test_timeout(60),
-            |shared, program, result| {
-                assert_eq!(result.exit_code, 0, "fixture failed: {:?}", result.stderr);
-                assert_eq!(result.stderr, None, "fixture threw a managed exception");
-                let storage = shared
-                    .statics
-                    .get(program.clone(), &vm::GenericLookup::default());
-                let read = |name| {
-                    let bytes =
-                        storage
-                            .storage
-                            .get_field_atomic(program.clone(), name, Ordering::Acquire);
-                    i32::from_ne_bytes(bytes.try_into().expect("expected four-byte Int32"))
-                };
-                let actual = [
-                    read("Constructed"),
-                    read("Finalized"),
-                    read("Phase"),
-                    read("ObservedPhase"),
-                ];
-                assert_finalizer_state(actual);
-            },
-        );
-        assert_eq!(
-            result.exit_code, 0,
-            "fixture setup failed: {:?}",
-            result.stderr
-        );
-        assert_eq!(result.stderr, None, "fixture setup failed");
     }
 
     pub fn run(&self, dll_path: &Path) -> u8 {
@@ -663,20 +622,4 @@ fn fixtures_base_is_not_crate_local() {
         fixtures_base,
         manifest_dir
     );
-}
-
-// Kept separate so negative controls exercise precisely the fixture oracle.
-fn assert_finalizer_state(actual: [i32; 4]) {
-    assert_eq!(
-        actual,
-        [1, 1, 42, 42],
-        "constructed, finalized, phase, observed phase"
-    );
-}
-
-#[test]
-fn finalizer_lifecycle_oracle_rejects_bad_states() {
-    for bad in [[1, 0, 42, 0], [1, 2, 42, 42], [1, 1, 42, 0], [0, 1, 42, 42]] {
-        assert!(std::panic::catch_unwind(|| assert_finalizer_state(bad)).is_err());
-    }
 }

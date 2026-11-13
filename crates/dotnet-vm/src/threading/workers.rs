@@ -299,8 +299,9 @@ impl WorkerRegistry {
     ) -> bool {
         let state = self.state.lock();
         if state.entries.iter().any(|entry| {
-            matches!(entry.lifecycle, Lifecycle::Finalizing(_))
-                || matches!(entry.lifecycle, Lifecycle::Running) && !entry.background
+            !entry.finalizer
+                && (matches!(entry.lifecycle, Lifecycle::Finalizing(_))
+                    || matches!(entry.lifecycle, Lifecycle::Running) && !entry.background)
         }) || !finalizers_idle()
         {
             return false;

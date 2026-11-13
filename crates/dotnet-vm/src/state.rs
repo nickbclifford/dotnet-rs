@@ -528,6 +528,7 @@ impl SharedGlobalState {
         #[cfg(feature = "multithreading")]
         {
             self.finalizer_shutdown.store(true, Ordering::Release);
+            self.abort_signal().request_abort();
             self.workers
                 .shutdown(|| self.thread_manager.shutdown_retired());
         }

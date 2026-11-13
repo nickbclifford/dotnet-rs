@@ -337,7 +337,7 @@ fn finalizer_wait_executor(test_self_wait: bool, cctor: bool) {
                         .last()
                         .unwrap()
                         .wait,
-                    Some(crate::stack::native_effects::PendingWait::Finalizers(_))
+                    Some(crate::stack::native_effects::PendingWait::Finalizers(..))
                 ));
                 if test_self_wait {
                     assert_eq!(
