@@ -1,5 +1,8 @@
 macro_rules! diff_test {
     ($name:ident, $fixture_path:expr) => {
+        diff_test!($name, $fixture_path, 42);
+    };
+    ($name:ident, $fixture_path:expr, $expected_exit_code:expr) => {
         #[cfg(not(feature = "fuzzing"))]
         #[test]
         fn $name() {
@@ -19,8 +22,8 @@ macro_rules! diff_test {
             let (dotnet_rs_exit_code, dotnet_rs_stdout) = harness.run_cli(&dll_path);
 
             assert_eq!(
-                dotnet_exit_code, 42,
-                "sanity check failed: dotnet should return fixture exit code 42"
+                dotnet_exit_code, $expected_exit_code,
+                "sanity check failed: unexpected dotnet exit code"
             );
             assert_eq!(
                 dotnet_rs_exit_code, dotnet_exit_code,
@@ -1059,4 +1062,18 @@ diff_test!(
 diff_test!(
     conditional_weak_table_matches_dotnet,
     "tests/fixtures/gc/conditional_weak_table_42.cs"
+);
+
+diff_test!(
+    gc_resurrection_42_matches_dotnet,
+    "tests/fixtures/gc/gc_resurrection_42.cs"
+);
+diff_test!(
+    gc_resurrection_0_matches_dotnet,
+    "tests/fixtures/gc/gc_resurrection_0.cs",
+    0
+);
+diff_test!(
+    weak_handle_matches_dotnet,
+    "tests/fixtures/gc/weak_handle_42.cs"
 );

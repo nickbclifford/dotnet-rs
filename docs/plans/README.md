@@ -119,8 +119,8 @@ Evidence and IDs (p01…, R01…) are defined in the
   thread identity, so they can re-enter monitors it holds or observe an in-progress `.cctor`
   through recursion. A finalizer run by a retired worker can receive a new `Thread` object with
   the worker's ID after the original thread object has been released. The resurrection and
-  weak-handle fixtures also disagree with the CLR and may be timing-dependent; resolving these
-  behaviors requires separate GC/finalizer work. One such dependence is fixed: a cross-arena
+  weak-handle fixtures match the CLR in the slice 2 baseline (see [plan 20](20-gc-handles-and-finalizer-thread.md#slice-2-baseline));
+  they do not exercise finalizer thread identity. One ordering dependence is fixed: a cross-arena
   short `WeakReference` no longer survives the first `GC.Collect` depending on which arena
   finalized first (the `ClearWeak` phase).
 - **Exit waits for never-returning finalizers:** `Executor::run` waits until no worker is running

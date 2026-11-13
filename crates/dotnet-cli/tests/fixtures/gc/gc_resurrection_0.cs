@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.CompilerServices;
 
 public class Finalizable {
     public static int FinalizedCount = 0;
@@ -29,6 +30,7 @@ public class Resurrectable {
 }
 
 public class Program {
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public static void CreateObjects() {
         var f1 = new Finalizable("f1");
         var f2 = new Finalizable("f2");
@@ -36,6 +38,7 @@ public class Program {
         var f3 = new Finalizable("f3");
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public static void CreateResurrectable() {
         new Resurrectable("r1");
     }

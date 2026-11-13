@@ -1,6 +1,6 @@
 # Shared GC handles and a dedicated finalizer thread
 
-**Status:** Not started
+**Status:** Slices 1–2 complete
 **Outcome:** Under `multithreading`, finalizers run on one background finalizer thread with its own
 identity, GC handles are readable from any thread, and the process exits without waiting for
 finalizers; the GC fixtures listed under each slice match `dotnet` through the diff harness.
@@ -39,10 +39,9 @@ Paths are in `crates/dotnet-runtime-memory/src/heap.rs` (`HeapManager`),
 - **`GC.WaitForPendingFinalizers`** (`gc.rs`, readiness in `native_effects.rs::advance_finalizers`)
   waits for global quiescence rather than for the finalizers queued when it was called, so
   ongoing allocation elsewhere can starve it.
-- **Unverified CLR disagreement.** The README claims the resurrection and weak-handle fixtures
-  disagree with the CLR, but no CLR result is recorded: `gc_resurrection_42.cs`,
-  `gc_resurrection_0.cs` and `weak_handle_42.cs` are exit-code fixtures only, and `weak_handle_42`
-  declares its own `GCHandle` with InternalCall externs, so it cannot run on the CLR.
+- **CLR baseline (resolved in slice 2).** The original README claim that the resurrection and
+  weak-handle fixtures disagree with the CLR lacked recorded evidence. The fixtures now run
+  against CoreLib in the diff harness; the results are recorded below.
 
 ## Scope
 
@@ -145,3 +144,10 @@ Out:
 - Slice 2 shows a CLR disagreement that a dedicated finalizer thread does not explain.
 - Stopping the finalizer thread at shutdown requires freeing arenas while a finalizer is
   mid-call.
+
+## Slice 2 baseline
+
+With non-inlined allocation helpers and the real CoreLib `GCHandle`, `gc_resurrection_42`,
+`gc_resurrection_0`, and `weak_handle_42` match .NET 10 in the multithreaded host diff
+harness: exit codes 42, 0, and 42 respectively, with empty stdout on both runtimes. These
+cases do not test finalizer-thread identity or cross-arena handles.

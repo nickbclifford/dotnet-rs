@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.CompilerServices;
 
 public class Resurrectable {
     public static Resurrectable Instance;
@@ -14,6 +15,7 @@ public class Resurrectable {
 }
 
 public class Program {
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public static void Create() {
         new Resurrectable();
     }
@@ -43,9 +45,7 @@ public class Program {
         }
 
         // Create another one and test reregistration
-        var r = new Resurrectable();
-        r.ShouldResurrect = true;
-        r = null;
+        Create();
 
         GC.Collect();
         GC.WaitForPendingFinalizers();
