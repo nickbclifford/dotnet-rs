@@ -98,7 +98,7 @@ pub enum ActivatorTarget<'gc> {
 /// `NotSupportedException` for a byref-like type, and `MissingMethodException` when no public
 /// constructor binds or the type is abstract. With no arguments, a value type without a matching
 /// constructor produces its default value. Among several binding constructors the one needing the
-/// fewest conversions wins rather than raising `AmbiguousMatchException` (a recorded deviation).
+/// fewest conversions wins, with equally ranked candidates reported as ambiguous.
 pub fn activator_target<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     target: ObjectRef<'gc>,
@@ -134,10 +134,8 @@ pub fn activator_target<'gc, T: ReflectionIntrinsicHost<'gc>>(
         RuntimeType::Vector(_) | RuntimeType::Array(..) => {
             return Err(missing_constructor(ctx, &runtime.get_name()));
         }
-        // Constructing a string needs the intrinsic constructor protocol, which reflection does
-        // not use; pointers, byrefs and `void` are not creatable.
-        RuntimeType::String
-        | RuntimeType::Void
+        // Pointers, byrefs and `void` are not creatable.
+        RuntimeType::Void
         | RuntimeType::Pointer(_)
         | RuntimeType::ByRef(_)
         | RuntimeType::ValuePointer(..)
@@ -168,7 +166,14 @@ pub fn activator_target<'gc, T: ReflectionIntrinsicHost<'gc>>(
             })
             .map_err(|error| StepResult::Error(error.into()))?
     };
-    if let Some(method) = crate::invoke_args::select_constructor(ctx, &td, &lookup, &args) {
+    let selected =
+        crate::invoke_args::select_constructor(ctx, &td, &lookup, &args).map_err(|()| {
+            ctx.throw_by_name_with_message(
+                "System.Reflection.AmbiguousMatchException",
+                "Ambiguous match found.",
+            )
+        })?;
+    if let Some(method) = selected {
         if td.definition().flags.abstract_type {
             let message = format!(
                 "Cannot dynamically create an instance of type '{}'. Reason: Cannot create an abstract class.",

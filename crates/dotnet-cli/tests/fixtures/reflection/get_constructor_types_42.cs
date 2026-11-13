@@ -10,6 +10,14 @@ public class Ctors
     public Ctors(int a, string b) { Kind = "int,string"; }
     private Ctors(double a) { Kind = "private"; }
 }
+public interface ILeft { }
+public interface IRight { }
+public class Both : ILeft, IRight { }
+public class Ambiguous
+{
+    public Ambiguous(ILeft value) { }
+    public Ambiguous(IRight value) { }
+}
 public static class Program
 {
     static int failures;
@@ -33,6 +41,14 @@ public static class Program
         Check(10, typeof(object).GetConstructor(new[] { typeof(int) }) == null);
         Check(11, typeof(object).GetConstructor(Type.EmptyTypes) != null);
         Check(12, t.GetConstructor(new[] { typeof(int) })!.GetParameters().Length == 1);
+        bool ambiguous = false;
+        try { typeof(Ambiguous).GetConstructor(new[] { typeof(Both) }); }
+        catch (AmbiguousMatchException) { ambiguous = true; }
+        Check(13, ambiguous);
+        var stringCtor = typeof(string).GetConstructor(new[] { typeof(char), typeof(int) })!;
+        Check(14, (string)stringCtor.Invoke(new object[] { 'z', 3 }) == "zzz");
+        var arrayCtor = typeof(string).GetConstructor(new[] { typeof(char[]) })!;
+        Check(15, (string)arrayCtor.Invoke(new object[] { new char[] { 'a', 'b' } }) == "ab");
         return failures == 0 ? 42 : 1;
     }
 }

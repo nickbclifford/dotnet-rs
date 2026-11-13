@@ -923,8 +923,9 @@ pub fn handle_get_constructor_impl<'gc, T: ReflectionIntrinsicHost<'gc>>(
     const BINDING_FLAGS_PUBLIC: i32 = 16;
     const BINDING_FLAGS_NON_PUBLIC: i32 = 32;
 
-    // The best candidate so far: exact matches beat convertible ones, earlier beats later.
+    // Exact matches beat convertible ones; equally ranked matches are ambiguous.
     let mut found_constructor: Option<(TypeFit, usize)> = None;
+    let mut ambiguous = false;
     // Built-in aliases such as `object` and `string` are not `Type` variants but still have
     // constructors.
     if let Some((td, lookup)) = member_lookup_target(ctx, &target_type) {
@@ -962,12 +963,46 @@ pub fn handle_get_constructor_impl<'gc, T: ReflectionIntrinsicHost<'gc>>(
                     constructor_type_fit(ctx, &candidate, &lookup, wanted)
                 }
             };
-            if fit != TypeFit::No && found_constructor.is_none_or(|(best, _)| fit < best) {
-                found_constructor = Some((fit, idx));
-                if fit == TypeFit::Exact {
-                    break;
+            if fit != TypeFit::No {
+                match found_constructor {
+                    None => found_constructor = Some((fit, idx)),
+                    Some((best, _)) if fit < best => {
+                        found_constructor = Some((fit, idx));
+                        ambiguous = false;
+                    }
+                    Some((best, current)) if fit == best => {
+                        let candidate = MethodDescription::new(
+                            td.clone(),
+                            lookup.clone(),
+                            td.resolution.clone(),
+                            MethodMemberIndex::Method(idx),
+                        );
+                        let previous = MethodDescription::new(
+                            td.clone(),
+                            lookup.clone(),
+                            td.resolution.clone(),
+                            MethodMemberIndex::Method(current),
+                        );
+                        if crate::invoke_args::constructor_more_specific(
+                            ctx, &candidate, &previous, &lookup,
+                        ) {
+                            found_constructor = Some((fit, idx));
+                            ambiguous = false;
+                        } else if !crate::invoke_args::constructor_more_specific(
+                            ctx, &previous, &candidate, &lookup,
+                        ) {
+                            ambiguous = true;
+                        }
+                    }
+                    _ => {}
                 }
             }
+        }
+        if ambiguous {
+            return ctx.throw_by_name_with_message(
+                "System.Reflection.AmbiguousMatchException",
+                "Ambiguous match found.",
+            );
         }
         if let Some((_, idx)) = found_constructor {
             let m = get_runtime_method_metadata(ctx, td, &lookup, idx);

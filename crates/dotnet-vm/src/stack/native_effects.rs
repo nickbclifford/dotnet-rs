@@ -912,6 +912,8 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
             }
         };
         let is_constructor = method.method().name == ".ctor";
+        let string_constructor =
+            is_constructor && receiver.is_none() && method.parent.type_name() == "System.String";
         if let Some(receiver) = &receiver {
             dotnet_intrinsics_reflection::methods::validate_invoke_target(
                 self.context,
@@ -928,7 +930,9 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
         )
         .map_err(|step| reflection_prepare_error(self.context, step))?;
         let mut constructor_result = None;
-        let receiver = if is_constructor && receiver.is_none() {
+        let receiver = if string_constructor {
+            None
+        } else if is_constructor && receiver.is_none() {
             let instance = dotnet_intrinsics_reflection::ResolutionContextHost::reflection_new_object_with_lookup(self.context, method.parent.clone(), &generics)?;
             let is_value_type = method
                 .parent
@@ -1033,7 +1037,7 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
             parameters_for_call,
         )
         .map_err(|step| reflection_prepare_error(self.context, step))?;
-        if method.signature().instance {
+        if method.signature().instance && !string_constructor {
             arguments.insert(
                 0,
                 receiver.ok_or_else(|| {
@@ -1104,6 +1108,14 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
         generics: &GenericLookup,
         value: Option<StackValue<'gc>>,
     ) -> Result<StackValue<'gc>, NativePrepareError<'gc>> {
+        if method.method().name == ".ctor" && method.parent.type_name() == "System.String" {
+            return value.ok_or_else(|| {
+                dotnet_types::error::ExecutionError::InternalError(
+                    "missing string constructor result".into(),
+                )
+                .into()
+            });
+        }
         let (ty, byref) = match &method.signature().return_type.1 {
             Some(ParameterType::Value(ty)) => (ty, false),
             Some(ParameterType::Ref(ty)) => (ty, true),
@@ -2408,7 +2420,11 @@ impl<'gc> VesContext<'_, 'gc> {
     fn dispatch_pending_native_call(&mut self, mut work: NativeActivation<'gc>) -> StepResult {
         let pending = work.pending.as_mut().expect("pending native call");
         let signature = pending.call.method.signature();
-        let expected = signature.parameters.len() + usize::from(signature.instance);
+        let string_constructor = pending.call.method.method().name == ".ctor"
+            && pending.call.method.parent.type_name() == "System.String"
+            && pending.call.arguments.len() == signature.parameters.len();
+        let expected =
+            signature.parameters.len() + usize::from(signature.instance && !string_constructor);
         if pending.redirected.is_none() && pending.call.arguments.len() != expected {
             return StepResult::internal_error("native call argument count mismatch");
         }
@@ -2445,7 +2461,7 @@ impl<'gc> VesContext<'_, 'gc> {
             .redirected
             .clone()
             .unwrap_or_else(|| (pending.call.method.clone(), pending.call.generics.clone()));
-        let has_return = method.signature().return_type.1.is_some();
+        let has_return = string_constructor || method.signature().return_type.1.is_some();
         let generation = pending.generation;
         let id = work.id;
         // Keep the activation rooted while dispatch may allocate or enter another native body.
@@ -2455,7 +2471,15 @@ impl<'gc> VesContext<'_, 'gc> {
         let ip_before = self.state().ip;
         *self.original_ip = ip_before;
         *self.original_stack_height = self.top_of_stack();
-        let result = self.dispatch_method_inline(method.clone(), generics);
+        let result = if string_constructor {
+            self.dispatch_intrinsic_constructor(
+                method.clone(),
+                &generics,
+                dotnet_vm_ops::effects::NativeConstructorKind::String,
+            )
+        } else {
+            self.dispatch_method_inline(method.clone(), generics)
+        };
         *self.original_ip = saved_ip;
         *self.original_stack_height = saved_height;
         match result {

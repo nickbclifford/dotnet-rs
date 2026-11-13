@@ -9,6 +9,14 @@ public class Shapes
     public Shapes(int a, int b) { Kind = "int,int"; }
     private Shapes(double a) { Kind = "private"; }
 }
+public interface ILeft { }
+public interface IRight { }
+public class Both : ILeft, IRight { }
+public class Ambiguous
+{
+    public Ambiguous(ILeft value) { }
+    public Ambiguous(IRight value) { }
+}
 public struct NoCtor { public int X; }
 public class OnlyPrivate
 {
@@ -41,6 +49,9 @@ public static class Program
         Check(10, Throws<MissingMethodException>(() => Activator.CreateInstance(typeof(OnlyPrivate), new object[] { 1 })));
         Check(11, Throws<MissingMethodException>(() => Activator.CreateInstance(typeof(OnlyPrivate), new object[0])));
         Check(12, ((NoCtor)Activator.CreateInstance(typeof(NoCtor), new object[0])!).X == 0);
+        Check(13, Throws<System.Reflection.AmbiguousMatchException>(() => Activator.CreateInstance(typeof(Ambiguous), new object[] { new Both() })));
+        Check(14, (string)Activator.CreateInstance(typeof(string), new object[] { 'x', 3 })! == "xxx");
+        Check(15, (string)Activator.CreateInstance(typeof(string), new object[] { new char[] { 'a', 'b' } })! == "ab");
         return failures == 0 ? 42 : 1;
     }
 }

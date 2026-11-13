@@ -500,16 +500,46 @@ pub(crate) fn type_fit<'gc, T: ReflectionIntrinsicHost<'gc>>(
     }
 }
 
+/// Whether every differing parameter of `a` is more specific than `b`.
+pub(crate) fn constructor_more_specific<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &T,
+    a: &MethodDescription,
+    b: &MethodDescription,
+    lookup: &GenericLookup,
+) -> bool {
+    let mut better = false;
+    for (a_param, b_param) in a
+        .signature()
+        .parameters
+        .iter()
+        .zip(&b.signature().parameters)
+    {
+        let (ParameterType::Value(a_ty), ParameterType::Value(b_ty)) = (&a_param.1, &b_param.1)
+        else {
+            return false;
+        };
+        let a_ty = ctx.reflection_make_runtime_type_for_method(a.clone(), lookup, a_ty);
+        let b_ty = ctx.reflection_make_runtime_type_for_method(b.clone(), lookup, b_ty);
+        match type_fit(ctx, &a_ty, &b_ty) {
+            TypeFit::Exact => {}
+            TypeFit::Convertible => better = true,
+            TypeFit::No => return false,
+        }
+    }
+    better
+}
+
 /// Choose the public instance constructor of `td` that `args` bind to, as the default binder does
 /// for `Activator.CreateInstance(Type, object[])`. A constructor must accept every argument; among
-/// those, one needing no widening wins, and otherwise the earliest declared one.
+/// those, one needing fewer conversions wins; equally ranked candidates are ambiguous.
 pub(crate) fn select_constructor<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &T,
     td: &TypeDescription,
     lookup: &GenericLookup,
     args: &[ObjectRef<'gc>],
-) -> Option<MethodDescription> {
+) -> Result<Option<MethodDescription>, ()> {
     let mut best: Option<(usize, MethodDescription)> = None;
+    let mut ambiguous = false;
     for (index, method) in td.definition().methods.iter().enumerate() {
         if method.name != ".ctor"
             || !method.signature.instance
@@ -553,9 +583,28 @@ pub(crate) fn select_constructor<'gc, T: ReflectionIntrinsicHost<'gc>>(
                     ArgPlan::Reference | ArgPlan::Exact => true,
                 }
             });
-        if fits && best.as_ref().is_none_or(|(score, _)| conversions < *score) {
-            best = Some((conversions, candidate));
+        if fits {
+            match best.as_ref() {
+                None => best = Some((conversions, candidate)),
+                Some((score, _)) if conversions < *score => {
+                    best = Some((conversions, candidate));
+                    ambiguous = false;
+                }
+                Some((score, current)) if conversions == *score => {
+                    if constructor_more_specific(ctx, &candidate, current, lookup) {
+                        best = Some((conversions, candidate));
+                        ambiguous = false;
+                    } else if !constructor_more_specific(ctx, current, &candidate, lookup) {
+                        ambiguous = true;
+                    }
+                }
+                _ => {}
+            }
         }
     }
-    best.map(|(_, method)| method)
+    if ambiguous {
+        Err(())
+    } else {
+        Ok(best.map(|(_, method)| method))
+    }
 }

@@ -982,3 +982,16 @@ diff_test!(
     reflection_invoke_array_binding_matches_dotnet,
     "tests/fixtures/reflection/invoke_array_binding_42.cs"
 );
+
+diff_test!(
+    activator_create_instance_args_matches_dotnet,
+    "tests/fixtures/reflection/activator_create_instance_args_42.cs"
+);
+diff_test!(
+    get_constructor_types_matches_dotnet,
+    "tests/fixtures/reflection/get_constructor_types_42.cs"
+);
+diff_test!(
+    reflection_invoke_matches_dotnet,
+    "tests/fixtures/reflection/reflection_invoke_42.cs"
+);
