@@ -595,7 +595,9 @@ are accepted operational risks rather than type-level guarantees.
 `SharedGcHandles` retains provenance-preserving object pointers in VM-wide slots. During a
 collection, each owner traces its own normal and pinned targets; its short weak targets are
 cleared after marking and before any arena finalizes. Long weak targets are cleared by their
-owner after its finalization check. Dependent handles remain arena-local until plan 20 slice 3b.
+owner after its finalization check. For dependent slots, key owners activate live keys in a
+shared fixed point, value owners trace activated values, and key owners clear dead pairs before
+finalization. Null keys are cleared in the same phase.
 The MarkAll root barrier runs after mutators park, so publications made during an earlier
 incremental mark are retraced, as with the shared reflection registry. Retired owners continue
 to participate in collections. A mutator retrieving a slot must root its result before its

@@ -773,7 +773,8 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                         // goes through `mutate_root` (the root barrier).
                         arena.mutate_root(|_, c| {
                             c.stack.local.heap.cross_arena_roots.borrow_mut().clear();
-                            c.stack.local.heap.active_dependents.borrow_mut().clear();
+                            // All owners complete MarkAll before activation begins.
+                            c.stack.shared.gc_handles.reset_dependents();
                         });
                         #[cfg(feature = "bench-instrumentation")]
                         dotnet_metrics::record_active_gc_trace_root_timing(
@@ -810,8 +811,10 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                         && let Some(marked) = arena.finish_marking()
                     {
                         let mut changed = false;
-                        marked
-                            .finalize(|fc, c| changed = c.stack.local.heap.activate_dependents(fc));
+                        marked.finalize(|fc, c| {
+                            // SAFETY: STW has parked all mutators; this arena owns the keys checked.
+                            changed = unsafe { c.stack.shared.gc_handles.activate_dependents(fc) };
+                        });
                         if changed {
                             coordinator
                                 .dependents_changed

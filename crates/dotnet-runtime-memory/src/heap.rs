@@ -30,9 +30,6 @@ pub struct HeapManager<'gc> {
     pub finalization_queue: RefCell<FinalizationQueue<'gc>>,
     pub pending_finalization: RefCell<FinalizationQueue<'gc>>,
     pub pinned_objects: RefCell<PinnedObjects<'gc>>,
-    pub dependent_handles: RefCell<Vec<Option<(ObjectRef<'gc>, ObjectRef<'gc>)>>>,
-    /// Slots activated during the current mark cycle; their values are traced as roots.
-    pub active_dependents: RefCell<HashSet<usize>>,
     pub processing_finalizer: Cell<bool>,
     pub finalizers_published: Cell<bool>,
     pub needs_full_collect: Cell<bool>,
@@ -54,8 +51,6 @@ impl<'gc> HeapManager<'gc> {
             finalization_queue: RefCell::new(SmallVec::new()),
             pending_finalization: RefCell::new(SmallVec::new()),
             pinned_objects: RefCell::new(SmallVec::new()),
-            dependent_handles: RefCell::new(Vec::new()),
-            active_dependents: RefCell::new(HashSet::new()),
             processing_finalizer: Cell::new(false),
             finalizers_published: Cell::new(false),
             needs_full_collect: Cell::new(false),
@@ -148,37 +143,6 @@ impl<'gc> HeapManager<'gc> {
         !self.pending_finalization.borrow().is_empty()
     }
 
-    /// Activate values whose keys have become reachable. The caller must retrace the root
-    /// and repeat marking until no more entries activate.
-    pub fn activate_dependents(&self, fc: &'gc gc_arena::Finalization<'gc>) -> bool {
-        let handles = self.dependent_handles.borrow();
-        let mut active = self.active_dependents.borrow_mut();
-        let mut changed = false;
-        for (index, entry) in handles.iter().enumerate() {
-            if let Some((ObjectRef(Some(key)), _)) = entry
-                && !Gc::is_dead(fc, *key)
-            {
-                changed |= active.insert(index);
-            }
-        }
-        changed
-    }
-
-    fn clear_dead_dependents(&self, fc: &'gc gc_arena::Finalization<'gc>) {
-        for (key, value) in self.dependent_handles.borrow_mut().iter_mut().flatten() {
-            if key.0.is_none_or(|ptr| Gc::is_dead(fc, ptr)) {
-                *key = ObjectRef(None);
-                *value = ObjectRef(None);
-            }
-        }
-    }
-
-    /// Clear arena-local dependent handles before finalization.
-    #[cfg(feature = "multithreading")]
-    pub fn clear_dead_dependent_handles(&self, fc: &'gc gc_arena::Finalization<'gc>) {
-        self.clear_dead_dependents(fc);
-    }
-
     pub fn finalize_check(
         &self,
         fc: &'gc gc_arena::Finalization<'gc>,
@@ -186,7 +150,9 @@ impl<'gc> HeapManager<'gc> {
         indent: usize,
     ) {
         #[cfg(not(feature = "multithreading"))]
-        self.clear_dead_dependents(fc);
+        unsafe {
+            shared.gc_handles().clear_dead_dependents(fc)
+        };
         let mut queue = self.finalization_queue.borrow_mut();
         let mut resurrected = HashSet::new();
 
@@ -439,18 +405,10 @@ fn bucket_range(start: usize, size: usize) -> std::ops::RangeInclusive<usize> {
     (start >> REGISTRY_BUCKET_SHIFT)..=(end >> REGISTRY_BUCKET_SHIFT)
 }
 
-// SAFETY: F5.TracesEveryGcRef — active dependent values, pinned objects, pending
-// finalizers and cross-arena roots are traced. Finalization queues and inactive dependent
-// handles are weak; all remaining fields are non-GC metadata.
+// SAFETY: F5.TracesEveryGcRef — pinned objects, pending
+// finalizers and cross-arena roots are traced. Finalization queues are weak; all remaining fields are non-GC metadata.
 unsafe impl<'gc> Collect<'gc> for HeapManager<'gc> {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
-        let handles = self.dependent_handles.borrow();
-        for index in self.active_dependents.borrow().iter() {
-            if let Some(Some((_, value))) = handles.get(*index) {
-                value.trace(cc);
-            }
-        }
-
         for obj in self.pinned_objects.borrow().iter() {
             obj.trace(cc);
         }

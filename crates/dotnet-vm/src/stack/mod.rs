@@ -198,9 +198,8 @@ impl GCArena {
                     }
                 } else {
                     if self.arena.collection_phase() == CollectionPhase::Sleeping {
-                        self.arena.mutate_root(|_, c| {
-                            c.stack.local.heap.active_dependents.borrow_mut().clear()
-                        });
+                        self.arena
+                            .mutate_root(|_, c| c.stack.shared.gc_handles.reset_dependents());
                     }
                     if self.arena.mark_debt().is_some() {
                         self.finish_single_dependents();
@@ -215,9 +214,8 @@ impl GCArena {
                     self.finish_cycle();
                 }
                 if self.arena.collection_phase() == CollectionPhase::Sleeping {
-                    self.arena.mutate_root(|_, c| {
-                        c.stack.local.heap.active_dependents.borrow_mut().clear()
-                    });
+                    self.arena
+                        .mutate_root(|_, c| c.stack.shared.gc_handles.reset_dependents());
                 }
                 if self.arena.finish_marking().is_some() {
                     self.finish_single_dependents();
@@ -232,7 +230,10 @@ impl GCArena {
     fn finish_single_dependents(&mut self) {
         while let Some(marked) = self.arena.finish_marking() {
             let mut changed = false;
-            marked.finalize(|fc, c| changed = c.stack.local.heap.activate_dependents(fc));
+            marked.finalize(|fc, c| {
+                // SAFETY: the single arena is fully marked and its mutator is stopped.
+                changed = unsafe { c.stack.shared.gc_handles.activate_dependents(fc) };
+            });
             if !changed {
                 break;
             }

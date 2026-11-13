@@ -1,6 +1,6 @@
 # Shared GC handles and a dedicated finalizer thread
 
-**Status:** In progress — slices 1–2 and 3a complete; slice 3b pending
+**Status:** In progress — slices 1–3 complete; slice 4 pending
 **Outcome:** Under `multithreading`, finalizers run on one background finalizer thread with its own
 identity, GC handles are readable from any thread, and the process exits without waiting for
 finalizers; the GC fixtures listed under each slice match `dotnet` through the diff harness.

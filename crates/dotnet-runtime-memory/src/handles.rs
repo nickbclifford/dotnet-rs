@@ -13,6 +13,13 @@ type HandleSlot = Option<(Option<ObjectPtr>, GCHandleType)>;
 #[derive(Default)]
 pub struct SharedGcHandles {
     slots: Mutex<Vec<HandleSlot>>,
+    dependents: Mutex<Dependents>,
+}
+
+#[derive(Default)]
+struct Dependents {
+    slots: Vec<Option<(Option<ObjectPtr>, Option<ObjectPtr>)>>,
+    active: HashSet<usize>,
 }
 
 impl SharedGcHandles {
@@ -67,6 +74,110 @@ impl SharedGcHandles {
         }
     }
 
+    pub fn alloc_dependent(&self, key: ObjectRef<'_>, value: ObjectRef<'_>) -> usize {
+        let mut table = self.dependents.lock();
+        let entry = Some((key.as_ptr(), value.as_ptr()));
+        if let Some(index) = table.slots.iter().position(Option::is_none) {
+            table.slots[index] = entry;
+            index
+        } else {
+            table.slots.push(entry);
+            table.slots.len() - 1
+        }
+    }
+
+    /// # Safety
+    /// The caller must be in an active arena mutation, use its brand for `'gc`, and
+    /// root both results before a safepoint. Neither result may outlive that mutation.
+    pub unsafe fn get_dependent<'gc>(
+        &self,
+        index: usize,
+    ) -> Option<(ObjectRef<'gc>, ObjectRef<'gc>)> {
+        self.dependents
+            .lock()
+            .slots
+            .get(index)
+            .copied()
+            .flatten()
+            .map(|(key, value)| {
+                // SAFETY: The active mutation prevents collection until the caller roots the results.
+                let convert = |ptr: Option<ObjectPtr>| {
+                    ObjectRef(ptr.map(|p| unsafe { Gc::from_ptr(p.as_ptr().cast()) }))
+                };
+                (convert(key), convert(value))
+            })
+    }
+
+    pub fn set_dependent(&self, index: usize, value: ObjectRef<'_>) {
+        if let Some(Some((_, dependent))) = self.dependents.lock().slots.get_mut(index) {
+            *dependent = value.as_ptr();
+        }
+    }
+
+    pub fn clear_dependent(&self, index: usize) {
+        let mut table = self.dependents.lock();
+        if let Some(Some(entry)) = table.slots.get_mut(index) {
+            *entry = (None, None);
+        }
+        table.active.remove(&index);
+    }
+
+    pub fn free_dependent(&self, index: usize) {
+        let mut table = self.dependents.lock();
+        if let Some(slot) = table.slots.get_mut(index) {
+            *slot = None;
+        }
+        table.active.remove(&index);
+    }
+
+    pub fn reset_dependents(&self) {
+        self.dependents.lock().active.clear();
+    }
+
+    /// # Safety
+    /// The caller must collect its own arena; all other mutators must be parked.
+    pub unsafe fn activate_dependents<'gc>(&self, fc: &'gc gc_arena::Finalization<'gc>) -> bool {
+        let owner = get_current_thread_id();
+        let mut table = self.dependents.lock();
+        let mut changed = false;
+        for index in 0..table.slots.len() {
+            if let Some((Some(key), _)) = table.slots[index]
+                && key.owner_id() == owner
+            {
+                // SAFETY: Only the key's owner reads its mark color during collection.
+                let object: ObjectRef<'gc> =
+                    ObjectRef(Some(unsafe { Gc::from_ptr(key.as_ptr().cast()) }));
+                let gc = object.0.unwrap();
+                if !Gc::is_dead(fc, gc) {
+                    changed |= table.active.insert(index);
+                }
+            }
+        }
+        changed
+    }
+
+    /// # Safety
+    /// The caller must collect its own arena before any arena sweeps.
+    pub unsafe fn clear_dead_dependents<'gc>(&self, fc: &'gc gc_arena::Finalization<'gc>) {
+        let owner = get_current_thread_id();
+        let mut table = self.dependents.lock();
+        for entry in table.slots.iter_mut().flatten() {
+            if entry.0.is_none() {
+                entry.1 = None;
+            } else if let (Some(key), _) = *entry
+                && key.owner_id() == owner
+            {
+                // SAFETY: Only the key's owner reads its mark color during collection.
+                let object: ObjectRef<'gc> =
+                    ObjectRef(Some(unsafe { Gc::from_ptr(key.as_ptr().cast()) }));
+                let gc = object.0.unwrap();
+                if Gc::is_dead(fc, gc) {
+                    *entry = (None, None);
+                }
+            }
+        }
+    }
+
     /// # Safety
     /// The current thread must be collecting its own arena with `fc`, all other mutators
     /// must be parked, and every slot target must remain allocated until weak clearing ends.
@@ -97,9 +208,20 @@ impl SharedGcHandles {
 // SAFETY: F5.TracesEveryGcRef — strong slots are traced by their owner. Like the
 // shared reflection registry, MarkAll applies the root barrier after all mutators
 // park, so publications before that point are seen even if marking had begun.
+// Dependent activations are followed by a root barrier on every value owner.
 unsafe impl<'gc> Collect<'gc> for SharedGcHandles {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         let owner = get_current_thread_id();
+        let table = self.dependents.lock();
+        for index in &table.active {
+            if let Some(Some((_, Some(value)))) = table.slots.get(*index)
+                && value.owner_id() == owner
+            {
+                // SAFETY: STW retains the value's owner throughout tracing.
+                ObjectRef(Some(unsafe { Gc::from_ptr(value.as_ptr().cast()) })).trace(cc);
+            }
+        }
+        drop(table);
         for (ptr, kind) in self.slots.lock().iter().flatten() {
             if matches!(kind, GCHandleType::Normal | GCHandleType::Pinned)
                 && let Some(p) = ptr

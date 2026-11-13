@@ -691,7 +691,6 @@ fn dependent_handle_chain_survives_and_clears() {
                 let key = ObjectRef::new(handle, HeapStorage::Str(CLRString::from("key")));
                 let middle = ObjectRef::new(handle, HeapStorage::Str(CLRString::from("middle")));
                 let tail = ObjectRef::new(handle, HeapStorage::Str(CLRString::from("tail")));
-                let heap = &engine.stack.local.heap;
                 assert_eq!(
                     engine
                         .stack
@@ -709,9 +708,8 @@ fn dependent_handle_chain_survives_and_clears() {
                     1
                 );
                 // Reverse order requires another mark round after the first dependent activates.
-                heap.dependent_handles
-                    .borrow_mut()
-                    .extend([Some((middle, tail)), Some((key, middle))]);
+                engine.stack.shared.gc_handles.alloc_dependent(middle, tail);
+                engine.stack.shared.gc_handles.alloc_dependent(key, middle);
             })
         })
         .unwrap();
@@ -743,7 +741,6 @@ fn dependent_handle_chain_survives_and_clears() {
     executor
         .with_arena(|arena| {
             arena.mutate(|_, engine| {
-                let heap = &engine.stack.local.heap;
                 // SAFETY: this mutation is active while the witness is inspected.
                 assert!(
                     // SAFETY: the active arena mutation confines the witness to this operation.
@@ -753,7 +750,10 @@ fn dependent_handle_chain_survives_and_clears() {
                         .0
                         .is_none()
                 );
-                for (key, value) in heap.dependent_handles.borrow().iter().flatten() {
+                for index in 0..2 {
+                    // SAFETY: both results remain within this mutation.
+                    let (key, value) =
+                        unsafe { engine.stack.shared.gc_handles.get_dependent(index) }.unwrap();
                     assert!(key.0.is_none() && value.0.is_none());
                 }
             })

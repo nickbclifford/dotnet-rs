@@ -236,16 +236,6 @@ pub fn intrinsic_gen2_gc_callback_register<'gc, T: TypedStackOps<'gc>>(
     StepResult::Continue
 }
 
-fn alloc_or_reuse_slot<T>(handles: &mut Vec<Option<T>>, value: T) -> usize {
-    if let Some(i) = handles.iter().position(|h| h.is_none()) {
-        handles[i] = Some(value);
-        i
-    } else {
-        handles.push(Some(value));
-        handles.len() - 1
-    }
-}
-
 // CoreLib reserves the low two bits for WeakReference and GCHandle tags.
 // Each handle-table slot is larger than four bytes, so an allocated Vec's
 // byte-size limit also bounds the encoded index within isize::MAX.
@@ -428,10 +418,7 @@ pub fn intrinsic_dependent_handle_internal_alloc<'gc, T: TypedStackOps<'gc> + Me
     let dependent = ctx.pop_obj();
     let target = ctx.pop_obj();
 
-    let index = {
-        let mut handles = ctx.heap().dependent_handles.borrow_mut();
-        alloc_or_reuse_slot(&mut handles, (target, dependent))
-    };
+    let index = ctx.gc_handles().alloc_dependent(target, dependent);
 
     ctx.push_isize((index + 1) as isize);
     StepResult::Continue
@@ -451,11 +438,8 @@ pub fn intrinsic_dependent_handle_internal_get_dependent<
         ObjectRef(None)
     } else {
         let index = (handle - 1) as usize;
-        let handles = ctx.heap().dependent_handles.borrow();
-        match handles.get(index) {
-            Some(Some((_target, dependent))) => *dependent,
-            _ => ObjectRef(None),
-        }
+        // SAFETY: the active mutation keeps both objects allocated until pushed.
+        unsafe { ctx.gc_handles().get_dependent(index) }.map_or(ObjectRef(None), |(_, value)| value)
     };
     ctx.push_obj(dependent);
     StepResult::Continue
@@ -479,11 +463,9 @@ pub fn intrinsic_dependent_handle_internal_get_target_and_dependent<
         (ObjectRef(None), ObjectRef(None))
     } else {
         let index = (handle - 1) as usize;
-        let handles = ctx.heap().dependent_handles.borrow();
-        match handles.get(index) {
-            Some(Some((target, dependent))) => (*target, *dependent),
-            _ => (ObjectRef(None), ObjectRef(None)),
-        }
+        // SAFETY: the active mutation keeps both objects allocated until rooted.
+        unsafe { ctx.gc_handles().get_dependent(index) }
+            .unwrap_or((ObjectRef(None), ObjectRef(None)))
     };
 
     let layout = LayoutManager::Scalar(Scalar::ObjectRef);
@@ -516,12 +498,7 @@ pub fn intrinsic_dependent_handle_internal_set_dependent<
     let handle = ctx.pop_isize();
     if handle != 0 {
         let index = (handle - 1) as usize;
-        let mut handles = ctx.heap().dependent_handles.borrow_mut();
-        if index < handles.len()
-            && let Some(entry) = &mut handles[index]
-        {
-            entry.1 = dependent;
-        }
+        ctx.gc_handles().set_dependent(index, dependent);
     }
     StepResult::Continue
 }
@@ -538,13 +515,7 @@ pub fn intrinsic_dependent_handle_internal_set_target_to_null<
     let handle = ctx.pop_isize();
     if handle != 0 {
         let index = (handle - 1) as usize;
-        let mut handles = ctx.heap().dependent_handles.borrow_mut();
-        if index < handles.len()
-            && let Some(entry) = &mut handles[index]
-        {
-            entry.0 = ObjectRef(None);
-            entry.1 = ObjectRef(None);
-        }
+        ctx.gc_handles().clear_dependent(index);
     }
     StepResult::Continue
 }
@@ -558,10 +529,7 @@ pub fn intrinsic_dependent_handle_internal_free<'gc, T: TypedStackOps<'gc> + Mem
     let handle = ctx.pop_isize();
     if handle != 0 {
         let index = (handle - 1) as usize;
-        let mut handles = ctx.heap().dependent_handles.borrow_mut();
-        if index < handles.len() {
-            handles[index] = None;
-        }
+        ctx.gc_handles().free_dependent(index);
     }
     ctx.push_i32(1);
     StepResult::Continue

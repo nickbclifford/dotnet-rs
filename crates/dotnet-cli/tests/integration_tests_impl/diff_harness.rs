@@ -1083,3 +1083,9 @@ diff_test!(
     cross_thread_handles_match_dotnet,
     "tests/fixtures/gc/cross_thread_handles_42.cs"
 );
+
+#[cfg(feature = "multithreading")]
+diff_test!(
+    cross_thread_dependent_handles_match_dotnet,
+    "tests/fixtures/gc/cross_thread_dependent_handles_42.cs"
+);
