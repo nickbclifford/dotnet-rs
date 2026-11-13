@@ -404,6 +404,14 @@ pub trait NativeBackend<'gc> {
             "native reflection unavailable",
         )))
     }
+    fn reflection_copyback(
+        &mut self,
+        _original: ObjectRef<'gc>,
+        _scratch: ObjectRef<'gc>,
+        _indices: &[usize],
+    ) -> Result<(), VmError> {
+        Err(internal("native reflection copyback unavailable"))
+    }
     fn reflection_result(
         &mut self,
         _method: &dotnet_types::members::MethodDescription,
@@ -483,7 +491,12 @@ pub enum NativeReflectionPlan<'gc> {
 
 /// A prepared reflection invocation whose values are rooted for the activation.
 pub enum NativeReflectionStep {
-    Call(NativeCall, Option<RootedValue>, bool),
+    Call(
+        NativeCall,
+        Option<RootedValue>,
+        bool,
+        Option<(RootedValue, RootedValue, Vec<usize>)>,
+    ),
     Value(RootedValue),
 }
 
@@ -494,6 +507,7 @@ pub struct NativePreparedCall<'gc> {
     pub arguments: Vec<StackValue<'gc>>,
     pub constructor_result: Option<StackValue<'gc>>,
     pub do_not_wrap: bool,
+    pub copyback: Option<(ObjectRef<'gc>, ObjectRef<'gc>, Vec<usize>)>,
 }
 
 /// Failure while preparing a native call, before its operands are committed.
@@ -612,6 +626,16 @@ impl<'gc, 'a> NativeRegion<'gc, 'a> {
                 ));
             }
         };
+        let copyback = prepared
+            .copyback
+            .map(|(original, scratch, indices)| {
+                Ok::<_, VmError>((
+                    self.root(StackValue::ObjectRef(original))?,
+                    self.root(StackValue::ObjectRef(scratch))?,
+                    indices,
+                ))
+            })
+            .transpose()?;
         let constructor_result = prepared
             .constructor_result
             .map(|value| self.root(value))
@@ -632,6 +656,7 @@ impl<'gc, 'a> NativeRegion<'gc, 'a> {
             },
             constructor_result,
             prepared.do_not_wrap,
+            copyback,
         ))
     }
     fn probe_initializer(
@@ -680,6 +705,21 @@ impl<'gc, 'a> NativeRegion<'gc, 'a> {
         };
         let exception = self.backend.wrap_reflection_failure(inner)?;
         self.root(StackValue::ObjectRef(exception))
+    }
+
+    pub fn reflection_copyback(
+        &mut self,
+        original: &RootedValue,
+        scratch: &RootedValue,
+        indices: &[usize],
+    ) -> Result<(), VmError> {
+        let StackValue::ObjectRef(original) = self.fetch(original)? else {
+            return Err(internal("invalid reflection argument array"));
+        };
+        let StackValue::ObjectRef(scratch) = self.fetch(scratch)? else {
+            return Err(internal("invalid reflection scratch array"));
+        };
+        self.backend.reflection_copyback(original, scratch, indices)
     }
 
     /// Transform a successful reflected return while its value is rooted.

@@ -15,6 +15,7 @@ use dotnet_types::{
 };
 use dotnet_value::{
     CLRString, StackValue,
+    layout::HasLayout,
     object::{HeapStorage, ObjectRef},
 };
 use dotnet_vm_ops::SupportSlotOps;
@@ -995,12 +996,41 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
             }
         }
         let gc = self.context.gc;
+        let indices: Vec<usize> = method
+            .signature()
+            .parameters
+            .iter()
+            .enumerate()
+            .filter_map(|(i, p)| matches!(p.1, ParameterType::Ref(_)).then_some(i))
+            .collect();
+        let (parameters_for_call, copyback) = if !indices.is_empty() && parameters.0.is_some() {
+            let (element, values) = parameters
+                .as_heap_storage(|storage| match storage {
+                    HeapStorage::Vec(vector) => Some((
+                        vector.element.clone(),
+                        vector.object_ref_elements(&gc).collect::<Vec<_>>(),
+                    )),
+                    _ => None,
+                })
+                .ok_or_else(|| {
+                    dotnet_types::error::ExecutionError::InternalError(
+                        "invalid reflection argument array".into(),
+                    )
+                })?;
+            let mut vector = self.context.new_vector(element, values.len())?;
+            vector.write_object_ref_elements_mut(&values);
+            let scratch = ObjectRef::new(gc, HeapStorage::Vec(Box::new(vector)));
+            self.context.register_new_object(&scratch);
+            (scratch, Some((parameters, scratch, indices)))
+        } else {
+            (parameters, None)
+        };
         let mut arguments = dotnet_intrinsics_reflection::methods::unmarshal_invoke_params(
             self.context,
             &gc,
             &method,
             &generics,
-            parameters,
+            parameters_for_call,
         )
         .map_err(|step| reflection_prepare_error(self.context, step))?;
         if method.signature().instance {
@@ -1020,8 +1050,53 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
                 arguments,
                 constructor_result,
                 do_not_wrap,
+                copyback,
             },
         ))
+    }
+    fn reflection_copyback(
+        &mut self,
+        original: ObjectRef<'gc>,
+        scratch: ObjectRef<'gc>,
+        indices: &[usize],
+    ) -> Result<(), VmError> {
+        let gc = self.context.gc;
+        let values =
+            scratch.as_vector(|vector| vector.object_ref_elements(&gc).collect::<Vec<_>>());
+        let (layout, base) = original.as_vector(|vector| {
+            (
+                vector.layout.element_layout.clone(),
+                vector.get().as_ptr() as *mut u8,
+            )
+        });
+        let pointer = StackValue::managed_ptr_with_owner(
+            base,
+            TypeDescription::NULL,
+            Some(original),
+            false,
+            Some(dotnet_utils::ByteOffset::new(0)),
+        );
+        let StackValue::ManagedPtr(pointer) = pointer else {
+            unreachable!()
+        };
+        for &index in indices {
+            // The validated index identifies a reference slot; the memory layer checks bounds
+            // and records cross-arena stores.
+            unsafe {
+                self.context.write_unaligned(
+                    pointer.origin().clone(),
+                    layout.size() * index,
+                    StackValue::ObjectRef(values[index]),
+                    &layout,
+                )
+            }
+            .map_err(|error| {
+                dotnet_types::error::ExecutionError::InternalError(
+                    format!("reflection copyback: {error:?}").into(),
+                )
+            })?;
+        }
+        Ok(())
     }
     fn reflection_result(
         &mut self,

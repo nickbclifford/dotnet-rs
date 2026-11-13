@@ -30,10 +30,10 @@ Current deviations:
 - **Argument binding** (`crates/dotnet-intrinsics-reflection/src/invoke_args.rs`):
   - `reference_fits` accepts any vector, and `heap_concrete` returns `None` for vectors, so
     array arguments and receivers are not type-checked.
-  - `plan_argument` rejects every byref argument whose box is not exactly the parameter type;
-    the CLR widens and writes the converted value back.
-  - The `Nullable<T>` branch accepts only an exact boxed `T`, no primitive widening
-    (`invoke_nullable_42.cs` check 13 asserts the non-CLR `ArgumentException`).
+  - `plan_argument` rejects byref arguments whose box is not exactly the parameter type. The
+    slice 3 probe confirmed the CLR also rejects primitive widening for byref parameters.
+  - The `Nullable<T>` branch accepts only an exact boxed `T`. The slice 3 probe confirmed
+    that the CLR rejects primitive widening here too.
   - Byref writes go through pointers into the caller's box or `object[]` slot, so they are
     visible after the target throws (`invoke_byref_exception_42.cs` asserts this).
 - **Overload selection.** `select_constructor` and `handle_get_constructor_impl`
@@ -78,6 +78,14 @@ Out:
   covariance, enum/underlying element compatibility, generic interfaces) rather than a
   reflection-local rule.
 
+## Slice 3 CLR probe
+
+On .NET 10.0.14, invoking a method with `ref int` and `ref object` copies both
+arguments back only on success. An exact boxed `int` is copied, and a successful
+call replaces the array entry; after a throw, the original box and array slots
+are unchanged. The CLR rejects a boxed `int` for `ref long` and for `long?` with
+`ArgumentException`, so those proposed widening conversions must remain rejected.
+
 ## Slices
 
 1. **`TargetInvocationException` wrapping.** Wrapping and `DoNotWrapExceptions` in
@@ -92,9 +100,9 @@ Out:
    byref-like pointee (`NotSupportedException`), and a null ref return (probe the CLR first).
    Diff against the CLR.
 3. **Argument binding.** CLR probe for write-back, then: array type checks for arguments and
-   receivers, byref widening with write-back, `Nullable<T>` widening, and no write-back after a
-   throw if the probe confirms. Rewrite `invoke_nullable_42.cs` check 13 and the write-back
-   assertions in `invoke_byref_exception_42.cs`; add both, `invoke_byref_42.cs` and
+   receivers and success-only write-back, retaining the conversions rejected by the CLR probe.
+   Update the write-back assertions in `invoke_byref_exception_42.cs`; add it,
+   `invoke_nullable_42.cs`, `invoke_byref_42.cs` and
    `invoke_byref_writethrough_42.cs` to the diff harness. Confirm `invoke_argument_race_42`
    still races a narrowing (`long` → `int`) conversion.
 4. **Overload ambiguity and strings.** `AmbiguousMatchException` from `GetConstructor(Type[])` and

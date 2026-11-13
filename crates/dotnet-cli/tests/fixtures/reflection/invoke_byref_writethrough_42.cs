@@ -21,7 +21,10 @@ public static class Program
         }
 
         object[] args = new object[] { -1 };
+        object original = args[0];
         object? result = method.Invoke(null, args);
+
+        if ((int)original != -1 || object.ReferenceEquals(original, args[0])) return 4;
 
         if (result is not int intResult || intResult != 42)
         {

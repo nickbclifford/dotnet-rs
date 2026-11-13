@@ -1,5 +1,3 @@
-// This fixture encodes non-CLR byref write-back after a throw; keep it out of CLR-diff tests
-// until the logged reflection compatibility fix corrects that behavior.
 using System;
 using System.Reflection;
 
@@ -27,7 +25,7 @@ public static class Program
         catch (TargetInvocationException e) when (e.InnerException is InvalidOperationException)
         {
             if (!object.ReferenceEquals(original, args[0])) return 2;
-            if ((int)args[0] != 42 || (string)args[1] != "changed") return 3;
+            if ((int)args[0] != 1 || (string)args[1] != "before") return 3;
         }
         return 42;
     }

@@ -6,6 +6,7 @@
 //! Canonical imports should come from `dotnet_vm_data` directly.
 //! This crate is intentionally separate from `dotnet-vm-data` to allow downstream
 //! crates to depend on operation traits without depending on the VM implementation.
+pub mod array_assignability;
 pub mod effects;
 pub mod intrinsic_args;
 mod macros;

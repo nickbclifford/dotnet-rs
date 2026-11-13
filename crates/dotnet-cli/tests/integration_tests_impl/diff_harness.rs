@@ -960,3 +960,25 @@ diff_test!(
     reflection_byref_return_matches_dotnet,
     "tests/fixtures/reflection/invoke_byref_return_42.cs"
 );
+
+diff_test!(
+    reflection_invoke_byref_exception_matches_dotnet,
+    "tests/fixtures/reflection/invoke_byref_exception_42.cs"
+);
+diff_test!(
+    reflection_invoke_nullable_matches_dotnet,
+    "tests/fixtures/reflection/invoke_nullable_42.cs"
+);
+diff_test!(
+    reflection_invoke_byref_matches_dotnet,
+    "tests/fixtures/reflection/invoke_byref_42.cs"
+);
+diff_test!(
+    reflection_invoke_byref_writethrough_matches_dotnet,
+    "tests/fixtures/reflection/invoke_byref_writethrough_42.cs"
+);
+
+diff_test!(
+    reflection_invoke_array_binding_matches_dotnet,
+    "tests/fixtures/reflection/invoke_array_binding_42.cs"
+);

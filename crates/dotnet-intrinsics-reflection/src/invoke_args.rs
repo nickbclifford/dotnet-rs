@@ -253,7 +253,7 @@ pub(crate) fn nullable_inner(concrete: &ConcreteType) -> Option<ConcreteType> {
 }
 
 /// The runtime type of an object, with its generic arguments, when it is a class instance, string
-/// or box. Arrays are not described and callers must treat them as unchecked.
+/// or box. Arrays are handled separately by the shared array assignability rules.
 fn heap_concrete<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &T,
     object: ObjectRef<'gc>,
@@ -313,8 +313,7 @@ fn declaring_concrete(method: &MethodDescription, lookup: &GenericLookup) -> Con
 
 /// Whether `object` can be stored in a reference-typed location of type `target`.
 ///
-/// Arrays are accepted without a check because their covariance and generic-interface rules live
-/// in the cast instructions rather than in the type comparer.
+/// Array compatibility uses the same rules as cast instructions.
 fn reference_fits<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &T,
     object: ObjectRef<'gc>,
@@ -323,8 +322,23 @@ fn reference_fits<'gc, T: ReflectionIntrinsicHost<'gc>>(
     if object.0.is_none() || matches!(target.get(), BaseType::Object) {
         return true;
     }
-    if object.as_heap_storage(|storage| matches!(storage, HeapStorage::Vec(_))) {
-        return true;
+    if let Some(result) = object.as_heap_storage(|storage| match storage {
+        HeapStorage::Vec(v) => Some(
+            dotnet_vm_ops::array_assignability::vector_matches_array_type(
+                ctx.loader().as_ref(),
+                &v.element,
+                target,
+            ),
+        ),
+        _ => None,
+    }) {
+        if result {
+            return true;
+        }
+        return ctx
+            .get_heap_description(object)
+            .ok()
+            .is_some_and(|td| ctx.is_a(td.into(), target.clone()).unwrap_or(false));
     }
     let Some(source) = heap_concrete(ctx, object) else {
         return true;

@@ -99,9 +99,9 @@ pub async fn run_reflection_call(mut fx: VmEffects) -> NativeResult {
         let mut vm = fx.vm().await?;
         vm.prepare_reflection()?
     };
-    let (call, constructor_result, do_not_wrap) = match step {
-        NativeReflectionStep::Call(call, constructor_result, do_not_wrap) => {
-            (call, constructor_result, do_not_wrap)
+    let (call, constructor_result, do_not_wrap, copyback) = match step {
+        NativeReflectionStep::Call(call, constructor_result, do_not_wrap, copyback) => {
+            (call, constructor_result, do_not_wrap, copyback)
         }
         NativeReflectionStep::Value(value) => {
             return fx.vm().await?.push_value(NativeValue::Value(value));
@@ -125,6 +125,9 @@ pub async fn run_reflection_call(mut fx: VmEffects) -> NativeResult {
         }
     };
     let mut vm = fx.vm().await?;
+    if let Some((original, scratch, indices)) = copyback {
+        vm.with(|region| region.reflection_copyback(&original, &scratch, &indices))??;
+    }
     let value = match constructor_result {
         Some(instance) => {
             vm.with(|region| region.reflection_constructor_result(&method, &generics, &instance))??
@@ -984,9 +987,7 @@ fn unbox_param_to_stack_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
             } = shape.clone();
 
             if is_value_type {
-                let (arg_obj, replacement_box) = if arg.0.is_some() {
-                    (arg, None)
-                } else {
+                let (arg_obj, replacement_box) = {
                     let boxed_lookup = concrete_param_type.make_lookup();
                     let boxed =
                         match ctx.reflection_new_object_with_lookup(td.clone(), &boxed_lookup) {
@@ -997,10 +998,25 @@ fn unbox_param_to_stack_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
                     let gc = ctx.gc_with_token(&token);
                     let obj = ObjectRef::new(gc, HeapStorage::Boxed(Box::new(boxed)));
                     ctx.register_new_object(&obj);
+                    if arg.0.is_some() {
+                        arg.as_heap_storage(|source| {
+                            if let HeapStorage::Boxed(source) = source {
+                                source.instance_storage.with_data(|data| {
+                                    obj.as_heap_storage(|target| {
+                                        if let HeapStorage::Boxed(target) = target {
+                                            target
+                                                .instance_storage
+                                                .with_data_mut(|dest| dest.copy_from_slice(data));
+                                        }
+                                    });
+                                });
+                            }
+                        });
+                    }
                     (obj, Some(obj))
                 };
 
-                // The plan already proved a non-null argument is a box of exactly this type.
+                // The temporary box is rooted by its managed pointer.
                 let data_ptr = match arg_obj.as_heap_storage(|s| {
                     if let HeapStorage::Boxed(o) = s {
                         Ok(o.instance_storage
@@ -1043,8 +1059,8 @@ fn unbox_param_to_stack_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
                     }
                 };
 
-                // Reference-type by-ref parameters need writable slot backing so assignments like
-                // `ref SomeClass x; x = newObj;` update the original object[] argument array.
+                // Reference-type by-ref parameters write into the temporary argument array;
+                // successful calls copy the changed slot back to the caller's array.
                 Ok(UnboxedInvokeArg {
                     stack_value: StackValue::managed_ptr_with_owner(
                         data_ptr,
