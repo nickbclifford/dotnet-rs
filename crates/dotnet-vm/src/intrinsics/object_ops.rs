@@ -60,7 +60,7 @@ pub fn runtime_helpers_try_get_hash_code<'gc, T: TypedStackOps<'gc>>(
 #[dotnet_intrinsic("string System.Object::ToString()")]
 pub(super) fn object_to_string<
     'gc,
-    T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc> + ExceptionOps<'gc>,
+    T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -70,12 +70,8 @@ pub(super) fn object_to_string<
 
     let type_name = if let StackValue::ObjectRef(obj_ref) = this {
         if obj_ref.0.is_some() {
-            obj_ref.as_heap_storage(|storage| match storage {
-                HeapStorage::Obj(o) => o.description.type_name(),
-                HeapStorage::Str(_) => "System.String".to_string(),
-                HeapStorage::Vec(_) => "System.Array".to_string(),
-                HeapStorage::Boxed(_) => "System.ValueType".to_string(),
-            })
+            runtime_type_from_heap(ctx.loader().as_ref(), obj_ref)
+                .display_name(ctx.loader().as_ref())
         } else {
             return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
         }
@@ -432,6 +428,76 @@ pub(super) fn enum_has_flag<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc>>(
     StepResult::Continue
 }
 
+fn runtime_type_from_desc(td: TypeDescription) -> RuntimeType {
+    match td.type_name().as_str() {
+        "System.Boolean" => RuntimeType::Boolean,
+        "System.Char" => RuntimeType::Char,
+        "System.SByte" => RuntimeType::Int8,
+        "System.Byte" => RuntimeType::UInt8,
+        "System.Int16" => RuntimeType::Int16,
+        "System.UInt16" => RuntimeType::UInt16,
+        "System.Int32" => RuntimeType::Int32,
+        "System.UInt32" => RuntimeType::UInt32,
+        "System.Int64" => RuntimeType::Int64,
+        "System.UInt64" => RuntimeType::UInt64,
+        "System.Single" => RuntimeType::Float32,
+        "System.Double" => RuntimeType::Float64,
+        "System.IntPtr" => RuntimeType::IntPtr,
+        "System.UIntPtr" => RuntimeType::UIntPtr,
+        _ => RuntimeType::Type(td),
+    }
+}
+
+fn runtime_type_from_object(loader: &AssemblyLoader, object: &Object<'_>) -> RuntimeType {
+    let type_arity = object.description.definition().generic_parameters.len();
+    if type_arity == 0 {
+        return runtime_type_from_desc(object.description.clone());
+    }
+
+    let type_args: Vec<_> = object
+        .generics
+        .type_generics
+        .iter()
+        .take(type_arity)
+        .cloned()
+        .collect();
+
+    if type_args.len() != type_arity {
+        return RuntimeType::Type(object.description.clone());
+    }
+
+    let concrete = ConcreteType::new(
+        object.description.resolution.clone(),
+        BaseType::Type {
+            source: TypeSource::Generic {
+                base: UserType::Definition(object.description.index),
+                parameters: type_args,
+            },
+            value_kind: None,
+        },
+    );
+
+    runtime_type_from_concrete(loader, &concrete)
+        .unwrap_or_else(|| RuntimeType::Type(object.description.clone()))
+}
+
+fn runtime_type_from_heap(loader: &AssemblyLoader, object_ref: ObjectRef<'_>) -> RuntimeType {
+    object_ref.as_heap_storage(|storage| match storage {
+        HeapStorage::Obj(o) => runtime_type_from_object(loader, o),
+        HeapStorage::Str(_) => RuntimeType::String,
+        HeapStorage::Vec(v) => {
+            let element_rt =
+                runtime_type_from_concrete(loader, &v.element).unwrap_or(RuntimeType::Object);
+            if v.dims.len() <= 1 {
+                RuntimeType::Vector(Box::new(element_rt))
+            } else {
+                RuntimeType::Array(Box::new(element_rt), v.dims.len() as u32)
+            }
+        }
+        HeapStorage::Boxed(o) => runtime_type_from_object(loader, o),
+    })
+}
+
 #[dotnet_intrinsic("System.Type System.Object::GetType()")]
 pub(super) fn object_get_type<
     'gc,
@@ -441,76 +507,6 @@ pub(super) fn object_get_type<
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    fn runtime_type_from_desc(td: TypeDescription) -> RuntimeType {
-        match td.type_name().as_str() {
-            "System.Boolean" => RuntimeType::Boolean,
-            "System.Char" => RuntimeType::Char,
-            "System.SByte" => RuntimeType::Int8,
-            "System.Byte" => RuntimeType::UInt8,
-            "System.Int16" => RuntimeType::Int16,
-            "System.UInt16" => RuntimeType::UInt16,
-            "System.Int32" => RuntimeType::Int32,
-            "System.UInt32" => RuntimeType::UInt32,
-            "System.Int64" => RuntimeType::Int64,
-            "System.UInt64" => RuntimeType::UInt64,
-            "System.Single" => RuntimeType::Float32,
-            "System.Double" => RuntimeType::Float64,
-            "System.IntPtr" => RuntimeType::IntPtr,
-            "System.UIntPtr" => RuntimeType::UIntPtr,
-            _ => RuntimeType::Type(td),
-        }
-    }
-
-    fn runtime_type_from_object(loader: &AssemblyLoader, object: &Object<'_>) -> RuntimeType {
-        let type_arity = object.description.definition().generic_parameters.len();
-        if type_arity == 0 {
-            return runtime_type_from_desc(object.description.clone());
-        }
-
-        let type_args: Vec<_> = object
-            .generics
-            .type_generics
-            .iter()
-            .take(type_arity)
-            .cloned()
-            .collect();
-
-        if type_args.len() != type_arity {
-            return RuntimeType::Type(object.description.clone());
-        }
-
-        let concrete = ConcreteType::new(
-            object.description.resolution.clone(),
-            BaseType::Type {
-                source: TypeSource::Generic {
-                    base: UserType::Definition(object.description.index),
-                    parameters: type_args,
-                },
-                value_kind: None,
-            },
-        );
-
-        runtime_type_from_concrete(loader, &concrete)
-            .unwrap_or_else(|| RuntimeType::Type(object.description.clone()))
-    }
-
-    fn runtime_type_from_heap(loader: &AssemblyLoader, object_ref: ObjectRef<'_>) -> RuntimeType {
-        object_ref.as_heap_storage(|storage| match storage {
-            HeapStorage::Obj(o) => runtime_type_from_object(loader, o),
-            HeapStorage::Str(_) => RuntimeType::String,
-            HeapStorage::Vec(v) => {
-                let element_rt =
-                    runtime_type_from_concrete(loader, &v.element).unwrap_or(RuntimeType::Object);
-                if v.dims.len() <= 1 {
-                    RuntimeType::Vector(Box::new(element_rt))
-                } else {
-                    RuntimeType::Array(Box::new(element_rt), v.dims.len() as u32)
-                }
-            }
-            HeapStorage::Boxed(o) => runtime_type_from_object(loader, o),
-        })
-    }
-
     let this = ctx.pop();
     let rt = match this {
         StackValue::ObjectRef(this_ref) => {

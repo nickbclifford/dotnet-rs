@@ -75,6 +75,10 @@ pub fn intrinsic_type_get_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
 #[dotnet_intrinsic("System.Type System.Type::MakeGenericType(System.Type[])")]
 #[dotnet_intrinsic("System.Type System.Type::MakeByRefType()")]
 #[dotnet_intrinsic("System.Type System.Type::MakeArrayType()")]
+#[dotnet_intrinsic("string System.RuntimeType::ToString()")]
+#[dotnet_intrinsic("string DotnetRs.RuntimeType::ToString()")]
+#[dotnet_intrinsic("string System.RuntimeType::get_FullName()")]
+#[dotnet_intrinsic("string DotnetRs.RuntimeType::get_FullName()")]
 #[dotnet_intrinsic("string System.RuntimeType::get_Name()")]
 #[dotnet_intrinsic("string System.RuntimeType::GetName()")]
 #[dotnet_intrinsic("string System.RuntimeType::get_Namespace()")]
@@ -191,6 +195,8 @@ pub fn runtime_type_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
         ("GetNestedTypes", 1) => handle_get_nested_types(ctx, generics),
         ("InvokeMember", 8) => handle_invoke_member(ctx, generics),
         ("GetName" | "get_Name", 0) => handle_get_name(ctx, generics),
+        ("get_FullName", 0) => handle_get_full_name(ctx, generics),
+        ("ToString", 0) => handle_type_to_string(ctx, generics),
         ("GetBaseType" | "get_BaseType", 0) => handle_get_base_type(ctx, generics),
         ("GetIsGenericType" | "get_IsGenericType", 0) => handle_get_is_generic_type(ctx, generics),
         ("GetIsGenericTypeDefinition" | "get_IsGenericTypeDefinition", 0) => {

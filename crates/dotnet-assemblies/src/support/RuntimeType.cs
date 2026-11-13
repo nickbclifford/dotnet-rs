@@ -84,15 +84,10 @@ internal class RuntimeType : Type
 
     public override extern string Name { [MethodImpl(MethodImplOptions.InternalCall)] get; }
 
-    public override string FullName
-    {
-        get
-        {
-            var name = Name;
-            var ns = Namespace;
-            return ns == null ? name : $"{ns}.{name}";
-        }
-    }
+    public override extern string? FullName { [MethodImpl(MethodImplOptions.InternalCall)] get; }
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    public override extern string ToString();
 
     [MethodImpl(MethodImplOptions.InternalCall)]
     private extern Module GetModule();

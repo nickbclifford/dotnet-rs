@@ -937,3 +937,8 @@ diff_test!(
     jagged_interface_cast_matches_dotnet,
     "tests/fixtures/arrays/jagged_interface_cast_42.cs"
 );
+
+diff_test!(
+    type_names_match_dotnet,
+    "tests/fixtures/reflection/type_names_42.cs"
+);

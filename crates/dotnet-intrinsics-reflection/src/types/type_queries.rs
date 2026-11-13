@@ -518,6 +518,30 @@ pub fn intrinsic_type_get_type_handle<'gc, T: TypedStackOps<'gc> + LoaderOps + M
     StepResult::Continue
 }
 
+pub fn handle_get_full_name<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let obj = ctx.pop_obj();
+    let target = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
+    match target.full_name(ctx.loader().as_ref()) {
+        Some(name) => ctx.push_string(name.into()),
+        None => ctx.push(StackValue::null()),
+    }
+    StepResult::Continue
+}
+
+pub fn handle_type_to_string<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let obj = ctx.pop_obj();
+    let target = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
+    let name = target.display_name(ctx.loader().as_ref());
+    ctx.push_string(name.into());
+    StepResult::Continue
+}
+
 pub fn handle_get_namespace<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     _generics: &GenericLookup,

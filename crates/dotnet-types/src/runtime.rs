@@ -343,3 +343,148 @@ runtime_type_impls! {
 }
 
 static_collect!(RuntimeType);
+
+impl RuntimeType {
+    /// The CLR's Type.ToString representation.
+    pub fn display_name(&self, loader: &impl TypeResolver) -> String {
+        self.format_name(loader, false)
+            .unwrap_or_else(|| self.get_name())
+    }
+
+    /// The CLR's Type.FullName representation (absent for open constructed types).
+    pub fn full_name(&self, loader: &impl TypeResolver) -> Option<String> {
+        self.format_name(loader, true)
+    }
+
+    fn assembly_resolution(&self, loader: &impl TypeResolver) -> ResolutionS {
+        match self {
+            Self::Vector(t)
+            | Self::Array(t, _)
+            | Self::Pointer(t)
+            | Self::ByRef(t)
+            | Self::ValuePointer(t, _) => t.assembly_resolution(loader),
+            _ => self.resolution(loader),
+        }
+    }
+
+    fn format_name(&self, loader: &impl TypeResolver, full: bool) -> Option<String> {
+        use RuntimeType::*;
+        fn definition_name(td: &TypeDescription) -> std::string::String {
+            fn nested(
+                td: &TypeDescription,
+                index: dotnetdll::prelude::TypeIndex,
+            ) -> std::string::String {
+                let def = &td.resolution.definition()[index];
+                match def.encloser {
+                    Some(parent) => format!("{}+{}", nested(td, parent), def.name),
+                    None => def.type_name(),
+                }
+            }
+            nested(td, td.index)
+        }
+        match self {
+            Type(td) => Some(definition_name(td)),
+            Generic(td, args) => {
+                let mut name = definition_name(td);
+                let definition = args.iter().enumerate().all(|(i, arg)| matches!(arg, TypeParameter { owner, index } if owner == td && *index as usize == i));
+                if full && definition {
+                    return Some(name);
+                }
+                let mut parts = Vec::with_capacity(args.len());
+                for arg in args {
+                    if full {
+                        let arg_name = arg.format_name(loader, true)?;
+                        let resolution = arg.assembly_resolution(loader);
+                        let assembly = resolution.definition().assembly.as_ref()?;
+                        let v = assembly.version;
+                        let token = assembly
+                            .public_key
+                            .as_ref()
+                            .map(|key| public_key_token(key))
+                            .unwrap_or_else(|| "null".into());
+                        parts.push(format!("[{arg_name}, {}, Version={}.{}.{}.{}, Culture={}, PublicKeyToken={token}]", assembly.name, v.major, v.minor, v.build, v.revision, assembly.culture.as_deref().unwrap_or("neutral")));
+                    } else {
+                        parts.push(arg.display_name(loader));
+                    }
+                }
+                name.push('[');
+                name.push_str(&parts.join(","));
+                name.push(']');
+                Some(name)
+            }
+            Vector(t) => Some(format!("{}[]", t.format_name(loader, full)?)),
+            Array(t, rank) => Some(format!(
+                "{}[{}]",
+                t.format_name(loader, full)?,
+                if *rank == 1 {
+                    "*".into()
+                } else {
+                    ",".repeat(rank.saturating_sub(1) as usize)
+                }
+            )),
+            Pointer(t) | ValuePointer(t, _) => Some(format!("{}*", t.format_name(loader, full)?)),
+            ByRef(t) => Some(format!("{}&", t.format_name(loader, full)?)),
+            TypeParameter { .. } | MethodParameter { .. } if full => None,
+            TypeParameter { .. } | MethodParameter { .. } | FunctionPointer(_) => {
+                Some(self.get_name())
+            }
+            _ => Some(format!("System.{}", self.get_name())),
+        }
+    }
+}
+
+// ECMA-335 assembly identities use the last eight bytes of SHA-1, reversed.
+fn public_key_token(key: &[u8]) -> String {
+    let mut bytes = key.to_vec();
+    let bits = (bytes.len() as u64) * 8;
+    bytes.push(0x80);
+    while bytes.len() % 64 != 56 {
+        bytes.push(0);
+    }
+    bytes.extend_from_slice(&bits.to_be_bytes());
+    let mut h = [
+        0x67452301u32,
+        0xefcdab89,
+        0x98badcfe,
+        0x10325476,
+        0xc3d2e1f0,
+    ];
+    for chunk in bytes.chunks_exact(64) {
+        let mut w = [0u32; 80];
+        for (i, word) in chunk.chunks_exact(4).enumerate() {
+            w[i] = u32::from_be_bytes(word.try_into().unwrap());
+        }
+        for i in 16..80 {
+            w[i] = (w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]).rotate_left(1);
+        }
+        let [mut a, mut b, mut c, mut d, mut e] = h;
+        for (i, word) in w.iter().enumerate() {
+            let (f, k) = match i {
+                0..=19 => ((b & c) | (!b & d), 0x5a827999u32),
+                20..=39 => (b ^ c ^ d, 0x6ed9eba1),
+                40..=59 => ((b & c) | (b & d) | (c & d), 0x8f1bbcdc),
+                _ => (b ^ c ^ d, 0xca62c1d6),
+            };
+            let t = a
+                .rotate_left(5)
+                .wrapping_add(f)
+                .wrapping_add(e)
+                .wrapping_add(k)
+                .wrapping_add(*word);
+            e = d;
+            d = c;
+            c = b.rotate_left(30);
+            b = a;
+            a = t;
+        }
+        for (x, y) in h.iter_mut().zip([a, b, c, d, e]) {
+            *x = x.wrapping_add(y);
+        }
+    }
+    let digest: Vec<u8> = h.iter().flat_map(|x| x.to_be_bytes()).collect();
+    digest[12..]
+        .iter()
+        .rev()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}

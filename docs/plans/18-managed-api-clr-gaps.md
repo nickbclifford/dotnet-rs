@@ -1,6 +1,6 @@
 # Managed API gaps against the CLR
 
-**Status:** Slices 1–3 implemented; Newtonsoft exposes a subsequent runtime-type gap (see `evidence/18-array-casts-host-rungs.txt`).
+**Status:** Slices 1–4 implemented; Newtonsoft exposes a subsequent runtime-type gap (see `evidence/18-array-casts-host-rungs.txt`).
 **Outcome:** The Newtonsoft host rung matches `dotnet` again, and new diff fixtures for array
 casts, delegate invocation lists, `Synchronized` value-type methods, `Type`/`Object.ToString` and
 `Type.IsByRefLike` match `dotnet` in ST and MT.
