@@ -201,8 +201,7 @@ impl GCArena {
                             c.stack.local.heap.active_dependents.borrow_mut().clear()
                         });
                     }
-                    if let Some(marked) = self.arena.mark_debt() {
-                        drop(marked);
+                    if self.arena.mark_debt().is_some() {
                         self.finish_single_dependents();
                         self.start_sweeping();
                     }
@@ -219,8 +218,7 @@ impl GCArena {
                         c.stack.local.heap.active_dependents.borrow_mut().clear()
                     });
                 }
-                if let Some(marked) = self.arena.finish_marking() {
-                    drop(marked);
+                if self.arena.finish_marking().is_some() {
                     self.finish_single_dependents();
                     self.start_sweeping();
                 }

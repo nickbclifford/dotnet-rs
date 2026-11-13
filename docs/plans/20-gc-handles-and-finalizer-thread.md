@@ -1,6 +1,6 @@
 # Shared GC handles and a dedicated finalizer thread
 
-**Status:** Slices 1–2 complete
+**Status:** In progress — slices 1–2 complete; slice 3 revised into 3a/3b
 **Outcome:** Under `multithreading`, finalizers run on one background finalizer thread with its own
 identity, GC handles are readable from any thread, and the process exits without waiting for
 finalizers; the GC fixtures listed under each slice match `dotnet` through the diff harness.
@@ -62,12 +62,30 @@ Out:
 ## Design
 
 - **One shared handle table.** Move handles into `SharedGlobalState` as a thread-safe table of
-  `ObjectPtr` + kind, following `SharedReflectionRegistry`: every arena traces strong and pinned
-  entries from `CallStack::trace` (foreign targets enter the cross-arena fixed point), and
-  `ClearWeak` clears short entries by target color. A reader turns the pointer into a local
-  `ObjectRef` while the table roots it (`ObjectRef::from_storage_ptr`). Dependent handles join the
-  same table. Use the same table in single-threaded builds unless the `runtime_primitives`
-  benchmark shows a measurable cost; one path is preferred.
+  `ObjectPtr` + kind, traced from every arena's `CallStack::trace` like
+  `SharedReflectionRegistry` (plan 14). Handle values stay index-based; the index is unique once
+  the table is global. A reader turns the pointer into a local `ObjectRef` while the table roots
+  it (`ObjectRef::from_storage_ptr`). Use the same table in single-threaded builds unless the
+  `runtime_primitives` benchmark shows a measurable cost; one path is preferred.
+- **Owner partition.** Every collection-time operation on the shared table is done by the arena
+  that owns the object concerned (`ObjectRef::owner_id`), so no arena reads another arena's mark
+  colors:
+  - *Strong and pinned:* each arena traces the entries whose target it owns; the owner marks the
+    target directly, so these entries add no cross-arena records.
+  - *Short weak:* in `SweepPhaseCommand::ClearWeak` (after the marking fixed point, before any
+    Finalize), each arena clears the dead entries whose target it owns. Long weak entries keep
+    today's post-resurrection clearing until slice 4 moves it.
+  - *Dependent:* slice 1's fixed point (`MarkPhaseCommand::Dependents` → `TraceDependents`,
+    repeated until nothing activates) runs over the shared table. In `Dependents`, the key's owner
+    activates the entry in a shared active set if the key is live; in `TraceDependents`, each
+    arena traces the active values it owns. The key's owner clears both halves in `ClearWeak`
+    when the key is dead.
+  - Retired arenas keep servicing collection until shutdown
+    (`F1.RetiredCollectionExclusion`), so every entry's owner takes part in each collection.
+- **Mutation during collection.** A handle allocated or set from another thread while a
+  collection is in progress must still be traced. Confirm that the collector re-traces arena
+  roots at the end of marking (the property plan 14's registry relies on), and record that
+  justification in a `SAFETY`/`INVARIANT` comment that cites the registry.
 - **Resurrection.** Iterative walk that stops at foreign edges. The coordinator promotes objects
   awaiting finalization as roots before Finalize (CLR "f-reachable" promotion) so their foreign
   dependents survive, and long weak handles are cleared in a phase after every arena's Finalize.
@@ -94,12 +112,22 @@ Out:
    `gc_resurrection_*` fixtures and the port as diff tests (remove `new ...; r = null;` liveness
    dependence by allocating in non-inlined helpers), and record which cases genuinely differ.
    Update the README claim to match.
-3. **Shared handle table.** Move all handle kinds to the shared table, including
-   `AddrOfPinnedObject` and pinning. Fixture (`multithreading`): a `WeakReference` and a strong
-   `GCHandle` created on one thread, read, set and freed on another, before and after the creator
-   exits, with collections in between. Update `executor_collection_tests.rs`, which pushes into
-   `gchandles` directly. Add the table to `GC_AND_MEMORY_SAFETY.md` roots and the pointer
-   inventory.
+3. **Shared handle table** (revised 2026-11-13 after the first attempt stopped on
+   unspecified cross-arena coordination; see Design, "Owner partition").
+   - **3a. Normal, pinned and weak handles.** Move these kinds, including `AddrOfPinnedObject`
+     and pinning, to the shared table with owner-partitioned tracing and `ClearWeak` clearing.
+     Register `gc/cross_thread_handles_42.cs` (written in the first attempt: a strong `GCHandle`
+     and a `WeakReference` created on one thread, read and set from another, before and after the
+     creator exits, with collections in between; exits 42 on .NET) as a diff test. Update
+     `executor_collection_tests.rs`, which pushes into `gchandles` directly. Add the table to
+     `GC_AND_MEMORY_SAFETY.md` roots and the pointer inventory.
+   - **3b. Dependent handles.** Move dependent handles to the same table, running slice 1's
+     fixed point over it with owner-partitioned activation, tracing and clearing; delete the
+     per-arena `dependent_handles` and `active_dependents`. Fixture (`multithreading`): a
+     `ConditionalWeakTable` entry added on one thread and looked up on another; a value kept
+     alive only through the table survives collection; the entry disappears after its key is
+     collected, including after the creating thread exits; a key in one arena with its value in
+     another. `conditional_weak_table_42` must still pass in ST and MT.
 4. **Cross-arena resurrection.** Iterative walk, f-reachable promotion, long-weak clearing after
    all Finalize phases. Fixtures: a resurrected object whose only path to a foreign object is
    through itself, a 10,000-node resurrected list (today a panic), and a cross-arena long weak
@@ -140,6 +168,8 @@ Out:
 
 - The shared handle table costs measurably more than the per-arena table on single-threaded
   benchmarks (then decide whether single-threaded builds keep a local table).
+- The owner partition cannot express an operation without reading a foreign arena's mark colors,
+  or the collector does not re-trace roots at the end of marking.
 - Running a finalizer with a foreign `this` needs a new access protocol beyond leases.
 - Slice 2 shows a CLR disagreement that a dedicated finalizer thread does not explain.
 - Stopping the finalizer thread at shutdown requires freeing arenas while a finalizer is

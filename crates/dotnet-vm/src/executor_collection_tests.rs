@@ -677,7 +677,7 @@ fn dependent_handle_chain_survives_and_clears() {
     executor
         .with_arena(|arena| {
             arena.mutate_root(|gc, engine| {
-                // SAFETY: The objects and handles stay within this live arena.
+                // SAFETY: F1.GcHandleRooted — engine is the live arena root, and the handle and objects stay within this mutation.
                 let handle = unsafe { crate::test_utils::test_gc_handle(gc, engine) };
                 let key = ObjectRef::new(handle, HeapStorage::Str(CLRString::from("key")));
                 let middle = ObjectRef::new(handle, HeapStorage::Str(CLRString::from("middle")));
