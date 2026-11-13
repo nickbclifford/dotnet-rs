@@ -7,6 +7,8 @@
 //! - [`JSON_BENCHMARK`]: JSON parsing and serialization throughput.
 //! - [`ARITHMETIC_BENCHMARK`]: Tight arithmetic loop — baseline execution throughput.
 //! - [`GC_BENCHMARK`]: Allocation pressure and GC throughput.
+//! - [`GC_HANDLE_OPS_BENCHMARK`], [`WEAK_REFERENCE_GET_BENCHMARK`],
+//!   [`CONDITIONAL_WEAK_TABLE_BENCHMARK`]: GC handle, weak reference and dependent-handle operations.
 //! - [`EXCEPTION_MESSAGES_BENCHMARK`]: Repeated thrown exceptions and default message lookup.
 //! - [`RESOURCE_COLD_LOAD_BENCHMARK`]: First resource lookups in a fresh VM.
 //! - [`RESOURCE_WARM_LOOKUP_BENCHMARK`]: Repeated lookups in an initialized VM.
@@ -65,6 +67,30 @@ pub const GC_BENCHMARK: BenchmarkCase = BenchmarkCase {
     name: "gc",
     fixture: BenchmarkFixture::SingleFile {
         source: "fixtures/gc/AllocationPressure_0.cs",
+    },
+    expected_exit_code: 0,
+};
+
+pub const GC_HANDLE_OPS_BENCHMARK: BenchmarkCase = BenchmarkCase {
+    name: "gc_handle_ops",
+    fixture: BenchmarkFixture::SingleFile {
+        source: "fixtures/gc_handles/GcHandleOps_0.cs",
+    },
+    expected_exit_code: 0,
+};
+
+pub const WEAK_REFERENCE_GET_BENCHMARK: BenchmarkCase = BenchmarkCase {
+    name: "weak_reference_get",
+    fixture: BenchmarkFixture::SingleFile {
+        source: "fixtures/gc_handles/WeakReferenceGet_0.cs",
+    },
+    expected_exit_code: 0,
+};
+
+pub const CONDITIONAL_WEAK_TABLE_BENCHMARK: BenchmarkCase = BenchmarkCase {
+    name: "conditional_weak_table_ops",
+    fixture: BenchmarkFixture::SingleFile {
+        source: "fixtures/gc_handles/ConditionalWeakTableOps_0.cs",
     },
     expected_exit_code: 0,
 };
@@ -239,10 +265,13 @@ pub const RESOURCE_WARM_LOOKUP_BENCHMARK: BenchmarkCase = BenchmarkCase {
     expected_exit_code: 0,
 };
 
-pub const BENCHMARK_CASES: [BenchmarkCase; 23] = [
+pub const BENCHMARK_CASES: [BenchmarkCase; 26] = [
     JSON_BENCHMARK,
     ARITHMETIC_BENCHMARK,
     GC_BENCHMARK,
+    GC_HANDLE_OPS_BENCHMARK,
+    WEAK_REFERENCE_GET_BENCHMARK,
+    CONDITIONAL_WEAK_TABLE_BENCHMARK,
     ALLOC_THROUGHPUT_BENCHMARK,
     GC_CROSS_ARENA_BENCHMARK,
     DISPATCH_BENCHMARK,
