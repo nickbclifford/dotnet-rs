@@ -48,14 +48,16 @@ Evidence and IDs (p01…, R01…) are defined in the
   static fields and `GetValue` returns null (`crates/dotnet-intrinsics-reflection/src/fields.rs`).
   Needs static storage lookup, type-initializer triggering and access checks; surfaced by plan 21
   slice 4's pointer-slot fixture, which therefore covers instance pointer fields only.
-- **Managed resource lookup cost:** after plan 15 removed the `SR` resource-string intrinsic, the
-  `exception_messages` benchmark (cold first `ResourceManager` load plus 127 lookups, fresh VM
-  per iteration) went from about 3.4 ms to about 121 ms (~35x). Accepted by the maintainer for
-  correctness (CLR-matching messages, no VM-side decoder). Fresh-VM first lookups account for
-  substantial cost and repeated exception/message lookups also cost time; profile (samply) and
-  optimize. The warm case includes exception handling rather than isolating dictionary lookup.
-  Numbers and commands are in
-  [plan 15](15-corelib-task-and-thread-pool.md).
+- **Warm managed resource lookup cost:** after plan 15 removed the `SR` resource-string
+  intrinsic, `exception_messages` went from about 3.4 ms to about 121 ms; accepted for
+  CLR-matching messages (no VM-side decoder). Serving manifest resources as an
+  `UnmanagedMemoryStream`, as the CLR does, cut the cold first load (`resource_cold_load`
+  94 → 8 ms) and `exception_messages` to about 38 ms, but `resource_warm_lookup` rose from about
+  31 to 38 ms (not investigated). A warm lookup is about 35 managed calls and about 230 µs, and
+  that cost is general per-call overhead, not resource-specific: flat profiles are dominated by
+  rebuilding `MethodDescription`, `ResolutionContext` and `VmResolverService` and by virtual
+  resolution on every call. Caching resolved targets per call site would help the whole VM.
+  Plan 15 has the older numbers and commands.
 - **Dynamic code without Reflection.Emit:** the VM reports `IsDynamicCodeSupported` true (EF Core
   treats false as NativeAOT) and `IsDynamicCodeCompiled` false (plan 18 slice 7). Code that checks
   only `IsDynamicCodeSupported` and then emits IL fails; two such paths are patched per call site
@@ -113,20 +115,35 @@ Evidence and IDs (p01…, R01…) are defined in the
 - **Thread-static retention:** thread-static storage and its object references remain rooted until
   VM shutdown, including after an explicit worker exits, so outstanding byrefs remain valid.
   Reclaiming these values when no byref can reach them remains unplanned.
-- **`Span<byte>.Clear()` is very slow on large spans:** clearing 3 MiB takes about 42 s and never
-  reaches the `SpanHelpers.ClearWithoutReferences` intrinsic, so it runs as interpreted IL
-  (found in [plan 16](16-retire-legacy-continuations.md) slice 6; present before it). Find the
-  path `Clear` takes in this CoreLib and route it to the intrinsic.
+- **Support `Span<T>.CopyTo` is a per-element loop:** `Span<T>.CopyTo` and
+  `ReadOnlySpan<T>.CopyTo` in `crates/dotnet-assemblies/src/support/Span.cs` copy one element at
+  a time in interpreted IL, so large copies are as slow as `Clear` was before it was routed to
+  `initblk`. The forward loop also differs from the CLR when the spans overlap and the
+  destination starts after the source. Route both to `Buffer.Memmove`.
 - **String benchmark is code-placement sensitive in MT:** `string` moved +7% in plan 16 slice 6
   (and +33%, then −8%, in slice 3) with unchanged instruction counts, because its hot
-  `IsNullOrWhiteSpace` loop shifts across cache-line boundaries as the binary changes. Compare
-  `perf stat` instructions before attributing a `string` change to a commit; consider aligning
-  hot intrinsic loops if this keeps masking real changes.
+  `IsNullOrWhiteSpace` loop shifts across cache-line boundaries as the binary changes. Measured
+  2026-11-14: layouts differ by 6–8% with identical instructions per iteration, and the slow
+  layouts have twice the frontend stalls. Building with `-C llvm-args=-align-loops=64` gave the
+  fast time on the two layouts tried; check more layouts and the `dispatch` bench before adding
+  it to the bench profile. Until then, compare `perf stat` instructions before attributing a
+  `string` change to a commit.
 - **Other missing or incorrect runtime behavior:**
   - Buffered stdout lost on an internal-error exit: not reproduced. The VM has no stdout buffer
     of its own (`Console` writes reach `write(2)` through the native shim, and the CLI flushes
     stdio on every exit path), so a repro (a fixture that writes, then fails with `Internal VM
     error`) is needed first.
+  - Extern `System.Math` methods without handlers: only `Abs`, `Max`, `Min`, `Pow` and `Sqrt`
+    are registered, so `Math.Ceiling` (and other extern FCalls such as `Floor`) fail with "no
+    body in executing method"; `Stopwatch.Elapsed.TotalMilliseconds` reaches it.
+  - `Array.Fill<T>(T[], T)` fails with `MethodNotFound` because the support `DotnetRs.Array`
+    replaces `System.Array` without a `Fill`.
+  - Generic-arity checks are incomplete: method-generic reads in intrinsics go through
+    `MethodDescription::own_method_arg`, except `Activator.CreateInstance<T>` in
+    `crates/dotnet-vm/src/stack/native_effects.rs`. Intrinsics reading type generics
+    (`Span<T>.get_Item`, `EqualityComparer<T>.Default`, ...) are not checked against the
+    declaring type's arity, and constrained calls and effect resumption were not audited for
+    caller generics leaking into callees.
 - **Loom model coverage:** the hand-written `loom_stw.rs` model does not compile the production
   `WorkerRegistry` and does not cover every stop-the-world, retirement or shutdown interleaving.
   `dotnet-vm` does not compile under `cfg(loom)` with `multithreading`, so only
