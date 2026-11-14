@@ -3,51 +3,38 @@
 use crate::{ReflectionIntrinsicHost, types::string_from_heap_obj};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
-    TypeDescription, WellKnown,
+    TypeDescription,
     error::{ExecutionError, VmError},
-    generics::{ConcreteType, GenericLookup},
+    generics::GenericLookup,
     members::MethodDescription,
-    runtime::RuntimeType,
 };
 use dotnet_value::StackValue;
 use dotnet_vm_data::StepResult;
-use dotnetdll::prelude::{MethodMemberIndex, ParameterType, resource::Implementation};
+use dotnetdll::prelude::{MethodMemberIndex, resource::Implementation};
 
-fn find_memory_stream_byte_array_ctor<'gc, T: ReflectionIntrinsicHost<'gc>>(
-    ctx: &T,
+/// `UnmanagedMemoryStream(byte* pointer, long length)`: the only two-parameter constructor.
+fn find_unmanaged_memory_stream_ctor(
     memory_stream_type: &TypeDescription,
 ) -> Option<MethodDescription> {
     let lookup = GenericLookup::default();
-
-    for (idx, method) in memory_stream_type.definition().methods.iter().enumerate() {
-        if method.name != ".ctor" {
-            continue;
-        }
-
-        let candidate = MethodDescription::new(
-            memory_stream_type.clone(),
-            lookup.clone(),
-            memory_stream_type.resolution.clone(),
-            MethodMemberIndex::Method(idx),
-        );
-        let signature = candidate.signature();
-
-        if !signature.instance || signature.parameters.len() != 1 {
-            continue;
-        }
-
-        let ParameterType::Value(parameter_type) = &signature.parameters[0].1 else {
-            continue;
-        };
-
-        let runtime_type =
-            ctx.reflection_make_runtime_type_for_method(candidate.clone(), &lookup, parameter_type);
-        if matches!(runtime_type, RuntimeType::Vector(inner) if *inner == RuntimeType::UInt8) {
-            return Some(candidate);
-        }
-    }
-
-    None
+    memory_stream_type
+        .definition()
+        .methods
+        .iter()
+        .enumerate()
+        .filter(|(_, method)| method.name == ".ctor")
+        .map(|(idx, _)| {
+            MethodDescription::new(
+                memory_stream_type.clone(),
+                lookup.clone(),
+                memory_stream_type.resolution.clone(),
+                MethodMemberIndex::Method(idx),
+            )
+        })
+        .find(|candidate| {
+            let signature = candidate.signature();
+            signature.instance && signature.parameters.len() == 2
+        })
 }
 
 #[dotnet_intrinsic(
@@ -92,28 +79,28 @@ pub fn intrinsic_runtime_assembly_get_manifest_resource_stream<
         return StepResult::Continue;
     };
 
-    let byte_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::Byte));
-    let mut byte_array =
-        dotnet_vm_ops::vm_try!(ctx.new_vector(ConcreteType::from(byte_type), resource_bytes.len()));
-    byte_array.get_mut().copy_from_slice(resource_bytes);
+    // Match the CLR: the stream is an UnmanagedMemoryStream over the metadata bytes, so that
+    // ResourceReader reads its name-hash and name-position tables in place instead of one
+    // BinaryReader.ReadInt32 (about seven managed calls) per entry. The metadata arena that owns
+    // `resource_bytes` outlives every resolution, hence the VM, and the stream is read-only.
+    let pointer = resource_bytes.as_ptr().expose_provenance() as isize;
+    let length = resource_bytes.len() as i64;
 
-    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
-    let byte_array_obj = ctx.alloc_vec_ref(gc, byte_array);
-
-    let memory_stream_type =
-        dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::IoMemoryStream));
-    let instance = dotnet_vm_ops::vm_try!(ctx.new_object(memory_stream_type.clone()));
+    let stream_type =
+        dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.IO.UnmanagedMemoryStream"));
+    let instance = dotnet_vm_ops::vm_try!(ctx.new_object(stream_type.clone()));
 
     let lookup = GenericLookup::default();
-    let Some(constructor) = find_memory_stream_byte_array_ctor(ctx, &memory_stream_type) else {
+    let Some(constructor) = find_unmanaged_memory_stream_ctor(&stream_type) else {
         return StepResult::Error(VmError::Execution(ExecutionError::InternalError(
-            "Could not find System.IO.MemoryStream::.ctor(byte[])".into(),
+            "Could not find System.IO.UnmanagedMemoryStream::.ctor(byte*, long)".into(),
         )));
     };
 
     let method_info = dotnet_vm_ops::vm_try!(ctx.reflection_method_info(constructor, &lookup));
 
-    ctx.push_obj(byte_array_obj);
+    ctx.push(StackValue::NativeInt(pointer));
+    ctx.push(StackValue::Int64(length));
     dotnet_vm_ops::vm_try!(ctx.reflection_constructor_frame(instance, method_info, lookup));
     StepResult::FramePushed
 }
