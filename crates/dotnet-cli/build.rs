@@ -262,6 +262,7 @@ fn main() {
             || file_name == "synchronized_method_42"
             || file_name == "canonical_type_objects_42"
             || file_name == "canonical_member_objects_42"
+            || file_name == "string_interning_mt_42"
             || file_name == "monitor_contended_lock_42"
             || file_name == "delegate_monitor_enter_42"
             || file_name == "delegate_multicast_contended_42"
@@ -309,7 +310,7 @@ fn main() {
             || file_name == "memmove_overlap_gc_42"
             || file_name == "bulk_fill_gc_42"
             || file_name == "equality_gc_42")
-            && (!is_multithreading_enabled || (is_fuzzing_enabled && matches!(file_name, "foreground_worker_42" | "thread_sleep_gc_42" | "thread_background_42" | "monitor_wait_threads_42" | "thread_identity_start_42" | "thread_cross_start_42" | "thread_retired_creator_42" | "retired_arena_cycles_42")))
+            && (!is_multithreading_enabled || (is_fuzzing_enabled && matches!(file_name, "string_interning_mt_42" | "foreground_worker_42" | "thread_sleep_gc_42" | "thread_background_42" | "monitor_wait_threads_42" | "thread_identity_start_42" | "thread_cross_start_42" | "thread_retired_creator_42" | "retired_arena_cycles_42")))
             // generic_constraints_fail_0 deliberately tests constraint-violation rejection;
             // that logic only exists under the generic-constraint-validation feature.
             || (file_name == "generic_constraints_fail_0"

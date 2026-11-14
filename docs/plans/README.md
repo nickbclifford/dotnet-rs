@@ -11,7 +11,7 @@ In priority order. Each plan's own `Status:` line is the only record of its stat
 | ID | Plan | Note |
 |---|---|---|
 | 21 | [Correctness backlog: byte-read bounds, pointer slots, feature forwarding, thread IDs and the timer flake](21-correctness-backlog.md) | Complete |
-| 22 | [String interning](22-string-interning.md) | Not started; `ldstr`, `string.Empty` and `String.Intern` identity |
+| 22 | [String interning](22-string-interning.md) | Complete; literal, empty and explicit interning identity across threads |
 | 18 | [Managed API gaps against the CLR](18-managed-api-clr-gaps.md) | Complete; Newtonsoft and EF host rungs match `dotnet` |
 | 19 | [Reflection invocation matches the CLR](19-reflection-invoke-clr-parity.md) | Complete; wrapping, byref returns, success-only copy-back and ambiguity match the CLR |
 | 20 | [Shared GC handles and a dedicated finalizer thread](20-gc-handles-and-finalizer-thread.md) | Complete; shared handle table, cross-arena resurrection and the dedicated finalizer thread |
@@ -143,10 +143,6 @@ Evidence and IDs (p01…, R01…) are defined in the
   `perf stat` instructions before attributing a `string` change to a commit; consider aligning
   hot intrinsic loops if this keeps masking real changes.
 - **Other missing or incorrect runtime behavior:**
-  - Empty strings have no shared identity: `string.Empty` allocates on every load
-    (`intrinsic_field_string_empty`), so `ReferenceEquals(string.Empty, string.Empty)` and
-    `ReferenceEquals(string.Empty, "")` are false (the CLR prints true for both), and APIs that
-    return `string.Empty` for empty results cannot do so.
   - Buffered stdout lost on an internal-error exit: not reproduced. The VM has no stdout buffer
     of its own (`Console` writes reach `write(2)` through the native shim, and the CLI flushes
     stdio on every exit path), so a repro (a fixture that writes, then fails with `Internal VM

@@ -1,6 +1,6 @@
 # String interning
 
-**Status:** Slice 3 complete
+**Status:** Complete
 **Outcome:** String literal identity, `string.Empty` identity and `String.Intern`/`IsInterned`
 match `dotnet` in a diff fixture under both feature sets, including the same literal loaded on two
 threads.
@@ -144,6 +144,19 @@ content. Both reject null. String constructors, substring, and three-span concat
 the interned empty object for empty results. `FastAllocateString` remains an allocation primitive.
 The full differential fixture covers explicit interning, UTF-16, nulls, collection roots, and
 empty results in addition to the literal cases.
+Workspace Clippy passes in both feature sets, doc drift passes, and all ten CLI/VM
+feature-matrix runs pass.
+
+### Slice 4 cross-thread identity
+
+The multithreading fixture exchanges literals, `string.Empty`, and concurrently interned
+computed strings between two workers. It checks the race winner and table roots after both
+workers exit and a collection runs; it matches .NET's output and exit code. The three
+multithreaded `vm-collection` cross-arena
+controls pass under pinned Tree Borrows Miri (with the existing permissive-provenance warnings).
+The VM does not compile with `cfg(loom)` and `multithreading`: its synchronization facade lacks
+`Condvar::wait_for` and a const atomic initializer, so the intern table cannot be modeled there.
+The existing `dotnet-runtime-memory` Loom shared-table suite passes, but does not cover strings.
 Workspace Clippy passes in both feature sets, doc drift passes, and all ten CLI/VM
 feature-matrix runs pass.
 

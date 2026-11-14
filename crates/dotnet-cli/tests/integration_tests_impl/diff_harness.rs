@@ -597,6 +597,12 @@ diff_test!(
 
 #[cfg(feature = "multithreading")]
 diff_test!(
+    string_interning_mt_42_matches_dotnet,
+    "tests/fixtures/threading/string_interning_mt_42.cs"
+);
+
+#[cfg(feature = "multithreading")]
+diff_test!(
     threading_monitor_contended_lock_42_matches_dotnet,
     "tests/fixtures/threading/monitor_contended_lock_42.cs"
 );
