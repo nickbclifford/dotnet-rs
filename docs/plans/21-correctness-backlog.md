@@ -1,6 +1,6 @@
 # Correctness backlog: byte-read bounds, pointer slots, feature forwarding, thread IDs and the timer flake
 
-**Status:** In progress (slice 1 complete; slices 2 and 3 implemented, matrix verification incomplete)
+**Status:** In progress (slice 1 complete; slices 2–4 implemented, matrix verification incomplete)
 **Outcome:** An overflowing heap byte read returns `BoundsCheck`, every CTS write into a pointer
 slot either stores the address or fails loudly, the standalone reflection feature compiles, the
 managed-ID counter goes through `dotnet_utils::sync`, and `threading_timer_callback_pool_thread_42` is either fixed
@@ -97,13 +97,18 @@ Out:
    sets and doc drift pass. Nine CLI/VM matrix configurations pass; the `fuzzing` run has six
    CLI fixture failures (484 passed), including the same missing `SystemNative_SetErrNo` noted
    in slice 2, so the full matrix requirement remains open.
-4. **Pointer-slot writes.** Write a `pointers/pointer_slot_writes_42.cs` diff fixture: reflection
+4. **Pointer-slot writes (implemented).** Write a `pointers/pointer_slot_writes_42.cs` diff fixture: reflection
    `FieldInfo.SetValue`/`GetValue` on instance pointer fields via
    `System.Reflection.Pointer.Box` (static reflection field access is unimplemented and tracked in
    the README's "Not yet planned" list), `stobj` of a pointer, pointer-element arrays, a struct with
    pointer fields stored through `stobj`, and boxed `IntPtr`/`UIntPtr` round trips. Fix whatever
    it exposes by making each caller choose the native-word encoding from the destination type.
-   Then make `CTSValue::write`'s pointer arm exhaustive as described in Design.
+   Then make `CTSValue::write`'s pointer arm exhaustive as described in Design. C# cannot
+   express `stobj` of a pointer, so `pointer_stobj_writes_native_word` exercises that IL directly.
+   The diff fixture passes with and without multithreading. Both clippy configurations, doc drift,
+   all ten VM matrix configurations and nine CLI configurations pass. The fuzzing CLI run has
+   223 passes and six failures from missing `SystemNative_SetErrNo` or `SystemNative_Calloc`
+   entry points; the pointer-slot fixture passes. The full matrix requirement remains open.
 5. **Timer flake.** First make failures diagnosable. Diff-harness exit-code assertions print the
    VM's stderr, and a VM run that exceeds a harness-side deadline is killed with its partial
    output reported, separately from the CLR run. Then reproduce under load: loop the full

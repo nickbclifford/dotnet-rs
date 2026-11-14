@@ -2619,6 +2619,30 @@ fn ptr_local() -> LocalVariable {
     local(BaseType::ValuePointer(vec![], None))
 }
 
+#[test]
+fn pointer_stobj_writes_native_word() {
+    let pointer_type = MethodType::Base(Box::new(BaseType::ValuePointer(vec![], None)));
+    let result = run_il(
+        "PointerStobj",
+        2,
+        vec![ptr_local()],
+        vec![
+            I::LoadLocalAddress(0),
+            I::LoadConstantInt32(42),
+            I::Convert(ConversionType::IntPtr),
+            I::StoreObject {
+                param0: pointer_type,
+                unaligned: None,
+                volatile: false,
+            },
+            I::LoadLocal(0),
+            I::Convert(ConversionType::Int32),
+            I::Return,
+        ],
+    );
+    assert_eq!(result, 42);
+}
+
 /// C#: byte* p = stackalloc byte[16]; byte** pp = &p; *pp = null; return p == null ? 1 : 0;
 #[test]
 fn p_null_through_pointer_local_address() {

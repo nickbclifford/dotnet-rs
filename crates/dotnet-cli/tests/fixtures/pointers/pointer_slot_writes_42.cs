@@ -25,6 +25,8 @@ public static unsafe class Program
         object boxed = Pointer.Box(p, typeof(int*));
         instance.SetValue(fields, boxed);
         if (fields.Instance != p || Pointer.Unbox(instance.GetValue(fields)!) != p) return 1;
+        instance.SetValue(fields, Pointer.Box(null, typeof(int*)));
+        if (fields.Instance != null || Pointer.Unbox(instance.GetValue(fields)!) != null) return 2;
         int*[] array = new int*[1];
         array[0] = p;
         if (array[0] != p) return 3;

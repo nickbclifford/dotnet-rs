@@ -148,14 +148,6 @@ Evidence and IDs (p01…, R01…) are defined in the
   failure message was not captured. After the pointer-static fix (next entry) 600 stress runs
   under load (6 x 100) did not reproduce it, but nothing ties it to that bug, so it stays open:
   reproduce under load and record the message before diagnosing.
-- **Pointer statics and `ManagedPtr` serialization:** `ldsfld`/`stsfld` of unmanaged-pointer
-  statics (including `[ThreadStatic]`, e.g. `ThreadBlockingInfo.t_first`) used the CTS codec,
-  which builds a `ManagedPtr` value and serialized it into the one-word field slot; fixed so
-  they load as native ints like `ldfld`, which cured the intermittent
-  `threading_threading_timer_idle_background_exit_42` access violation (any contended
-  `System.Threading.Lock` hit it). Still open: other callers of `new_cts_value` into pointer
-  slots (reflection `FieldInfo.SetValue`, boxed pointers) rely only on the `CTSValue::write`
-  one-word fallback, which silently zero-fills a slot that is neither 8 nor 24 bytes.
 - **Other missing or incorrect runtime behavior:**
   - Empty strings have no shared identity: `string.Empty` allocates on every load
     (`intrinsic_field_string_empty`), so `ReferenceEquals(string.Empty, string.Empty)` and
