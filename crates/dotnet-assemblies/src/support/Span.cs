@@ -97,9 +97,25 @@ namespace System
 
         public void Clear()
         {
-            for (int i = 0; i < _length; i++)
+            if (RuntimeHelpers.IsReferenceOrContainsReferences<T>())
             {
-                this[i] = default!;
+                // Object references are not raw words in this VM; clear them element by element.
+                for (int i = 0; i < _length; i++)
+                {
+                    this[i] = default!;
+                }
+                return;
+            }
+
+            // Reference-free elements: one initblk per up-to-uint.MaxValue bytes, no per-element IL.
+            ref byte start = ref Unsafe.As<T, byte>(ref _reference);
+            ulong remaining = (ulong)(uint)_length * (ulong)Unsafe.SizeOf<T>();
+            while (remaining != 0)
+            {
+                uint chunk = remaining > uint.MaxValue ? uint.MaxValue : (uint)remaining;
+                Unsafe.InitBlockUnaligned(ref start, 0, chunk);
+                start = ref Unsafe.AddByteOffset(ref start, (nuint)chunk);
+                remaining -= chunk;
             }
         }
 
