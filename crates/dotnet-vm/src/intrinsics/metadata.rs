@@ -163,11 +163,16 @@ pub fn classify_intrinsic(
         {
             // If we're here, it means the intrinsic was NOT found in the registry (step 1).
             //
-            // ECMA-335 does not know this attribute: it only permits a JIT to expand the call. The
-            // CLR guarantees the managed body is a correct implementation (`Math.Min(long, long)`,
-            // `BitOperations.PopCount`, ...), so a method with a body runs that body. Only a method
-            // without one has nothing to execute and is reported as a missing intrinsic.
-            if method.body().is_some() {
+            // ECMA-335 does not know this attribute: it only permits a JIT to expand the call. Most
+            // such bodies are correct software fallbacks (`Math.Min(long, long)`,
+            // `BitOperations.PopCount`, ...), so a method with a body runs that body. Some bodies
+            // only call themselves and rely on the JIT always expanding them
+            // (`Volatile.ReadBarrier`, `Math.ReciprocalEstimate`, `Thread.FastPollGC`, ...);
+            // running those would recurse until the stack overflows, so they stay missing, as does
+            // a method without a body.
+            if let Some(body) = method.body()
+                && !body_calls_itself(&method, body)
+            {
                 return None;
             }
             return Some(IntrinsicMetadata::direct_intercept(
@@ -178,6 +183,28 @@ pub fn classify_intrinsic(
     }
 
     None
+}
+
+/// Whether `body` contains a direct `call`/`callvirt`/`jmp` to `method`'s own definition, the shape
+/// of an `[Intrinsic]` method the JIT must always expand.
+fn body_calls_itself(method: &MethodDescription, body: &dotnetdll::prelude::body::Method) -> bool {
+    use dotnetdll::prelude::{Instruction, MethodSource, UserMethod};
+
+    let own = method.method_index();
+    body.instructions.iter().any(|instruction| {
+        let source = match instruction {
+            Instruction::Call { param0, .. } | Instruction::CallVirtual { param0, .. } => param0,
+            Instruction::Jump(target) => {
+                return matches!(target, MethodSource::User(UserMethod::Definition(d)) if *d == own);
+            }
+            _ => return false,
+        };
+        let user = match source {
+            MethodSource::User(user) => user,
+            MethodSource::Generic(generic) => &generic.base,
+        };
+        matches!(user, UserMethod::Definition(d) if *d == own)
+    })
 }
 
 #[cfg(test)]
@@ -209,6 +236,47 @@ mod tests {
         assert_eq!(
             registry.get_metadata(&method, &loader).is_some(),
             cfg!(feature = "fuzzing")
+        );
+    }
+
+    #[test]
+    #[cfg(not(miri))]
+    fn unregistered_intrinsic_runs_body_unless_it_only_recurses() {
+        use dotnet_types::generics::GenericLookup;
+        use dotnetdll::prelude::MethodMemberIndex;
+
+        let runtime = dotnet_assemblies::find_dotnet_app_path().unwrap();
+        let loader = AssemblyLoader::new(runtime.to_string_lossy().into_owned()).unwrap();
+        let registry = IntrinsicRegistry::initialize();
+        let classify = |type_name: &str, accept: &dyn Fn(&MethodDescription) -> bool| {
+            let ty = loader.corlib_type(type_name).unwrap();
+            let method = (0..ty.definition().methods.len())
+                .map(|index| {
+                    MethodDescription::new(
+                        ty.clone(),
+                        GenericLookup::default(),
+                        ty.resolution.clone(),
+                        MethodMemberIndex::Method(index),
+                    )
+                })
+                .find(|method| accept(method))
+                .unwrap();
+            classify_intrinsic(method, &loader, Some(&registry)).map(|m| m.handler)
+        };
+
+        // `ReadBarrier() => ReadBarrier();` only works when the JIT expands it.
+        assert_eq!(
+            classify("System.Threading.Volatile", &|m| m.method().name
+                == "ReadBarrier"),
+            Some(MethodIntrinsicId::Missing)
+        );
+        // `Math.Min(long, long)` has a correct managed body and no handler.
+        assert_eq!(
+            classify("System.Math", &|m| {
+                m.method().name == "Min"
+                    && format!("{:?}", m.signature().parameters[0].1).contains("Int64")
+            }),
+            None
         );
     }
 
