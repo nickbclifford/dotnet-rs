@@ -64,12 +64,6 @@ Evidence and IDs (p01…, R01…) are defined in the
 
   The full 2026-11 evidence (changelog and release links) is in the deleted inspection ledger,
   `git show 0f85ff25^:REVIEW.md` (finding F-DEP-002).
-- **Managed-thread local ID synchronization facade:** `threading/local::NEXT_MANAGED_ID` is a
-  process-global `std::sync::atomic::AtomicI32`, unlike the VM synchronization types reexported
-  through `dotnet_utils::sync`. Review its feature and Loom ownership before migrating it; preserve
-  monotonic allocation and exhaustion behavior. This is separate from plan 17's completed
-  `try_update` rename, which kept `threading/basic::allocate_managed_thread_id` on the facade's
-  `fetch_update` because Loom 0.7.2 has no `try_update`.
 - **Managed resource lookup cost:** after plan 15 removed the `SR` resource-string intrinsic, the
   `exception_messages` benchmark (cold first `ResourceManager` load plus 127 lookups, fresh VM
   per iteration) went from about 3.4 ms to about 121 ms (~35x). Accepted by the maintainer for

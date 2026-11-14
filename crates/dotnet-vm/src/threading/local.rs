@@ -6,6 +6,7 @@
 //! may use them. A completion flag removes these roots during the next trace or record edit.
 //! Unstarted thread records remain rooted until arena teardown.
 
+use dotnet_utils::sync::AtomicI32;
 use dotnet_value::object::ObjectRef;
 use gc_arena::{Collect, collect::Trace};
 use std::{
@@ -13,15 +14,25 @@ use std::{
     collections::HashMap,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicI32, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
 };
 
+#[cfg(not(loom))]
 static NEXT_MANAGED_ID: AtomicI32 = AtomicI32::new(1);
 
+#[cfg(loom)]
+loom::lazy_static! {
+    static ref NEXT_MANAGED_ID: AtomicI32 = AtomicI32::new(1);
+}
+
 pub(crate) fn next_managed_id() -> i32 {
-    NEXT_MANAGED_ID
-        .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+    allocate_managed_id(&NEXT_MANAGED_ID)
+}
+
+fn allocate_managed_id(counter: &AtomicI32) -> i32 {
+    counter
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
         .expect("managed thread ID exhaustion")
 }
 
@@ -141,6 +152,29 @@ unsafe impl<'gc> Collect<'gc> for ManagedThreadLocalState<'gc> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(loom))]
+    #[test]
+    fn managed_ids_are_monotonic_and_do_not_wrap() {
+        let counter = AtomicI32::new(i32::MAX - 1);
+        assert_eq!(allocate_managed_id(&counter), i32::MAX - 1);
+        assert!(std::panic::catch_unwind(|| allocate_managed_id(&counter)).is_err());
+        assert_eq!(counter.load(Ordering::Relaxed), i32::MAX);
+    }
+
+    #[cfg(loom)]
+    #[test]
+    fn managed_ids_are_unique_under_loom() {
+        loom::model(|| {
+            let counter = loom::sync::Arc::new(AtomicI32::new(1));
+            let other = counter.clone();
+            let worker = loom::thread::spawn(move || allocate_managed_id(&other));
+            let current = allocate_managed_id(&counter);
+            let other = worker.join().unwrap();
+            assert_eq!(current.min(other), 1);
+            assert_eq!(current.max(other), 2);
+        });
+    }
 
     #[test]
     fn records_are_parent_local_and_start_unstarted() {

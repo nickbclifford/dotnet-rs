@@ -1,6 +1,6 @@
 # Correctness backlog: byte-read bounds, pointer slots, feature forwarding, thread IDs and the timer flake
 
-**Status:** In progress (slice 1 complete; slice 2 implemented, matrix verification incomplete)
+**Status:** In progress (slice 1 complete; slices 2 and 3 implemented, matrix verification incomplete)
 **Outcome:** An overflowing heap byte read returns `BoundsCheck`, every CTS write into a pointer
 slot either stores the address or fails loudly, the standalone reflection feature compiles, the
 managed-ID counter goes through `dotnet_utils::sync`, and `threading_timer_callback_pool_thread_42` is either fixed
@@ -90,9 +90,13 @@ Out:
    failures (483 passed), including `arrays_jagged_interface_cast_42` with a missing
    `SystemNative_SetErrNo` entry point. The isolated fixture also failed. This configuration does
    not enable the reflection validation feature; the matrix requirement remains open.
-3. **Managed-ID facade.** Migrate the counter. `cargo test -p dotnet-vm` and the Loom lane (the
-   `cfg(loom)` crates that compile today) pass. Thread-identity fixtures
-   (`thread_identity_start_42`, `thread_cross_start_42`) still match.
+3. **Managed-ID facade (implemented).** Migrated the counter to the sync facade with a Loom-local
+   lazy static and checked `fetch_update`. Added exhaustion and concurrent allocation tests.
+   `cargo test -p dotnet-vm`, both Loom CI lanes, the concurrent allocation Loom model, and the
+   `thread_identity_start_42` and `thread_cross_start_42` diff fixtures pass. Both clippy feature
+   sets and doc drift pass. Nine CLI/VM matrix configurations pass; the `fuzzing` run has six
+   CLI fixture failures (484 passed), including the same missing `SystemNative_SetErrNo` noted
+   in slice 2, so the full matrix requirement remains open.
 4. **Pointer-slot writes.** Write a `pointers/pointer_slot_writes_42.cs` diff fixture: reflection
    `FieldInfo.SetValue`/`GetValue` on instance and static pointer fields via
    `System.Reflection.Pointer.Box`, `stobj` of a pointer, pointer-element arrays, a struct with
