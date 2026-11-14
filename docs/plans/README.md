@@ -48,26 +48,6 @@ Evidence and IDs (p01…, R01…) are defined in the
   static fields and `GetValue` returns null (`crates/dotnet-intrinsics-reflection/src/fields.rs`).
   Needs static storage lookup, type-initializer triggering and access checks; surfaced by plan 21
   slice 4's pointer-slot fixture, which therefore covers instance pointer fields only.
-- **Dependency major-version migrations:** defer the 12 exported notices without upgrading
-  APIs: `gc-arena` in the workspace and both standalone fuzz manifests (3); workspace
-  `parking_lot` and `lru` (2); benchmark `criterion` (1); `syn` in dotnet-macros,
-  dotnet-macros-core, dotnet-vm build-dependencies and xtask (4); and `phf` plus `phf_codegen`
-  in dotnet-vm (2). Resolve each family as deliberate API/safety/measurement work; MSRV
-  compatibility alone is not evidence that an upgrade is safe. Why each is separate:
-  - `gc-arena` 0.7: pointer representation and pacing (shallow bytes → pointer counts) change;
-    needs a safety, pacing and performance review, plus an audit of 0.6.1's equal-alignment
-    cast requirement. GC upgrades need Miri evidence, not just compilation.
-  - `parking_lot` 0.13: per-acquisition raw guard state, fairness and recursive-lock changes
-    affect the sync facade, lock order and GC locks; needs Loom evidence.
-  - `syn` 3: AST/parser migration; validate emitted code, signature scans and slot consumers.
-  - `phf`/`phf_codegen` 0.14: table and runtime formats must migrate together and pass the
-    generation/dispatch probes.
-  - `lru` 0.19: shared-iterator `Sync` requirements need trait review (types and VM caches).
-  - `criterion` 0.8: several API generations from 0.5; needs smoke runs and a measurement
-    comparability check.
-
-  The full 2026-11 evidence (changelog and release links) is in the deleted inspection ledger,
-  `git show 0f85ff25^:REVIEW.md` (finding F-DEP-002).
 - **Managed resource lookup cost:** after plan 15 removed the `SR` resource-string intrinsic, the
   `exception_messages` benchmark (cold first `ResourceManager` load plus 127 lookups, fresh VM
   per iteration) went from about 3.4 ms to about 121 ms (~35x). Accepted by the maintainer for
