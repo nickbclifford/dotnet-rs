@@ -1226,37 +1226,6 @@ impl Executor {
                 }
                 _ => {}
             }
-
-            {
-                let gc_bytes =
-                    match self.with_arena_ref(|arena| arena.metrics().total_gc_allocation()) {
-                        Ok(v) => v,
-                        Err(e) => break ExecutorResult::Error(e),
-                    };
-
-                #[cfg(feature = "multithreading")]
-                {
-                    // Update the arena's metrics directly
-                    if let Err(e) = self.with_arena(|arena| {
-                        arena.mutate(|_, c| {
-                            c.stack
-                                .arena
-                                .gc_allocated_bytes()
-                                .store(gc_bytes, Ordering::Relaxed);
-                        })
-                    }) {
-                        break ExecutorResult::Error(e);
-                    }
-
-                    // Update global metrics from aggregated values
-                    let total_gc = self.shared.gc_coordinator.total_gc_allocation();
-                    self.shared.metrics.update_gc_metrics(total_gc as u64);
-                }
-                #[cfg(not(feature = "multithreading"))]
-                {
-                    self.shared.metrics.update_gc_metrics(gc_bytes as u64);
-                }
-            }
         };
 
         if let Err(error) = self.with_arena(|arena| {

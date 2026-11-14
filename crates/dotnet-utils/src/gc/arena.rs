@@ -20,7 +20,6 @@ pub struct ArenaHandleInner {
     pub peak_allocation_counter: AtomicU64,
     #[cfg(feature = "memory-validation")]
     pub allocation_call_count: AtomicUsize,
-    pub gc_allocated_bytes: AtomicUsize,
     pub needs_collection: AtomicBool,
     pub needs_any_collection: OnceLock<Arc<AtomicBool>>,
     /// Command currently being processed by this thread.
@@ -70,7 +69,6 @@ impl ArenaHandle {
                 peak_allocation_counter: AtomicU64::new(0),
                 #[cfg(feature = "memory-validation")]
                 allocation_call_count: AtomicUsize::new(0),
-                gc_allocated_bytes: AtomicUsize::new(0),
                 needs_collection: AtomicBool::new(false),
                 needs_any_collection: OnceLock::new(),
                 current_command: OrderedMutex::new(None),
@@ -90,10 +88,6 @@ impl ArenaHandle {
 
     pub fn allocation_counter(&self) -> &AtomicUsize {
         &self.inner.allocation_counter
-    }
-
-    pub fn gc_allocated_bytes(&self) -> &AtomicUsize {
-        &self.inner.gc_allocated_bytes
     }
 
     pub fn collection_trigger_count(&self) -> &AtomicU64 {
