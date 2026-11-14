@@ -1,6 +1,6 @@
 # Correctness backlog: byte-read bounds, pointer slots, feature forwarding, thread IDs and the timer flake
 
-**Status:** In progress (slice 1 complete)
+**Status:** In progress (slice 1 complete; slice 2 implemented, matrix verification incomplete)
 **Outcome:** An overflowing heap byte read returns `BoundsCheck`, every CTS write into a pointer
 slot either stores the address or fails loudly, the standalone reflection feature compiles, the
 managed-ID counter goes through `dotnet_utils::sync`, and `threading_timer_callback_pool_thread_42` is either fixed
@@ -81,10 +81,15 @@ Out:
    `usize::MAX` with a one-byte destination returns `BoundsCheck`, plus the multithreading
    cross-arena origin if it shares the path. Run the `miri-value` lane and
    `fuzz-raw-memory-access` smoke.
-2. **Feature forwarding.** Fix the manifest. Then `cargo check -p dotnet-intrinsics-reflection
+2. **Feature forwarding (implemented).** Fix the manifest. Then `cargo check -p dotnet-intrinsics-reflection
    --features generic-constraint-validation` and `--no-default-features` pass. Add that check to
-   CI next to the existing feature checks if a per-crate feature matrix already exists. Otherwise
-   record the command in this plan.
+   CI next to the existing feature checks if a per-crate feature matrix already exists. The CI
+   matrices are workspace-wide, so the standalone check is recorded here:
+   `cargo check -p dotnet-intrinsics-reflection --no-default-features --features generic-constraint-validation`.
+   The CLI/VM matrix passed nine configurations; the `fuzzing` configuration had six CLI fixture
+   failures (483 passed), including `arrays_jagged_interface_cast_42` with a missing
+   `SystemNative_SetErrNo` entry point. The isolated fixture also failed. This configuration does
+   not enable the reflection validation feature; the matrix requirement remains open.
 3. **Managed-ID facade.** Migrate the counter. `cargo test -p dotnet-vm` and the Loom lane (the
    `cfg(loom)` crates that compile today) pass. Thread-identity fixtures
    (`thread_identity_start_42`, `thread_cross_start_42`) still match.

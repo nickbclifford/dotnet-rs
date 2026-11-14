@@ -16,7 +16,7 @@ tracing = { workspace = true }
 
 [features]
 default = []
-generic-constraint-validation = []
+generic-constraint-validation = ["dotnet-types/generic-constraint-validation"]
 
 [lints]
 workspace = true
