@@ -3,7 +3,7 @@
 //! Keep these separate from `end_to_end`: they deliberately avoid IL dispatch, method
 //! resolution, and managed fixture setup so stack and vector changes can be measured directly.
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 use dotnet_assemblies::AssemblyLoader;
 use dotnet_types::{generics::ConcreteType, resolution::ResolutionS};
 #[cfg(feature = "memory-validation")]
@@ -20,6 +20,7 @@ use dotnet_vm::{
 };
 use dotnetdll::prelude::BaseType;
 use gc_arena::{Collect, Gc, GcWeak, collect::Trace};
+use std::hint::black_box;
 use std::mem::size_of;
 
 const PRIMITIVE_VECTOR_LENGTH: usize = 64 * 1024;

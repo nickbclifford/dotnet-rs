@@ -5,7 +5,7 @@
 //! measurements; `Transient` reads intentionally measure the documented
 //! `UnknownSubtag` rejection path.
 
-use criterion::{BatchSize, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use dotnet_types::{TypeDescription, generics::GenericLookup};
 use dotnet_utils::{
     ArenaId, ByteOffset,
@@ -21,6 +21,7 @@ use dotnet_value::{
 use dotnet_vm::HeapManagedPtrDecodeCache;
 use gc_arena::{Arena, Rootable};
 use hashbrown::HashMap;
+use std::hint::black_box;
 use std::ptr::NonNull;
 
 const BENCH_ARENA_ID: ArenaId = ArenaId::new(1);
