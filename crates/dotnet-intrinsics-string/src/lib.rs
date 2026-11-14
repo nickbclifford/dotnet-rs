@@ -28,6 +28,7 @@ use dotnet_vm_ops::{NULL_REF_MSG, ops::StringIntrinsicHost as VmStringIntrinsicH
 
 pub mod accessors;
 pub mod constructors;
+pub mod interning;
 pub mod operations;
 pub mod search;
 pub(crate) mod simd;
@@ -55,4 +56,16 @@ pub(crate) fn extend_from_utf16_ne_bytes(dest: &mut Vec<u16>, bytes: &[u8]) {
             .chunks_exact(2)
             .map(|chunk| u16::from_ne_bytes([chunk[0], chunk[1]])),
     );
+}
+
+/// Push a string result whose empty case is specified to return string.Empty.
+pub(crate) fn push_string_or_empty<'gc, T: dotnet_vm_ops::ops::TypedStackOps<'gc>>(
+    ctx: &mut T,
+    chars: Vec<u16>,
+) {
+    if chars.is_empty() {
+        ctx.push_interned_string(&[]);
+    } else {
+        ctx.push_string(dotnet_value::CLRString::new(chars));
+    }
 }

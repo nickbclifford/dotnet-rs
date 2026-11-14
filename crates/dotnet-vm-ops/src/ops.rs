@@ -140,6 +140,10 @@ pub trait TypedStackOps<'gc>: EvalStackOps<'gc> {
     fn push_string(&mut self, value: CLRString);
     /// Push the canonical literal object for these UTF-16 code units.
     fn push_interned_string(&mut self, chars: &[u16]);
+    /// Intern an existing string object and push the canonical object.
+    fn push_interned_string_object(&mut self, chars: &[u16], object: ObjectRef<'gc>);
+    /// Return the canonical object for these code units, or null if none exists.
+    fn find_interned_string(&self, chars: &[u16]) -> ObjectRef<'gc>;
 
     #[must_use]
     fn pop_i32(&mut self) -> i32 {
@@ -754,6 +758,12 @@ mod tests {
             unimplemented!()
         }
         fn push_interned_string(&mut self, _: &[u16]) {
+            unimplemented!()
+        }
+        fn push_interned_string_object(&mut self, _: &[u16], _: ObjectRef<'static>) {
+            unimplemented!()
+        }
+        fn find_interned_string(&self, _: &[u16]) -> ObjectRef<'static> {
             unimplemented!()
         }
     }

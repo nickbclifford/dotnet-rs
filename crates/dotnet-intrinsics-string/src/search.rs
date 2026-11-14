@@ -8,7 +8,6 @@ use dotnet_utils::GcScopeGuard;
 use dotnet_value::{
     StackValue,
     object::{HeapStorage, ObjectRef},
-    string::CLRString,
     with_string,
 };
 use dotnet_vm_data::StepResult;
@@ -662,7 +661,7 @@ pub fn intrinsic_string_substring<'gc, T: IntrinsicStringHost<'gc>>(
     };
 
     ctx.drop_top(if length.is_some() { 3 } else { 2 });
-    ctx.push_string(CLRString::new(result_vec));
+    crate::push_string_or_empty(ctx, result_vec);
     StepResult::Continue
 }
 

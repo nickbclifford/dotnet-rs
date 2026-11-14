@@ -911,6 +911,16 @@ mod byte_operand_tests {
         fn push_interned_string(&mut self, _: &[u16]) {
             unreachable!()
         }
+        fn push_interned_string_object(
+            &mut self,
+            _: &[u16],
+            _: dotnet_value::object::ObjectRef<'static>,
+        ) {
+            unreachable!()
+        }
+        fn find_interned_string(&self, _: &[u16]) -> dotnet_value::object::ObjectRef<'static> {
+            unreachable!()
+        }
     }
 
     #[test]

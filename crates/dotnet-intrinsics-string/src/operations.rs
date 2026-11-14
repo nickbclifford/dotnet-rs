@@ -1,5 +1,6 @@
 use crate::{
-    IntrinsicStringHost, NULL_REF_MSG, extend_from_utf16_ne_bytes, simd::probe_sequence_equal_u16,
+    IntrinsicStringHost, NULL_REF_MSG, extend_from_utf16_ne_bytes, push_string_or_empty,
+    simd::probe_sequence_equal_u16,
 };
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
@@ -9,7 +10,6 @@ use dotnet_utils::GcScopeGuard;
 use dotnet_value::{
     StackValue,
     object::{HeapStorage, Object, ObjectHandle, ObjectRef},
-    string::CLRString,
 };
 use dotnet_vm_data::StepResult;
 use dotnet_vm_ops::effects::{
@@ -508,9 +508,9 @@ pub fn intrinsic_string_concat_three_spans<'gc, T: IntrinsicStringHost<'gc>>(
         Err(step) => return step,
     };
 
-    let value = CLRString::new(data0.into_iter().chain(data1).chain(data2).collect());
+    let chars = data0.into_iter().chain(data1).chain(data2).collect();
     ctx.drop_top(3);
-    ctx.push_string(value);
+    push_string_or_empty(ctx, chars);
     StepResult::Continue
 }
 
@@ -720,6 +720,7 @@ mod tests {
     use dotnet_types::error::VmError;
     use dotnet_utils::{ArenaId, gc::ThreadSafeLock};
     use dotnet_value::object::ObjectInner;
+    use dotnet_value::string::CLRString;
     use dotnet_vm_ops::effects::{
         NativeBackend, NativeControl, NativeEffect, NativeRegion, poll_native,
     };

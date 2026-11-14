@@ -99,6 +99,28 @@ impl<'a, 'gc> TypedStackOps<'gc> for VesContext<'a, 'gc> {
         let object = ObjectRef(Some(unsafe { gc_arena::Gc::from_ptr(ptr.as_ptr().cast()) }));
         self.push(StackValue::ObjectRef(object));
     }
+
+    fn find_interned_string(&self, chars: &[u16]) -> ObjectRef<'gc> {
+        let Some(entry) = self.shared.interned_strings.get(chars) else {
+            return ObjectRef(None);
+        };
+        let ptr = *entry;
+        // SAFETY: F1.GcHandleRooted; F6.NoEscapeAcrossArena — the table roots the
+        // object and its allocating arena is retained until shutdown.
+        ObjectRef(Some(unsafe { gc_arena::Gc::from_ptr(ptr.as_ptr().cast()) }))
+    }
+
+    fn push_interned_string_object(&mut self, chars: &[u16], object: ObjectRef<'gc>) {
+        let ptr = *self
+            .shared
+            .interned_strings
+            .entry(chars.to_vec())
+            .or_insert(object.as_ptr().expect("interned string is non-null"));
+        // SAFETY: F1.GcHandleRooted; F6.NoEscapeAcrossArena — the table roots the
+        // object and its allocating arena is retained until shutdown.
+        let canonical = ObjectRef(Some(unsafe { gc_arena::Gc::from_ptr(ptr.as_ptr().cast()) }));
+        self.push_obj(canonical);
+    }
 }
 
 impl<'a, 'gc> LocalOps<'gc> for VesContext<'a, 'gc> {

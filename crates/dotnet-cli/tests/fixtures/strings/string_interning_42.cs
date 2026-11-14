@@ -39,6 +39,15 @@ public static class Program
         Report("intern table roots literal", ReferenceEquals(literalRoot.Target, RootedLiteral()));
         Report("null pointer constructor", ReferenceEquals(new string((char*)null), string.Empty));
         Report("zero length constructor", ReferenceEquals(new string('a', 0), string.Empty));
+        Report("empty array constructor", ReferenceEquals(new string(Array.Empty<char>()), string.Empty));
+        Report("null array constructor", ReferenceEquals(new string((char[])null), string.Empty));
+        Report("empty array range constructor", ReferenceEquals(new string(new[] { 'x' }, 1, 0), string.Empty));
+        Report("empty span constructor", ReferenceEquals(new string(ReadOnlySpan<char>.Empty), string.Empty));
+        char terminator = '\0';
+        Report("empty pointer constructor", ReferenceEquals(new string(&terminator), string.Empty));
+        Report("empty substring", ReferenceEquals(first.Substring(1, 0), string.Empty));
+        Report("empty substring suffix", ReferenceEquals(first.Substring(first.Length), string.Empty));
+        Report("empty span concat", ReferenceEquals(string.Concat(ReadOnlySpan<char>.Empty, ReadOnlySpan<char>.Empty, ReadOnlySpan<char>.Empty), string.Empty));
 
         string computedLiteral = new string(new[] { 'l', 'i', 't', 'e', 'r', 'a', 'l', ' ', 'i', 'd', 'e', 'n', 't', 'i', 't', 'y' });
         try { Report("intern literal", ReferenceEquals(string.Intern(computedLiteral), first)); }
@@ -53,12 +62,24 @@ public static class Program
             string canonical = string.Intern(computed);
             string equalComputed = new string(new[] { 'u', 'n', 'i', 'q', 'u', 'e', '-', '4', '2' });
             Report("is interned after", ReferenceEquals(string.IsInterned(equalComputed), canonical));
+            Report("intern repeated", ReferenceEquals(string.Intern(equalComputed), canonical));
+            Report("intern input identity", ReferenceEquals(computed, canonical));
         }
         catch (Exception error) { ReportException("is interned after", error); }
+        WeakReference explicitRoot = ExplicitWeakReference();
+        GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
+        Report("intern table roots explicit", ReferenceEquals(explicitRoot.Target, string.IsInterned(new string(new[] { 'r', 'o', 'o', 't', '-', '4', '2' }))));
+        try { string.Intern(null); Report("intern null", false); }
+        catch (ArgumentNullException) { Report("intern null", true); }
+        try { string.IsInterned(null); Report("is interned null", false); }
+        catch (ArgumentNullException) { Report("is interned null", true); }
+        string utf16 = new string(new[] { '\ud800', '\0', '\udfff' });
+        Report("intern utf16", ReferenceEquals(string.Intern(utf16), Utf16Literal()));
         return 42;
     }
 
     static string Utf16Literal() => "\ud800\0\udfff";
     static string RootedLiteral() => "intern table root 42";
     static WeakReference LiteralWeakReference() => new WeakReference(RootedLiteral());
+    static WeakReference ExplicitWeakReference() => new WeakReference(string.Intern(new string(new[] { 'r', 'o', 'o', 't', '-', '4', '2' })));
 }

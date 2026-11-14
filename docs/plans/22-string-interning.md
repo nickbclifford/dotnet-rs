@@ -1,6 +1,6 @@
 # String interning
 
-**Status:** Slice 2 complete
+**Status:** Slice 3 complete
 **Outcome:** String literal identity, `string.Empty` identity and `String.Intern`/`IsInterned`
 match `dotnet` in a diff fixture under both feature sets, including the same literal loaded on two
 threads.
@@ -48,8 +48,9 @@ Out:
 - **One process-wide intern table** keyed by UTF-16 content, holding one canonical string object
   per key. Reuse plan 14's canonical-object mechanism (`SharedReflectionRegistry` in
   `crates/dotnet-vm/src/state.rs`):
-  - The first thread to intern a key allocates the string in its own arena and publishes it with
-    insert-if-absent. A thread that loses the race drops its string and uses the winner's.
+  - The first literal load allocates a string in its own arena and publishes it with
+    insert-if-absent. `String.Intern` publishes its supplied object when the key is absent,
+    matching .NET's observed identity. A thread that loses the race uses the winner's object.
   - Every arena traces the table as a root. Plan 09's retired-arena contract keeps the owning
     arena alive until shutdown, so a foreign interned string stays valid.
   - Single-threaded builds use the same table with a single owner. Keep one code path.
@@ -135,6 +136,16 @@ startup as above. No front cache was added on this evidence.
 The literal and empty-field fixture cases pass with and without multithreading, including UTF-16
 content and a weak-reference check of table rooting across collection. Workspace Clippy passes
 in both feature sets, doc drift passes, and all ten CLI/VM feature-matrix runs pass.
+
+### Slice 3 implementation
+
+`Intern` publishes the supplied object when its content is absent; `IsInterned` only looks up the
+content. Both reject null. String constructors, substring, and three-span concatenation return
+the interned empty object for empty results. `FastAllocateString` remains an allocation primitive.
+The full differential fixture covers explicit interning, UTF-16, nulls, collection roots, and
+empty results in addition to the literal cases.
+Workspace Clippy passes in both feature sets, doc drift passes, and all ten CLI/VM
+feature-matrix runs pass.
 
 ## Done when
 

@@ -181,48 +181,10 @@ diff_test!(
     "tests/fixtures/strings/string_char_repeat_42.cs"
 );
 
-// Slice 2 enables the literal and Empty reports; the other reports become
-// differential assertions when the remaining interning operations are implemented.
-#[cfg(not(feature = "fuzzing"))]
-#[test]
-fn string_interning_literals_match_dotnet() {
-    use crate::integration_tests_impl::harness::TestHarness;
-    use std::{path::Path, process::Command};
-
-    let harness = TestHarness::get();
-    let dll = harness.ensure_dll(Path::new("tests/fixtures/strings/string_interning_42.cs"));
-    let clr = fixture_output(Command::new("dotnet").arg(&dll), "CLR");
-    let vm = fixture_output(&mut harness.cli_command(&dll), "VM");
-    assert_eq!(clr.status.code(), Some(42));
-    assert_eq!(
-        vm.status.code(),
-        Some(42),
-        "{}",
-        String::from_utf8_lossy(&vm.stderr)
-    );
-    let names = [
-        "literal within method",
-        "literal across methods",
-        "literal in loop",
-        "empty field",
-        "empty literal",
-        "utf16 literal",
-        "computed is distinct",
-        "literal after collection",
-        "empty after collection",
-        "intern table roots literal",
-    ];
-    for name in names {
-        let expected = format!("{name}: True");
-        for (runtime, output) in [("CLR", &clr.stdout), ("VM", &vm.stdout)] {
-            let stdout = String::from_utf8_lossy(output);
-            assert!(
-                stdout.lines().any(|line| line == expected),
-                "{runtime}: missing {expected:?} in {stdout}"
-            );
-        }
-    }
-}
+diff_test!(
+    string_interning_matches_dotnet,
+    "tests/fixtures/strings/string_interning_42.cs"
+);
 
 // Rejected candidates: structs/interlocked_misaligned_1 (intentional ECMA alignment
 // divergence);

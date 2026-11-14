@@ -1,4 +1,4 @@
-use crate::{IntrinsicStringHost, extend_from_utf16_ne_bytes};
+use crate::{IntrinsicStringHost, extend_from_utf16_ne_bytes, push_string_or_empty};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
 use dotnet_value::{
@@ -219,8 +219,7 @@ pub fn intrinsic_string_ctor_char_array<'gc, T: IntrinsicStringHost<'gc>>(
         _ => Vec::new(), // null or invalid
     };
 
-    let value = CLRString::new(chars);
-    ctx.push_string(value);
+    push_string_or_empty(ctx, chars);
     StepResult::Continue
 }
 
@@ -280,7 +279,7 @@ pub fn intrinsic_string_ctor_char_array_range<'gc, T: IntrinsicStringHost<'gc>>(
         );
     }
 
-    ctx.push_string(CLRString::new(chars));
+    push_string_or_empty(ctx, chars);
     StepResult::Continue
 }
 
@@ -352,7 +351,7 @@ pub fn intrinsic_string_ctor_char_count<
         );
     }
 
-    ctx.push_string(CLRString::new(vec![c; len]));
+    push_string_or_empty(ctx, vec![c; len]);
     StepResult::Continue
 }
 
@@ -375,8 +374,7 @@ pub fn intrinsic_string_ctor_readonly_span_char<'gc, T: IntrinsicStringHost<'gc>
         }
     };
 
-    let value = CLRString::new(chars);
-    ctx.push_string(value);
+    push_string_or_empty(ctx, chars);
     StepResult::Continue
 }
 
@@ -400,7 +398,7 @@ pub fn intrinsic_string_ctor_char_ptr<'gc, T: TypedStackOps<'gc> + RawMemoryOps<
         unmanaged_ptr_from_addr(address).cast_const().cast::<u16>()
     });
 
-    let value = if !ptr.is_null() {
+    let chars = if !ptr.is_null() {
         let mut chars = Vec::new();
         let mut i = 0;
         #[expect(
@@ -419,11 +417,11 @@ pub fn intrinsic_string_ctor_char_ptr<'gc, T: TypedStackOps<'gc> + RawMemoryOps<
                 i += 1;
             }
         }
-        CLRString::new(chars)
+        chars
     } else {
-        CLRString::new(Vec::new())
+        Vec::new()
     };
 
-    ctx.push_string(value);
+    push_string_or_empty(ctx, chars);
     StepResult::Continue
 }
