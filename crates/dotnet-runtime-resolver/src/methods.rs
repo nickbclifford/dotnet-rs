@@ -112,6 +112,19 @@ where
         let method_desc =
             self.locate_method(ctx.resolution().clone(), method, &new_lookup, parent_type)?;
 
+        // A MethodDef token names its declaring type directly, so there is no parent type
+        // reference to take type generics from. A callee on a non-generic type has none of its
+        // own; the caller's must not stay behind in the lookup the callee runs under.
+        if matches!(method, UserMethod::Definition(_))
+            && method_desc
+                .parent
+                .definition()
+                .generic_parameters
+                .is_empty()
+        {
+            new_lookup.set_type_generics(Arc::new([]));
+        }
+
         #[cfg(feature = "generic-constraint-validation")]
         {
             if !method_desc.method().generic_parameters.is_empty() {
