@@ -527,8 +527,7 @@ Rules in this codebase:
 - When refactoring: if a `Condvar` is moved to a new mutex, also reset (replace) the `Condvar` itself.
 
 #### Fairness and notification semantics
-`parking_lot::Mutex` uses a **fair** (queue-based) scheduling algorithm:
-- Threads that have been waiting longer receive priority. This prevents starvation but slightly increases average lock-acquisition latency compared to an unfair spinlock.
+`parking_lot::Mutex` parks contended waiters in a queue but is **not fair**: a thread that releases and immediately re-acquires can barge ahead of a woken waiter. Version 0.12 forced an occasional fair handoff (eventual fairness); 0.13 removed it and defers waking parked threads until after unlock. Do not rely on a waiting thread making progress while another thread loops on the same lock. Code that must hand a lock to a waiter needs an explicit `MutexGuard::unlock_fair` or `MutexGuard::bump`.
 - `Condvar::notify_one()` wakes the **longest-waiting** thread in the wait set, not an arbitrary one.
 - `Condvar::notify_all()` wakes **all** waiting threads; each then races to re-acquire the paired mutex. Use this for broadcast scenarios (e.g., resuming all threads after a STW pause via `resume_threads()`).
 - `parking_lot` mutexes do **not** support lock poisoning (unlike `std::sync::Mutex`). A thread that panics while holding a `parking_lot` mutex simply drops the guard normally; the mutex is released without poisoning. This is intentional — it matches the codebase's use of RAII cleanup guards and means `lock()` always returns a `MutexGuard` directly (no `LockResult` unwrapping needed).
