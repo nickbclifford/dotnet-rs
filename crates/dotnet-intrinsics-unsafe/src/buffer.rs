@@ -58,16 +58,18 @@ fn scalar_len(value: StackValue<'_>) -> Option<isize> {
 pub fn memmove_select<'gc, T: UnsafeIntrinsicHost<'gc>>(
     ctx: &T,
     operands: NativeOperandView<'_, 'gc>,
-    _method: &MethodDescription,
+    method: &MethodDescription,
     generics: &GenericLookup,
 ) -> NativeSelection {
     let Some(len) = scalar_len(operands.peek_at(0)) else {
         return NativeSelection::Fallback;
     };
-    let element = if generics.method_generics.is_empty() {
+    // Only the generic `Memmove<T>` overloads scale by `T`; the byte overloads are byte-sized by
+    // their signature, whatever generic context the caller happens to be running in.
+    let element = if method.method().generic_parameters.is_empty() {
         0
     } else {
-        let Ok(target) = generics.method_arg(0) else {
+        let Ok(target) = method.own_method_arg(generics, 0) else {
             return NativeSelection::Fallback;
         };
         let Ok(layout) = ctx.unsafe_type_layout(target.clone()) else {
@@ -137,17 +139,17 @@ pub async fn memmove_async(mut fx: VmEffects) -> NativeResult {
 #[allow(unused_variables)]
 pub fn intrinsic_buffer_memmove<'gc, T: UnsafeIntrinsicHost<'gc>>(
     ctx: &mut T,
-    _method: MethodDescription,
+    method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
     let len = ctx.pop_isize();
     let src = dotnet_vm_ops::vm_try!(RetainedPtr::try_from_stack_value(ctx.pop()));
     let dst = dotnet_vm_ops::vm_try!(RetainedPtr::try_from_stack_value(ctx.pop()));
 
-    let total_count = if generics.method_generics.is_empty() {
+    let total_count = if method.method().generic_parameters.is_empty() {
         len as usize
     } else {
-        let target = dotnet_vm_ops::vm_try!(generics.method_arg(0));
+        let target = dotnet_vm_ops::vm_try!(method.own_method_arg(generics, 0));
         let layout = dotnet_vm_ops::vm_try!(ctx.unsafe_type_layout(target.clone()));
         let Some(bytes) = layout.size().as_usize().checked_mul(len as usize) else {
             return ctx.throw_by_name_with_message(
@@ -215,7 +217,7 @@ async fn fill_async_with(mut fx: VmEffects, value: u8) -> NativeResult {
 #[allow(unused_variables)]
 pub fn intrinsic_span_helpers_clear_without_references<'gc, T: UnsafeIntrinsicHost<'gc>>(
     ctx: &mut T,
-    _method: MethodDescription,
+    method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
     let len = ctx.pop_isize();
@@ -233,7 +235,7 @@ pub fn intrinsic_span_helpers_clear_without_references<'gc, T: UnsafeIntrinsicHo
 pub fn fill_select<'gc, T: UnsafeIntrinsicHost<'gc>>(
     ctx: &T,
     operands: NativeOperandView<'_, 'gc>,
-    _method: &MethodDescription,
+    method: &MethodDescription,
     generics: &GenericLookup,
 ) -> NativeSelection {
     let (Some(byte), Some(len)) = (
@@ -244,7 +246,7 @@ pub fn fill_select<'gc, T: UnsafeIntrinsicHost<'gc>>(
     };
     let len = len.max(0) as usize;
     let destination = operands.peek_at(2);
-    let Ok(target) = generics.cloned_method_arg(0) else {
+    let Ok(target) = method.cloned_own_method_arg(generics, 0) else {
         return NativeSelection::Fallback;
     };
     let Ok(layout) = ctx.unsafe_type_layout(target) else {
@@ -279,7 +281,7 @@ pub async fn fill_async(fx: VmEffects) -> NativeResult {
 #[allow(unused_variables)]
 pub fn intrinsic_span_helpers_fill<'gc, T: UnsafeIntrinsicHost<'gc>>(
     ctx: &mut T,
-    _method: MethodDescription,
+    method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
     let value = ctx.pop();
@@ -294,7 +296,7 @@ pub fn intrinsic_span_helpers_fill<'gc, T: UnsafeIntrinsicHost<'gc>>(
         Err(e) => return e,
     };
 
-    let target = dotnet_vm_ops::vm_try!(generics.cloned_method_arg(0));
+    let target = dotnet_vm_ops::vm_try!(method.cloned_own_method_arg(generics, 0));
     let layout = dotnet_vm_ops::vm_try!(ctx.unsafe_type_layout(target));
     let elem_size = layout.size().as_usize();
 
@@ -338,7 +340,7 @@ pub fn intrinsic_memory_marshal_get_array_data_reference<
     T: EvalStackOps<'gc> + TypedStackOps<'gc> + LoaderOps + ExceptionOps<'gc>,
 >(
     ctx: &mut T,
-    _method: MethodDescription,
+    method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
     let obj = ctx.pop_obj();

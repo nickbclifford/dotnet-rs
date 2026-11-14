@@ -117,7 +117,7 @@ fn read_span_length_or_push_value_equality<'gc, T: SpanIntrinsicHost<'gc>>(
 )]
 pub fn intrinsic_memory_extensions_sequence_equal<'gc, T: SpanIntrinsicHost<'gc>>(
     ctx: &mut T,
-    _method: MethodDescription,
+    method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
     let b_val = ctx.peek_stack();
@@ -133,7 +133,7 @@ pub fn intrinsic_memory_extensions_sequence_equal<'gc, T: SpanIntrinsicHost<'gc>
         }
     };
 
-    let element_type = dotnet_vm_ops::vm_try!(generics.method_arg(0));
+    let element_type = dotnet_vm_ops::vm_try!(method.own_method_arg(generics, 0));
 
     // Check length
     let fallback_equal = (a_val == b_val) as i32;

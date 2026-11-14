@@ -34,6 +34,36 @@ impl MethodDescription {
         }
     }
 
+    /// Method generic argument `index` of this callee, read from the call-site `generics`.
+    ///
+    /// The index is validated against the callee's own declared generic arity, so a callee that
+    /// is not generic (or has fewer parameters) never observes arguments left over in the lookup
+    /// from an enclosing generic method. Intrinsics that size raw memory operations from a
+    /// generic argument must go through this accessor.
+    pub fn own_method_arg<'a>(
+        &self,
+        generics: &'a GenericLookup,
+        index: usize,
+    ) -> Result<&'a crate::generics::ConcreteType, crate::error::TypeResolutionError> {
+        let arity = self.method().generic_parameters.len();
+        if index >= arity {
+            return Err(crate::error::TypeResolutionError::GenericIndexOutOfBounds {
+                index,
+                length: arity,
+            });
+        }
+        generics.method_arg(index)
+    }
+
+    /// Owned variant of [`Self::own_method_arg`].
+    pub fn cloned_own_method_arg(
+        &self,
+        generics: &GenericLookup,
+        index: usize,
+    ) -> Result<crate::generics::ConcreteType, crate::error::TypeResolutionError> {
+        self.own_method_arg(generics, index).cloned()
+    }
+
     pub fn method(&self) -> &'static Method<'static> {
         let def = self.parent.definition();
         match self.method_member_index {

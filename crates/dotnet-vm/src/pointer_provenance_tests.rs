@@ -18,6 +18,7 @@ use crate::{
     },
 };
 use dotnet_assemblies::AssemblyLoader;
+use dotnet_intrinsics_unsafe::buffer::intrinsic_buffer_memmove;
 use dotnet_intrinsics_unsafe::unsafe_ptr::{
     intrinsic_unsafe_add_byte_offset, intrinsic_unsafe_are_same, intrinsic_unsafe_as_pointer,
     intrinsic_unsafe_byte_offset, intrinsic_unsafe_is_address_ordered,
@@ -2326,6 +2327,70 @@ fn p24_unsafe_byte_offset_direction_and_deref() {
     });
 }
 
+#[test]
+fn p24b_byte_memmove_ignores_leaked_method_generics() {
+    let loader = get_mock_loader();
+    #[allow(clippy::arc_with_non_send_sync)]
+    let shared = Arc::new(SharedGlobalState::new(loader.clone()));
+
+    let (mut method_res, _, method_type_idx) = make_test_assembly!(
+        "ByteMemmove.dll".to_string(),
+        "ByteMemmoveAssembly".to_string(),
+        "ByteMemmoveType".to_string()
+    );
+    let method_idx = method_res.push_method(
+        method_type_idx,
+        Method::new(
+            Accessibility::Public,
+            parameterless_i32_signature(),
+            "Memmove",
+            None,
+        ),
+    );
+    let method_res = loader.register_owned_assembly(method_res);
+    let method_def = &method_res.definition()[method_idx];
+    let method_type = TypeDescription::new(method_res.clone(), method_type_idx);
+    let member_index = method_type
+        .definition()
+        .methods
+        .iter()
+        .position(|method| std::ptr::eq(method, method_def))
+        .expect("test method exists in its type");
+    // A callee with no generic parameters of its own: the byte-sized overload by signature.
+    let memmove = MethodDescription::new(
+        method_type,
+        GenericLookup::default(),
+        method_res,
+        MethodMemberIndex::Method(member_index),
+    );
+    // The lookup an enclosing `Method<long>` would hand a non-generic callee if it leaked.
+    let leaked = GenericLookup::from_arcs(
+        Arc::new([]),
+        vec![ConcreteType::new(ResolutionS::NULL, BaseType::Int64)].into(),
+    );
+
+    let source: Vec<u8> = (1..=64).collect();
+    let mut destination = vec![0xEE_u8; 64];
+    let mut arena = new_test_arena(&shared);
+    arena.mutate_root(|gc, engine| {
+        // SAFETY: F1.GcHandleRooted — the test arena root remains live for this mutation.
+        let gc_handle = unsafe { test_gc_handle(gc, engine) };
+        let mut ctx = engine.ves_context(gc_handle);
+        ctx.push(StackValue::NativeInt(destination.as_mut_ptr() as isize));
+        ctx.push(StackValue::NativeInt(source.as_ptr() as isize));
+        ctx.push(StackValue::NativeInt(4));
+        assert!(matches!(
+            intrinsic_buffer_memmove(&mut ctx, memmove.clone(), &leaked),
+            StepResult::Continue
+        ));
+    });
+    assert_eq!(&destination[..4], &[1, 2, 3, 4]);
+    assert!(
+        destination[4..].iter().all(|&b| b == 0xEE),
+        "a byte-sized Memmove must not scale its length by a leaked generic argument"
+    );
+}
+
 use Instruction as I;
 
 // These controls each use one fresh localloc
@@ -3853,6 +3918,7 @@ mod batches {
         p_null_through_pointer_local_address,
         p18_localloc_ptr_clt,
         p24_unsafe_byte_offset_direction_and_deref,
+        p24b_byte_memmove_ignores_leaked_method_generics,
         p28_stind_i_fresh_pointer_through_heap_memory_dereferences,
         p31_localloc_blocks_released_on_return_and_pooling,
         p35_ldflda_on_stack_value_type_then_ldind,

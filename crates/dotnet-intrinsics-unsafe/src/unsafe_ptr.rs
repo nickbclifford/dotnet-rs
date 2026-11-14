@@ -50,7 +50,7 @@ pub fn intrinsic_unsafe_as_pointer<
     T: EvalStackOps<'gc> + TypedStackOps<'gc> + ExceptionOps<'gc>,
 >(
     ctx: &mut T,
-    _method: MethodDescription,
+    method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
     let val = ctx.pop();
@@ -126,10 +126,10 @@ pub fn intrinsic_unsafe_is_null_ref<'gc, T: TypedStackOps<'gc>>(
 #[dotnet_intrinsic("static void* System.Runtime.CompilerServices.Unsafe::Add<T>(void*, int)")]
 pub fn intrinsic_unsafe_add<'gc, T: UnsafeIntrinsicHost<'gc>>(
     ctx: &mut T,
-    _method: MethodDescription,
+    method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let target = dotnet_vm_ops::vm_try!(generics.method_arg(0));
+    let target = dotnet_vm_ops::vm_try!(method.own_method_arg(generics, 0));
     let layout = dotnet_vm_ops::vm_try!(ctx.unsafe_type_layout(target.clone()));
 
     let offset_val = ctx.pop();
@@ -186,10 +186,10 @@ pub fn intrinsic_unsafe_add_byte_offset<'gc, T: EvalStackOps<'gc> + ExceptionOps
 #[dotnet_intrinsic("static void* System.Runtime.CompilerServices.Unsafe::Subtract<T>(void*, int)")]
 pub fn intrinsic_unsafe_subtract<'gc, T: UnsafeIntrinsicHost<'gc>>(
     ctx: &mut T,
-    _method: MethodDescription,
+    method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let target = dotnet_vm_ops::vm_try!(generics.method_arg(0));
+    let target = dotnet_vm_ops::vm_try!(method.own_method_arg(generics, 0));
     let layout = dotnet_vm_ops::vm_try!(ctx.unsafe_type_layout(target.clone()));
 
     let offset_val = ctx.pop();
@@ -305,11 +305,11 @@ pub fn intrinsic_unsafe_as<T: ?Sized>(
 #[dotnet_intrinsic("static TTo& System.Runtime.CompilerServices.Unsafe::As<TFrom, TTo>(TFrom&)")]
 pub fn intrinsic_unsafe_as_generic<'gc, T: UnsafeIntrinsicHost<'gc>>(
     ctx: &mut T,
-    _method: MethodDescription,
+    method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let src_type_gen = dotnet_vm_ops::vm_try!(generics.cloned_method_arg(0));
-    let dest_type_gen = dotnet_vm_ops::vm_try!(generics.cloned_method_arg(1));
+    let src_type_gen = dotnet_vm_ops::vm_try!(method.cloned_own_method_arg(generics, 0));
+    let dest_type_gen = dotnet_vm_ops::vm_try!(method.cloned_own_method_arg(generics, 1));
 
     let src_layout = dotnet_vm_ops::vm_try!(ctx.unsafe_type_layout(src_type_gen));
     let dest_layout = dotnet_vm_ops::vm_try!(ctx.unsafe_type_layout(dest_type_gen.clone()));
@@ -353,7 +353,7 @@ pub fn intrinsic_unsafe_as_generic<'gc, T: UnsafeIntrinsicHost<'gc>>(
 #[dotnet_intrinsic("static TTo System.Runtime.CompilerServices.Unsafe::BitCast<TFrom, TTo>(TFrom)")]
 pub fn intrinsic_unsafe_bitcast<'gc, T: UnsafeIntrinsicHost<'gc>>(
     ctx: &mut T,
-    _method: MethodDescription,
+    method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
     if generics.method_generics.len() < 2 {
@@ -362,8 +362,8 @@ pub fn intrinsic_unsafe_bitcast<'gc, T: UnsafeIntrinsicHost<'gc>>(
         );
     }
 
-    let src_type = dotnet_vm_ops::vm_try!(generics.cloned_method_arg(0));
-    let dst_type = dotnet_vm_ops::vm_try!(generics.cloned_method_arg(1));
+    let src_type = dotnet_vm_ops::vm_try!(method.cloned_own_method_arg(generics, 0));
+    let dst_type = dotnet_vm_ops::vm_try!(method.cloned_own_method_arg(generics, 1));
     // INVARIANT: F5.TracesEveryGcRef — the unchanged stack value retains its traced fields, including byrefs.
     if src_type == dst_type && src_type.is_value_type(ctx.loader().as_ref()) {
         return StepResult::Continue;
@@ -564,10 +564,10 @@ pub fn intrinsic_unsafe_as_ref_any<'gc, T: UnsafeIntrinsicHost<'gc>>(
 // But as_ref_any handles dispatch.
 pub fn intrinsic_unsafe_as_ref_ptr<'gc, T: UnsafeIntrinsicHost<'gc>>(
     ctx: &mut T,
-    _method: MethodDescription,
+    method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let target_type_gen = dotnet_vm_ops::vm_try!(generics.cloned_method_arg(0));
+    let target_type_gen = dotnet_vm_ops::vm_try!(method.cloned_own_method_arg(generics, 0));
     let dest_layout = dotnet_vm_ops::vm_try!(ctx.unsafe_type_layout(target_type_gen.clone()));
 
     let target_type = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(target_type_gen));
@@ -642,10 +642,10 @@ pub fn intrinsic_unsafe_skip_init<'gc, T: EvalStackOps<'gc>>(
 #[allow(unused_variables)]
 pub fn intrinsic_unsafe_size_of<'gc, T: UnsafeIntrinsicHost<'gc>>(
     ctx: &mut T,
-    _method: MethodDescription,
+    method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let target = dotnet_vm_ops::vm_try!(generics.method_arg(0));
+    let target = dotnet_vm_ops::vm_try!(method.own_method_arg(generics, 0));
     let layout = dotnet_vm_ops::vm_try!(ctx.unsafe_type_layout(target.clone()));
     ctx.push_i32(layout.size().as_usize() as i32);
     StepResult::Continue
@@ -671,7 +671,7 @@ pub fn intrinsic_unsafe_byte_offset<'gc, T: EvalStackOps<'gc> + TypedStackOps<'g
 #[dotnet_intrinsic("static T System.Runtime.CompilerServices.Unsafe::ReadUnaligned<T>(byte&)")]
 pub fn intrinsic_unsafe_read_unaligned<'gc, T: UnsafeIntrinsicHost<'gc>>(
     ctx: &mut T,
-    _method: MethodDescription,
+    method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
     let source = ctx.pop();
@@ -684,7 +684,7 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, T: UnsafeIntrinsicHost<'gc>>(
         Err(e) => return e,
     };
 
-    let target = dotnet_vm_ops::vm_try!(generics.method_arg(0));
+    let target = dotnet_vm_ops::vm_try!(method.own_method_arg(generics, 0));
     let layout = dotnet_vm_ops::vm_try!(ctx.unsafe_type_layout(target.clone()));
 
     let target_type = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(target.clone()));
@@ -722,10 +722,10 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, T: UnsafeIntrinsicHost<'gc>>(
 )]
 pub fn intrinsic_unsafe_write_unaligned<'gc, T: UnsafeIntrinsicHost<'gc>>(
     ctx: &mut T,
-    _method: MethodDescription,
+    method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let target = dotnet_vm_ops::vm_try!(generics.method_arg(0));
+    let target = dotnet_vm_ops::vm_try!(method.own_method_arg(generics, 0));
     let layout = dotnet_vm_ops::vm_try!(ctx.unsafe_type_layout(target.clone()));
     let value = ctx.pop();
 

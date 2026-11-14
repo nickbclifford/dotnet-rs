@@ -653,10 +653,10 @@ pub fn intrinsic_method_table_get_primitive_cor_element_type<
 )]
 pub fn intrinsic_runtime_helpers_is_bitwise_equatable<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
-    _method: MethodDescription,
+    method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let target = dotnet_vm_ops::vm_try!(generics.method_arg(0));
+    let target = dotnet_vm_ops::vm_try!(method.own_method_arg(generics, 0));
     let layout = dotnet_vm_ops::vm_try!(ctx.reflection_type_layout(target.clone()));
     let value = match &*layout {
         LayoutManager::Scalar(Scalar::ObjectRef) => false,
@@ -675,10 +675,10 @@ pub fn intrinsic_runtime_helpers_is_reference_or_contains_references<
     T: ReflectionIntrinsicHost<'gc>,
 >(
     ctx: &mut T,
-    _method: MethodDescription,
+    method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let target = dotnet_vm_ops::vm_try!(generics.method_arg(0));
+    let target = dotnet_vm_ops::vm_try!(method.own_method_arg(generics, 0));
     let layout = dotnet_vm_ops::vm_try!(ctx.reflection_type_layout(target.clone()));
     let res = layout.is_or_contains_refs();
 

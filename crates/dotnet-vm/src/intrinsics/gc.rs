@@ -182,7 +182,7 @@ pub fn intrinsic_gc_allocate_uninitialized_array<
     T: TypedStackOps<'gc> + MemoryOps<'gc> + ExceptionOps<'gc>,
 >(
     ctx: &mut T,
-    _method: MethodDescription,
+    method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
     let _pinned = ctx.pop_i32();
@@ -195,7 +195,7 @@ pub fn intrinsic_gc_allocate_uninitialized_array<
         );
     }
 
-    let element_type = dotnet_vm_ops::vm_try!(generics.cloned_method_arg(0));
+    let element_type = dotnet_vm_ops::vm_try!(method.cloned_own_method_arg(generics, 0));
     let vector = dotnet_vm_ops::vm_try!(ctx.new_vector(element_type, length as usize));
     let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let vector_ref = ctx.alloc_vec_ref(gc, vector);

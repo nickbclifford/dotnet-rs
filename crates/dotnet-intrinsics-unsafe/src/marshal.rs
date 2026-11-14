@@ -53,7 +53,7 @@ fn compute_offset_and_layout<'gc, T: UnsafeIntrinsicHost<'gc>>(
 #[allow(unused_variables)]
 pub fn intrinsic_marshal_get_last_pinvoke_error<'gc, T: UnsafeIntrinsicHost<'gc>>(
     ctx: &mut T,
-    _method: MethodDescription,
+    method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
     let value = ctx.unsafe_get_last_pinvoke_error();
@@ -65,7 +65,7 @@ pub fn intrinsic_marshal_get_last_pinvoke_error<'gc, T: UnsafeIntrinsicHost<'gc>
 #[allow(unused_variables)]
 pub fn intrinsic_marshal_set_last_pinvoke_error<'gc, T: UnsafeIntrinsicHost<'gc>>(
     ctx: &mut T,
-    _method: MethodDescription,
+    method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
     let value = ctx.pop_i32();
@@ -83,7 +83,7 @@ pub fn intrinsic_marshal_size_of<'gc, T: UnsafeIntrinsicHost<'gc>>(
     generics: &GenericLookup,
 ) -> StepResult {
     let concrete_type = if method.signature().parameters.is_empty() {
-        dotnet_vm_ops::vm_try!(generics.cloned_method_arg(0))
+        dotnet_vm_ops::vm_try!(method.cloned_own_method_arg(generics, 0))
     } else {
         let type_obj = ctx.pop_obj();
         dotnet_vm_ops::vm_try!(ctx.unsafe_resolve_runtime_type(type_obj))
@@ -106,7 +106,7 @@ pub fn intrinsic_marshal_offset_of<'gc, T: UnsafeIntrinsicHost<'gc>>(
     let field_name_val = ctx.pop();
     let field_name = with_string!(ctx, field_name_val, |s| s.as_string());
     let concrete_type = if method.signature().parameters.len() == 1 {
-        dotnet_vm_ops::vm_try!(generics.cloned_method_arg(0))
+        dotnet_vm_ops::vm_try!(method.cloned_own_method_arg(generics, 0))
     } else {
         let type_obj = ctx.pop_obj();
         dotnet_vm_ops::vm_try!(ctx.unsafe_resolve_runtime_type(type_obj))
