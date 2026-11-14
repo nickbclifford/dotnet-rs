@@ -111,7 +111,7 @@ declare -A expected_by_name=() batch_by_name=() seen_names=() seen_controls=() s
 shards=() batches=()
 for row in "${expected_controls[@]}"; do
     IFS='|' read -r name group batch extra <<< "$row"
-    [[ $name == pointer_provenance_tests::p* && $group =~ ^[1-9][0-9]*$ && $batch =~ ^[1-9][0-9]*$ && -z ${extra:-} && ! -v expected_by_name[$name] ]] || die 'invalid or duplicate expected control'
+    [[ $name == pointer_provenance_tests::p[0-9_]* && $group =~ ^[1-9][0-9]*$ && $batch =~ ^[1-9][0-9]*$ && -z ${extra:-} && ! -v expected_by_name[$name] ]] || die 'invalid or duplicate expected control'
     [[ $group == $((${#shards[@]} + 1)) ]] || die 'expected singleton shards must be sequential'
     expected_by_name[$name]=$group
     batch_by_name[$name]=$batch
@@ -126,7 +126,7 @@ done
 ((${#expected_controls[@]} == reviewed_count)) || die 'expected control count differs from reviewed count'
 for row in "${catalog[@]}"; do
     IFS='|' read -r name class native group extra <<< "$row"
-    [[ $name == pointer_provenance_tests::p* && ! -v seen_names[$name] && -z ${extra:-} ]] || die "invalid or duplicate catalog identity: $name"
+    [[ $name == pointer_provenance_tests::p[0-9_]* && ! -v seen_names[$name] && -z ${extra:-} ]] || die "invalid or duplicate catalog identity: $name"
     seen_names[$name]=1
     if [[ $class != control ]]; then
         [[ $group == - ]] || die "diagnostic assigned to control shard: $name"
@@ -216,16 +216,17 @@ verify_controls() {
     if ! "${list_cmd[@]}" > "$dir/list" || ! "${metadata_cmd[@]}" > "$dir/metadata"; then
         echo 'control discovery failed' >&2; rm -rf "$dir"; return 1
     fi
-    # The probe lane is the p-prefixed namespace; other tests in this module are
-    # separate regressions, not diagnostic probes or members of these shards.
+    # The probe lane is `p` followed by a digit or underscore (p01_…, p_null); other tests in
+    # this module, even ones starting with "p", are separate regressions, not diagnostic probes
+    # or members of these shards.
     if ! python3 - "$dir/list" "$dir/metadata" "${catalog[@]}" <<'PYCODE'
-import json, sys
+import json, re, sys
 from collections import Counter
 from pathlib import Path
 
-prefix = "pointer_provenance_tests::p"
+probe = re.compile(r"pointer_provenance_tests::p[0-9_]")
 listing = Counter(line.removesuffix(": test") for line in Path(sys.argv[1]).read_text().splitlines()
-                  if line.startswith(prefix) and line.endswith(": test"))
+                  if probe.match(line) and line.endswith(": test"))
 try:
     rows = [row.split("|") for row in sys.argv[3:]]
     controls = {name for name, cls, _, _ in rows if cls == "control"}
@@ -236,7 +237,7 @@ try:
         if suite.get("package-name") != "dotnet-vm" or suite.get("kind") != "lib" or suite.get("status") != "listed":
             continue
         for name, case in suite.get("testcases", {}).items():
-            if name.startswith(prefix):
+            if probe.match(name):
                 if name in cases:
                     raise ValueError(f"duplicate metadata identity: {name}")
                 cases[name] = case

@@ -130,6 +130,9 @@ if mode in ('new-enabled', 'new-ignored'):
     names.append('pointer_provenance_tests::p99_new_probe')
 batches = {int(k): v for k, v in json.loads(os.environ['BATCHES']).items()}
 batch_tests = ['pointer_provenance_tests::batches::batch_%d' % k for k in batches]
+# Enabled regressions outside the probe namespace (`p` + digit/underscore), even when they
+# start with "p", must not be mistaken for unregistered probes.
+if mode == 'regression-test': batch_tests.append('pointer_provenance_tests::pointer_stobj_writes_native_word')
 if '--list' in a:
     if mode == 'missing': names.pop(0)
     if mode == 'typo': names[0] += '_typo'
@@ -281,7 +284,8 @@ class PointerScriptTests(unittest.TestCase):
             self.assertIn('44 exact non-ignored controls', self.invoke('verify-controls', '--configuration', config))
             for mode in ('missing', 'typo', 'duplicate', 'ignored', 'filter-mismatch', 'not-listed', 'new-enabled'):
                 self.assertIn('guard failed', self.invoke('verify-controls', '--configuration', config, mode=mode, ok=False))
-        self.assertIn('44 exact non-ignored controls', self.invoke('verify-controls', '--configuration', 'no-features', mode='new-ignored'))
+        for mode in ('new-ignored', 'regression-test'):
+            self.assertIn('44 exact non-ignored controls', self.invoke('verify-controls', '--configuration', 'no-features', mode=mode))
         for call in self.recorded():
             self.assertNotIn('--ignored', call['args'])
 
