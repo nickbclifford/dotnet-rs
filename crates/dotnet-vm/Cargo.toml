@@ -98,7 +98,7 @@ deadlock-diagnostics = ["multithreading", "dep:parking_lot", "parking_lot/deadlo
 dotnet-build-tools = { workspace = true }
 dotnet-macros-core = { workspace = true }
 phf_codegen = "0.14"
-syn = { version = "2", features = ["full"] }
+syn = { version = "3", features = ["full"] }
 quote = "1.0"
 proc-macro2 = "1.0"
 

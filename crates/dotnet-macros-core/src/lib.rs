@@ -868,7 +868,7 @@ mod tests {
                 }
                 syn::Item::Impl(item_impl) => {
                     impl_count += 1;
-                    let implemented_trait = item_impl.trait_.as_ref().unwrap().1.segments.last();
+                    let implemented_trait = item_impl.trait_.as_ref().unwrap().0.segments.last();
                     let implemented_trait = implemented_trait.unwrap();
                     assert_eq!(implemented_trait.ident, "VariableOps");
                     let args_len = match &implemented_trait.arguments {
