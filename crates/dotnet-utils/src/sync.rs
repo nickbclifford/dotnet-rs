@@ -321,6 +321,25 @@ mod loom_compat {
                 .expect("mutex guard is already held by a condition wait");
             guard.0 = Some(self.0.wait(inner).expect("loom mutex cannot be poisoned"));
         }
+
+        /// Timed wait with `parking_lot`'s shape. Loom does not model time: it never reports a
+        /// timeout, so a model that relies on one must be driven by an explicit notification.
+        pub fn wait_for<'a, T>(
+            &self,
+            guard: &mut MutexGuard<'a, T>,
+            timeout: std::time::Duration,
+        ) -> loom::sync::WaitTimeoutResult {
+            let inner = guard
+                .0
+                .take()
+                .expect("mutex guard is already held by a condition wait");
+            let (inner, result) = self
+                .0
+                .wait_timeout(inner, timeout)
+                .expect("loom mutex cannot be poisoned");
+            guard.0 = Some(inner);
+            result
+        }
     }
 }
 

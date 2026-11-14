@@ -179,7 +179,14 @@ impl Drop for DeadlockReporter {
 /// IDs are monotonic and never recycled. The compact ObjectRef codec limits this process
 /// to 65,535 managed thread arenas over its lifetime; 0 is reserved for VM allocation.
 /// This prevents ArenaId collisions when parallel tests each create their own ThreadManager.
+#[cfg(not(loom))]
 static NEXT_GLOBAL_THREAD_ID: AtomicU64 = AtomicU64::new(1); // Thread ID 0 is reserved
+
+// Loom atomics have no const constructor.
+#[cfg(loom)]
+loom::lazy_static! {
+    static ref NEXT_GLOBAL_THREAD_ID: AtomicU64 = AtomicU64::new(1);
+}
 
 fn allocate_managed_thread_id(counter: &AtomicU64) -> u64 {
     counter

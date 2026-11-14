@@ -154,8 +154,11 @@ computed strings between two workers. It checks the race winner and table roots 
 workers exit and a collection runs; it matches .NET's output and exit code. The three
 multithreaded `vm-collection` cross-arena
 controls pass under pinned Tree Borrows Miri (with the existing permissive-provenance warnings).
-The VM does not compile with `cfg(loom)` and `multithreading`: its synchronization facade lacks
-`Condvar::wait_for` and a const atomic initializer, so the intern table cannot be modeled there.
+The VM did not compile with `cfg(loom)` and `multithreading` (a pre-existing gap, present before
+this plan): the loom synchronization facade lacked `Condvar::wait_for` and `NEXT_GLOBAL_THREAD_ID`
+needed a const atomic initializer. Both are fixed (`wait_for` wraps loom's `wait_timeout`, which
+never times out; the counter uses a loom `lazy_static`), and CI now compiles that configuration, so
+the intern table can be modeled under Loom; no string model has been written.
 The existing `dotnet-runtime-memory` Loom shared-table suite passes, but does not cover strings.
 Workspace Clippy passes in both feature sets, doc drift passes, and all ten CLI/VM
 feature-matrix runs pass.
