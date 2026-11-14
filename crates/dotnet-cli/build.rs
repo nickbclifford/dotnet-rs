@@ -341,6 +341,9 @@ fn main() {
                 | "invoke_byref_foreign_42"
                 | "invoke_argument_race_42"
                 | "async_task_delay_elapsed_42"
+                // Plan 22 baseline: the fixture is compiled now and registered as
+                // its interning cases are implemented in subsequent slices.
+                | "string_interning_42"
         );
 
         let source_path = path.strip_prefix(manifest_dir).unwrap().to_str().unwrap();

@@ -1,6 +1,6 @@
 # String interning
 
-**Status:** Not started
+**Status:** Slice 1 complete; implementation not started
 **Outcome:** String literal identity, `string.Empty` identity and `String.Intern`/`IsInterned`
 match `dotnet` in a diff fixture under both feature sets, including the same literal loaded on two
 threads.
@@ -94,6 +94,30 @@ Out:
 
 Each slice ends with `cargo clippy --workspace --all-targets -D warnings` (both feature sets),
 the doc-drift check and the full `dotnet-cli` and `dotnet-vm` test matrices passing.
+
+### Slice 1 baseline
+
+On .NET runtime 10.0.14, all ten reports in `strings/string_interning_42.cs` are `True` and the
+fixture exits 42. On the VM at `359367a4`, both no-default-features and `multithreading` builds
+exit 42 but report `False` for all three literal identity cases, both empty-field cases, and both
+empty constructors. `Intern` of the computed literal and the initial `IsInterned` call each throw
+`System.DllNotFoundException` while resolving the CoreCLR QCalls. The after-intern case also
+throws at `Intern`, before reaching its second `IsInterned`. The fixture catches these exceptions
+to preserve the individual baseline reports; it is compiled but not registered as a passing test
+until the implementation slices.
+
+On an AMD Ryzen 9 9900X, with the default `multithreading` feature and `bench-fat`, prewarmed
+Criterion binaries were run with `perf stat -r 3 -e instructions:u` and `--bench ... --test`:
+
+| Benchmark filter | Mean user instructions | Variation |
+| --- | ---: | ---: |
+| `end_to_end` / `string` | 19,679,292,433 | ±0.01% |
+| `runtime_primitives` / `eval_stack_push_i32_pop_safe` | 8,139,803 | ±0.74% |
+| `runtime_primitives` / `vector_trace_i32` | 3,029,942 | ±0.00% |
+
+These are whole-process counts, not per-iteration measurements. In particular, `--test` runs the
+very short primitive cases once, so their counts are dominated by startup and setup; use the same
+commands for comparison and interpret small changes cautiously.
 
 ## Done when
 
