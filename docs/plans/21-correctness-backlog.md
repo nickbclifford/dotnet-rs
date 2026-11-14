@@ -1,6 +1,6 @@
 # Correctness backlog: byte-read bounds, pointer slots, feature forwarding, thread IDs and the timer flake
 
-**Status:** In progress (slice 1 complete; slices 2–4 implemented, matrix verification incomplete)
+**Status:** In progress (slice 1 complete; slices 2–5 implemented, matrix verification incomplete)
 **Outcome:** An overflowing heap byte read returns `BoundsCheck`, every CTS write into a pointer
 slot either stores the address or fails loudly, the standalone reflection feature compiles, the
 managed-ID counter goes through `dotnet_utils::sync`, and `threading_timer_callback_pool_thread_42` is either fixed
@@ -109,7 +109,7 @@ Out:
    all ten VM matrix configurations and nine CLI configurations pass. The fuzzing CLI run has
    223 passes and six failures from missing `SystemNative_SetErrNo` or `SystemNative_Calloc`
    entry points; the pointer-slot fixture passes. The full matrix requirement remains open.
-5. **Timer flake.** First make failures diagnosable. Diff-harness exit-code assertions print the
+5. **Timer flake (implemented; not reproduced).** First make failures diagnosable. Diff-harness exit-code assertions print the
    VM's stderr, and a VM run that exceeds a harness-side deadline is killed with its partial
    output reported, separately from the CLR run. Then reproduce under load: loop the full
    multithreading `dotnet-cli` integration suite (`cargo nextest run -p dotnet-cli --features
@@ -120,6 +120,21 @@ Out:
      deterministic unit test, and record the cause here.
    - *Not reproduced:* record the commands, counts and the improved harness output here, remove
      the README entry and note that a recurrence now captures its message.
+
+   On 2026-11-13, ran `cargo nextest run -p dotnet-cli --no-default-features --features
+   multithreading --no-fail-fast` twice and the same command without `--features multithreading`
+   twice, with `DOTNET_USE_PREBUILT_FIXTURES=1` and 24 concurrent `nice -n 10 yes > /dev/null`
+   CPU workers. All 1,872 tests passed (529 per multithreading run, 407 per single-threaded run),
+   including over 1,000 fixture and differential tests. The timer's in-process and differential
+   tests each passed twice; both are currently excluded from the single-threaded configuration.
+   No cause was observed. Differential tests now include VM stderr on exit-code mismatch and
+   report partial stdout and stderr when a separately timed CLR or VM subprocess exceeds the
+   harness deadline. A recurrence in that path should therefore capture its message or timeout
+   output; a regression test also verifies that output is drained beyond pipe capacity.
+   Both workspace clippy feature sets and doc drift pass. The CLI/VM matrix passes nine
+   configurations; the fuzzing configuration has 486 passes and the same six CLI failures
+   recorded in slice 4, due to missing `SystemNative_SetErrNo` or `SystemNative_Calloc`.
+   The full matrix requirement therefore remains open.
 
 Each slice ends with `cargo clippy --workspace --all-targets -D warnings` (both feature sets),
 the doc-drift check and the full `dotnet-cli` and `dotnet-vm` test matrices passing, because past

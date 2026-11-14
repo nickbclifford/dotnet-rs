@@ -447,43 +447,16 @@ impl TestHarness {
     pub fn cli_command(&self, dll_path: &Path) -> Command {
         let assemblies_path =
             assemblies::find_dotnet_app_path().expect("could not find .NET shared path");
-        if let Some(bin_path) = std::env::var_os("CARGO_BIN_EXE_dotnet-rs") {
-            let mut command = Command::new(bin_path);
-            command.args([
-                "-a",
-                assemblies_path.to_str().unwrap(),
-                dll_path.to_str().unwrap(),
-            ]);
-            command
-        } else {
-            let cargo_bin = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
-            let mut command = Command::new(cargo_bin);
-            command.args([
-                "run",
-                "--quiet",
-                "--bin",
-                "dotnet-rs",
-                "--no-default-features",
-            ]);
-
-            #[cfg(feature = "multithreading")]
-            command.args(["--features", "multithreading"]);
-
-            #[cfg(feature = "memory-validation")]
-            command.args(["--features", "memory-validation"]);
-
-            if let Ok(target) = std::env::var("CARGO_BUILD_TARGET") {
-                command.args(["--target", target.as_str()]);
-            }
-
-            command.args([
-                "--",
-                "-a",
-                assemblies_path.to_str().unwrap(),
-                dll_path.to_str().unwrap(),
-            ]);
-            command
-        }
+        // Spawn the VM itself, so a deadline can kill it and close its output pipes.
+        let bin_path = std::env::var_os("CARGO_BIN_EXE_dotnet-rs")
+            .unwrap_or_else(|| env!("CARGO_BIN_EXE_dotnet-rs").into());
+        let mut command = Command::new(bin_path);
+        command.args([
+            "-a",
+            assemblies_path.to_str().unwrap(),
+            dll_path.to_str().unwrap(),
+        ]);
+        command
     }
 
     #[cfg(not(feature = "fuzzing"))]

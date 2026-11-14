@@ -1,3 +1,87 @@
+#[cfg(not(feature = "fuzzing"))]
+fn output_with_deadline(
+    command: &mut std::process::Command,
+    timeout: std::time::Duration,
+) -> (std::process::Output, bool) {
+    use std::{io::Read, process::Stdio, time::Instant};
+
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to start fixture process");
+    // Drain both pipes while the child runs, including when its output exceeds pipe capacity.
+    let mut stdout = child.stdout.take().unwrap();
+    let mut stderr = child.stderr.take().unwrap();
+    let stdout_reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout.read_to_end(&mut bytes).expect("read fixture stdout");
+        bytes
+    });
+    let stderr_reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stderr.read_to_end(&mut bytes).expect("read fixture stderr");
+        bytes
+    });
+    let deadline = Instant::now() + timeout;
+    let (status, timed_out) = loop {
+        if let Some(status) = child.try_wait().expect("wait for fixture") {
+            break (status, false);
+        }
+        if Instant::now() >= deadline {
+            // The process may have exited between try_wait and kill.
+            if let Err(error) = child.kill()
+                && child.try_wait().expect("wait for fixture").is_none()
+            {
+                panic!("failed to kill timed-out fixture: {error}");
+            }
+            break (child.wait().expect("reap fixture"), true);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    (
+        std::process::Output {
+            status,
+            stdout: stdout_reader
+                .join()
+                .expect("fixture stdout reader panicked"),
+            stderr: stderr_reader
+                .join()
+                .expect("fixture stderr reader panicked"),
+        },
+        timed_out,
+    )
+}
+
+#[cfg(not(feature = "fuzzing"))]
+fn fixture_output(command: &mut std::process::Command, runtime: &str) -> std::process::Output {
+    let timeout = crate::integration_tests_impl::harness::get_test_timeout(120);
+    let (output, timed_out) = output_with_deadline(command, timeout);
+    assert!(
+        !timed_out,
+        "{runtime} fixture timed out after {timeout:?}\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output
+}
+
+#[cfg(all(test, not(feature = "fuzzing"), unix))]
+#[test]
+fn fixture_deadline_captures_partial_output_and_drains_pipes() {
+    use std::{process::Command, time::Duration};
+    let (output, timed_out) = output_with_deadline(
+        Command::new("sh").args([
+            "-c",
+            "head -c 131072 /dev/zero; printf 'partial stdout'; printf 'partial stderr' >&2; exec sleep 30",
+        ]),
+        Duration::from_secs(2),
+    );
+    assert!(timed_out);
+    assert!(output.stdout.ends_with(b"partial stdout"));
+    assert_eq!(output.stderr, b"partial stderr");
+}
+
 macro_rules! diff_test {
     ($name:ident, $fixture_path:expr) => {
         diff_test!($name, $fixture_path, 42);
@@ -12,26 +96,28 @@ macro_rules! diff_test {
             let harness = TestHarness::get();
             let dll_path = harness.ensure_dll(Path::new($fixture_path));
 
-            let dotnet_output = Command::new("dotnet")
-                .arg(&dll_path)
-                .output()
-                .expect("failed to run fixture with dotnet");
+            let dotnet_output = fixture_output(Command::new("dotnet").arg(&dll_path), "CLR");
             let dotnet_exit_code = dotnet_output.status.code().unwrap_or(255) as u8;
             let dotnet_stdout = String::from_utf8_lossy(&dotnet_output.stdout).to_string();
 
-            let (dotnet_rs_exit_code, dotnet_rs_stdout) = harness.run_cli(&dll_path);
+            let vm_output = fixture_output(&mut harness.cli_command(&dll_path), "VM");
+            let dotnet_rs_exit_code = vm_output.status.code().unwrap_or(255) as u8;
+            let dotnet_rs_stdout = String::from_utf8_lossy(&vm_output.stdout);
+            let vm_stderr = String::from_utf8_lossy(&vm_output.stderr);
 
             assert_eq!(
-                dotnet_exit_code, $expected_exit_code,
-                "sanity check failed: unexpected dotnet exit code"
+                dotnet_exit_code,
+                $expected_exit_code,
+                "sanity check failed: unexpected dotnet exit code; CLR stderr: {}",
+                String::from_utf8_lossy(&dotnet_output.stderr)
             );
             assert_eq!(
                 dotnet_rs_exit_code, dotnet_exit_code,
-                "dotnet-rs exit code diverged from dotnet"
+                "dotnet-rs exit code diverged from dotnet; VM stderr: {vm_stderr}"
             );
             assert_eq!(
                 dotnet_rs_stdout, dotnet_stdout,
-                "dotnet-rs stdout diverged from dotnet"
+                "dotnet-rs stdout diverged from dotnet; VM stderr: {vm_stderr}"
             );
         }
     };
@@ -48,23 +134,25 @@ macro_rules! diff_test_exit_code {
             let harness = TestHarness::get();
             let dll_path = harness.ensure_dll(Path::new($fixture_path));
 
-            let dotnet_output = Command::new("dotnet")
-                .arg(&dll_path)
-                .output()
-                .expect("failed to run fixture with dotnet");
+            let dotnet_output = fixture_output(Command::new("dotnet").arg(&dll_path), "CLR");
             let dotnet_exit_code = dotnet_output.status.code().unwrap_or(255) as u8;
 
-            let (dotnet_rs_exit_code, _) = harness.run_cli(&dll_path);
+            let vm_output = fixture_output(&mut harness.cli_command(&dll_path), "VM");
+            let dotnet_rs_exit_code = vm_output.status.code().unwrap_or(255) as u8;
             let expected_exit_code: u8 = $expected_exit_code;
 
             assert_eq!(
-                dotnet_exit_code, expected_exit_code,
-                "sanity check failed: dotnet should return fixture exit code {}",
-                expected_exit_code
+                dotnet_exit_code,
+                expected_exit_code,
+                "sanity check failed: dotnet should return fixture exit code {}; CLR stderr: {}",
+                expected_exit_code,
+                String::from_utf8_lossy(&dotnet_output.stderr)
             );
             assert_eq!(
-                dotnet_rs_exit_code, dotnet_exit_code,
-                "dotnet-rs exit code diverged from dotnet"
+                dotnet_rs_exit_code,
+                dotnet_exit_code,
+                "dotnet-rs exit code diverged from dotnet; VM stderr: {}",
+                String::from_utf8_lossy(&vm_output.stderr)
             );
         }
     };

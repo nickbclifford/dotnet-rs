@@ -10,7 +10,7 @@ In priority order. Each plan's own `Status:` line is the only record of its stat
 
 | ID | Plan | Note |
 |---|---|---|
-| 21 | [Correctness backlog: byte-read bounds, pointer slots, feature forwarding, thread IDs and the timer flake](21-correctness-backlog.md) | In progress; slice 2 implemented, matrix verification incomplete |
+| 21 | [Correctness backlog: byte-read bounds, pointer slots, feature forwarding, thread IDs and the timer flake](21-correctness-backlog.md) | In progress; slices 2–5 implemented, matrix verification incomplete |
 | 22 | [String interning](22-string-interning.md) | Not started; `ldstr`, `string.Empty` and `String.Intern` identity |
 | 18 | [Managed API gaps against the CLR](18-managed-api-clr-gaps.md) | Complete; Newtonsoft and EF host rungs match `dotnet` |
 | 19 | [Reflection invocation matches the CLR](19-reflection-invoke-clr-parity.md) | Complete; wrapping, byref returns, success-only copy-back and ambiguity match the CLR |
@@ -142,12 +142,6 @@ Evidence and IDs (p01…, R01…) are defined in the
   `IsNullOrWhiteSpace` loop shifts across cache-line boundaries as the binary changes. Compare
   `perf stat` instructions before attributing a `string` change to a commit; consider aligning
   hot intrinsic loops if this keeps masking real changes.
-- **Timer pool-thread fixture under load:** `threading_timer_callback_pool_thread_42` failed
-  twice during full parallel `dotnet-cli` integration runs on 2026-11-11 (once single-threaded,
-  once during plan 16 slice 4 validation) and passed every isolated and repeated run. The
-  failure message was not captured. After the pointer-static fix (next entry) 600 stress runs
-  under load (6 x 100) did not reproduce it, but nothing ties it to that bug, so it stays open:
-  reproduce under load and record the message before diagnosing.
 - **Other missing or incorrect runtime behavior:**
   - Empty strings have no shared identity: `string.Empty` allocates on every load
     (`intrinsic_field_string_empty`), so `ReferenceEquals(string.Empty, string.Empty)` and
