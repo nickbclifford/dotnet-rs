@@ -116,7 +116,7 @@ pub type ClassificationResult = Option<IntrinsicMetadata>;
 /// all possible sources in a consistent order:
 /// 1. Registry → Returns associated metadata (primary source)
 /// 2. `internal_call` flag → Static intrinsic
-/// 3. IntrinsicAttribute → Requires registry lookup for metadata
+/// 3. IntrinsicAttribute → Not in the registry: runs its managed body, or is `Missing` without one
 ///
 /// # Arguments
 /// * `method` - The method to classify
@@ -162,7 +162,14 @@ pub fn classify_intrinsic(
             && ctor.parent.type_name() == INTRINSIC_ATTR
         {
             // If we're here, it means the intrinsic was NOT found in the registry (step 1).
-            // So we treat it as a missing intrinsic rather than recursively checking the registry.
+            //
+            // ECMA-335 does not know this attribute: it only permits a JIT to expand the call. The
+            // CLR guarantees the managed body is a correct implementation (`Math.Min(long, long)`,
+            // `BitOperations.PopCount`, ...), so a method with a body runs that body. Only a method
+            // without one has nothing to execute and is reported as a missing intrinsic.
+            if method.body().is_some() {
+                return None;
+            }
             return Some(IntrinsicMetadata::direct_intercept(
                 MethodIntrinsicId::Missing,
                 "Marked with IntrinsicAttribute but not implemented",

@@ -19,14 +19,18 @@ use syn::{ItemFn, LitStr, parse_macro_input};
 /// Returns the `BaseType` discriminator used by generated intrinsic filters.
 ///
 /// This intentionally only recognizes primitive/base-shape aliases that can be
-/// matched directly from signature metadata. More complex shapes (arrays,
+/// matched directly from signature metadata. `ParsedSignature` normalizes the C# keywords
+/// (`byte`, `long`, ...) to the `BaseType` names (`UInt8`, `Int64`, ...), so those names must be
+/// accepted here too: a name missing from this table silently disables that parameter's check. More complex shapes (arrays,
 /// generics, refs, user types, etc.) are left to runtime intrinsic handlers.
 fn match_primitive(type_name: &str) -> Option<proc_macro2::TokenStream> {
     match type_name {
         "bool" | "Boolean" | "System.Boolean" => Some(quote! { BaseType::<MethodType>::Boolean }),
         "char" | "Char" | "System.Char" => Some(quote! { BaseType::<MethodType>::Char }),
-        "sbyte" | "SByte" | "System.SByte" => Some(quote! { BaseType::<MethodType>::Int8 }),
-        "byte" | "Byte" | "System.Byte" => Some(quote! { BaseType::<MethodType>::UInt8 }),
+        "sbyte" | "SByte" | "Int8" | "System.SByte" => {
+            Some(quote! { BaseType::<MethodType>::Int8 })
+        }
+        "byte" | "Byte" | "UInt8" | "System.Byte" => Some(quote! { BaseType::<MethodType>::UInt8 }),
         "short" | "Int16" | "System.Int16" => Some(quote! { BaseType::<MethodType>::Int16 }),
         "ushort" | "UInt16" | "System.UInt16" => Some(quote! { BaseType::<MethodType>::UInt16 }),
         "int" | "Int32" | "System.Int32" => Some(quote! { BaseType::<MethodType>::Int32 }),
@@ -714,5 +718,26 @@ mod tests {
             "non-primitive signature shapes should not emit macro checks"
         );
         assert_filter_tail_is_true(filter);
+    }
+
+    #[test]
+    fn intrinsic_filter_checks_every_normalized_primitive_keyword() {
+        // `ParsedSignature` rewrites keywords such as `byte` to `UInt8`; each rewritten name must
+        // still produce a check, or the handler would match any overload of the same arity.
+        for keyword in [
+            "bool", "byte", "sbyte", "char", "short", "ushort", "int", "uint", "long", "ulong",
+            "float", "double", "string", "object", "nint", "nuint",
+        ] {
+            let file = expand_intrinsic_to_file(
+                &format!("static void DotnetRs.MacroBoundary::One({keyword})"),
+                "keyword_handler",
+            );
+            let filter = find_filter_fn(&file, "keyword_handler");
+            assert_eq!(
+                filter.block.stmts.len(),
+                2,
+                "`{keyword}` parameter emitted no generated check"
+            );
+        }
     }
 }
