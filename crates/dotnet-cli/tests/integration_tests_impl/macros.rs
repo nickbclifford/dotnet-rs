@@ -17,6 +17,23 @@ macro_rules! fixture_test {
             };
             let result = harness.run_with_timeout(&dll_path, get_test_timeout(60));
 
+            // The `fuzzing` build denies every P/Invoke, so any fixture that reaches a
+            // native entry point (console, RNG, timestamps, ...) fails by design. Skip those
+            // by observed denial rather than by a hand-maintained fixture list.
+            #[cfg(feature = "fuzzing")]
+            if result.exit_code != $expected
+                && result.stderr.as_deref().is_some_and(|e| {
+                    e.contains("EntryPointNotFoundException") && e.contains("SystemNative_")
+                        || e.contains("TypeInitializationException") && e.contains("SystemNative_")
+                        // TimerQueue's type initializer reads native time/CPU state; the
+                        // denial surfaces only as this wrapper, without the inner entry point.
+                        || e.contains("type initializer for 'System.Threading.TimerQueue'")
+                })
+            {
+                eprintln!("{}: skipped, reached a P/Invoke denied by the fuzzing sandbox", stringify!($name));
+                return;
+            }
+
             assert_eq!(
                 result.exit_code,
                 $expected,
