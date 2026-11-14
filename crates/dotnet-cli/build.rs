@@ -38,7 +38,12 @@ fn main() {
     let repo_root = find_repo_root(manifest_dir);
     let shared_msbuild_inputs = shared_msbuild_input_candidates(&tests_dir, &repo_root);
     for input in &shared_msbuild_inputs {
-        // Emit these even when missing so introducing one later retriggers build.rs.
+        // Only emit existing paths: cargo treats a missing rerun-if-changed path as
+        // always dirty, which forces a rebuild of this crate and all dependents on
+        // every invocation. Adding one of these files later needs a `touch build.rs`.
+        if !input.exists() {
+            continue;
+        }
         println!("cargo:rerun-if-changed={}", input.display());
     }
 
