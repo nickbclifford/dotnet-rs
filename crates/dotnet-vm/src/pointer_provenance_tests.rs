@@ -2328,7 +2328,7 @@ fn p24_unsafe_byte_offset_direction_and_deref() {
 }
 
 #[test]
-fn p24b_byte_memmove_ignores_leaked_method_generics() {
+fn byte_memmove_ignores_leaked_method_generics() {
     let loader = get_mock_loader();
     #[allow(clippy::arc_with_non_send_sync)]
     let shared = Arc::new(SharedGlobalState::new(loader.clone()));
@@ -3918,7 +3918,6 @@ mod batches {
         p_null_through_pointer_local_address,
         p18_localloc_ptr_clt,
         p24_unsafe_byte_offset_direction_and_deref,
-        p24b_byte_memmove_ignores_leaked_method_generics,
         p28_stind_i_fresh_pointer_through_heap_memory_dereferences,
         p31_localloc_blocks_released_on_return_and_pooling,
         p35_ldflda_on_stack_value_type_then_ldind,
