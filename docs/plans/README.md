@@ -10,7 +10,7 @@ In priority order. Each plan's own `Status:` line is the only record of its stat
 
 | ID | Plan | Note |
 |---|---|---|
-| 21 | [Correctness backlog: byte-read bounds, pointer slots, feature forwarding, thread IDs and the timer flake](21-correctness-backlog.md) | Not started; closes five "Not yet planned" entries |
+| 21 | [Correctness backlog: byte-read bounds, pointer slots, feature forwarding, thread IDs and the timer flake](21-correctness-backlog.md) | In progress; slice 1 complete |
 | 22 | [String interning](22-string-interning.md) | Not started; `ldstr`, `string.Empty` and `String.Intern` identity |
 | 18 | [Managed API gaps against the CLR](18-managed-api-clr-gaps.md) | Complete; Newtonsoft and EF host rungs match `dotnet` |
 | 19 | [Reflection invocation matches the CLR](19-reflection-invoke-clr-parity.md) | Complete; wrapping, byref returns, success-only copy-back and ambiguity match the CLR |
@@ -70,11 +70,6 @@ Evidence and IDs (p01…, R01…) are defined in the
   monotonic allocation and exhaustion behavior. This is separate from plan 17's completed
   `try_update` rename, which kept `threading/basic::allocate_managed_thread_id` on the facade's
   `fetch_update` because Loom 0.7.2 has no `try_update`.
-- **Heap byte-read overflow:** `RawMemoryAccess::read_bytes` adds the owner-relative offset
-  and destination length without checked arithmetic. A `VesContext::read_bytes` heap-origin
-  call with `usize::MAX` and a one-byte destination panics instead of returning `BoundsCheck`;
-  examine the heap and cross-arena byte-copy contracts and preserve the owner/write-barrier
-  distinctions when fixing them. Inline and frame-home windows use separate checked paths.
 - **Standalone reflection validation feature:** enabling only
   `dotnet-intrinsics-reflection/generic-constraint-validation` fails to compile because it does
   not enable `dotnet-types/generic-constraint-validation`, which defines

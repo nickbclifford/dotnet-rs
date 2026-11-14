@@ -1127,6 +1127,48 @@ mod safe_api_tests {
                 )
             };
             let heap = ObjectRef::new(gc, HeapStorage::Obj(Box::new(make_object())));
+            #[cfg(feature = "multithreading")]
+            {
+                use dotnet_utils::{
+                    gc::{ThreadSafeLock, register_arena, try_acquire_lease, unregister_arena},
+                    sync::AtomicBool,
+                };
+                use dotnet_value::{
+                    object::{ObjectInner, ObjectPtr},
+                    pointer::CrossArenaOrigin,
+                };
+                let id = dotnet_utils::ArenaId::new(910_021);
+                let storage = Box::new(ThreadSafeLock::new(ObjectInner::new(
+                    HeapStorage::Obj(Box::new(make_object())),
+                    id,
+                )));
+                let raw = Box::into_raw(storage);
+                register_arena(id, Arc::new(AtomicBool::new(false)));
+                let lease = try_acquire_lease(id).unwrap();
+                // SAFETY: F10.RawMemoryAccessValid — raw is the live, non-null boxed lock.
+                let ptr = unsafe { ObjectPtr::from_raw(raw) }.unwrap();
+                // SAFETY: F1.ArenaGenerationMatch; F1.GcHandleRooted — the boxed object remains live for its registered arena until after the read.
+                let origin = PointerOrigin::CrossArenaObjectRef(unsafe {
+                    CrossArenaOrigin::new(ptr, &lease)
+                });
+                let mut output = [0];
+                // SAFETY: F10.RawMemoryAccessValid — the retained owner rejects the invalid range before access.
+                let result = unsafe { ctx.read_bytes(origin, usize::MAX.into(), &mut output) };
+                assert_eq!(
+                    result,
+                    Err(MemoryAccessError::BoundsCheck {
+                        offset: usize::MAX,
+                        size: 1,
+                        len: 8
+                    })
+                );
+                drop(lease);
+                unregister_arena(id);
+                // SAFETY: F10.RawAllocationOwnership — registration and reads have ended; raw came from Box::into_raw.
+                unsafe {
+                    drop(Box::from_raw(raw));
+                }
+            }
             let transient = Arc::new(make_object());
             let metadata = Arc::new(StaticMetadata {
                 type_desc: td,
@@ -1250,21 +1292,27 @@ mod safe_api_tests {
                     unsafe { ctx.read_bytes(origin.clone(), offset.into(), &mut output) }.unwrap();
                     assert_eq!(output, input);
                 }
+                for (offset, size) in [(len + 1, 0), (len, 1), (usize::MAX, 1), (usize::MAX - 1, 2)]
+                {
+                    let mut output = vec![0; size];
+                    // SAFETY: F10.RawMemoryAccessValid — owned origins reject the invalid range before access.
+                    let read =
+                        unsafe { ctx.read_bytes(origin.clone(), offset.into(), &mut output) };
+                    assert_eq!(
+                        read,
+                        Err(MemoryAccessError::BoundsCheck { offset, size, len })
+                    );
+                }
                 if !matches!(origin, PointerOrigin::Heap(_)) {
                     for (offset, size) in
                         [(len + 1, 0), (len, 1), (usize::MAX, 1), (usize::MAX - 1, 2)]
                     {
                         let expected = MemoryAccessError::BoundsCheck { offset, size, len };
                         let input = vec![0; size];
-                        let mut output = vec![0; size];
                         // SAFETY: F10.RawMemoryAccessValid — owned origins reject the invalid range before access.
                         let write =
                             unsafe { ctx.write_bytes(origin.clone(), offset.into(), &input) };
                         assert_eq!(write, Err(expected.clone()));
-                        // SAFETY: F10.RawMemoryAccessValid — owned origins reject the invalid range before access.
-                        let read =
-                            unsafe { ctx.read_bytes(origin.clone(), offset.into(), &mut output) };
-                        assert_eq!(read, Err(expected));
                     }
                 }
                 // Restore the final byte before checking the initial payload.

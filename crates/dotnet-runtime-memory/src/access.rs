@@ -441,14 +441,14 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         if let Some(owner) = owner {
             owner.with_data(|data| {
                 let start = offset.as_usize();
-                let end = start + dest.len();
-                if end > data.len() {
-                    return Err(MemoryAccessError::BoundsCheck {
+                let end = start
+                    .checked_add(dest.len())
+                    .filter(|&end| end <= data.len())
+                    .ok_or(MemoryAccessError::BoundsCheck {
                         offset: start,
                         size: dest.len(),
                         len: data.len(),
-                    });
-                }
+                    })?;
                 dest.copy_from_slice(&data[start..end]);
                 Ok(())
             })?
@@ -1465,7 +1465,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             LayoutManager::Field(flm) => {
                 for field in flm.fields.values() {
                     let f_start = field.position.as_usize();
-                    let f_end = f_start + field.layout.size().as_usize();
+                    // Saturation conservatively includes an overlapping field even if a
+                    // malformed layout's end cannot be represented.
+                    let f_end = f_start.saturating_add(field.layout.size().as_usize());
                     if f_start < range_end && f_end > range_start {
                         // SAFETY: F10.RawMemoryAccessValid — `f_start` is a layout-provided field offset within the
                         // caller-validated live struct storage.

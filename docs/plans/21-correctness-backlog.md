@@ -1,6 +1,6 @@
 # Correctness backlog: byte-read bounds, pointer slots, feature forwarding, thread IDs and the timer flake
 
-**Status:** Not started
+**Status:** In progress (slice 1 complete)
 **Outcome:** An overflowing heap byte read returns `BoundsCheck`, every CTS write into a pointer
 slot either stores the address or fails loudly, the standalone reflection feature compiles, the
 managed-ID counter goes through `dotnet_utils::sync`, and `threading_timer_callback_pool_thread_42` is either fixed
@@ -76,7 +76,7 @@ Out:
 
 ## Slices
 
-1. **Checked heap byte reads.** Fix `read_bytes` and any other unchecked pre-check additions in
+1. **Checked heap byte reads (complete).** Fix `read_bytes` and any other unchecked pre-check additions in
    `access.rs`. Add a `dotnet-vm` unit test where a heap-origin `VesContext::read_bytes` at
    `usize::MAX` with a one-byte destination returns `BoundsCheck`, plus the multithreading
    cross-arena origin if it shares the path. Run the `miri-value` lane and
