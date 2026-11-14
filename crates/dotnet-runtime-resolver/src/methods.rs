@@ -70,6 +70,9 @@ where
             MethodSource::User(u) => {
                 let m = *u;
                 tracing::debug!("find_generic_method: User method={:?}", m);
+                // Without a MethodSpec the callee has no method generics of its own; the caller's
+                // must not leak into the callee's lookup (intrinsics read them as the callee's).
+                new_lookup.set_method_generics(Arc::new([]));
                 m
             }
             MethodSource::Generic(g) => {
