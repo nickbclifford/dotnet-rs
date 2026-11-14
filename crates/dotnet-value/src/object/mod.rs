@@ -202,6 +202,11 @@ impl<'gc> ObjectInner<'gc> {
     }
 }
 
+// gc-arena 0.7 hands out `Gc` pointers aimed directly at the value, so the alignment of
+// the pointee is the only alignment guarantee. The compact ObjectRef codec and the low-3-bit
+// owner tag require 8-byte aligned object addresses.
+const _: () = assert!(core::mem::align_of::<ThreadSafeLock<ObjectInner<'static>>>() >= 8);
+
 #[repr(transparent)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ObjectPtr(NonNull<ThreadSafeLock<ObjectInner<'static>>>);
