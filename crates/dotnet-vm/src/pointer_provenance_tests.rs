@@ -2376,8 +2376,12 @@ fn byte_memmove_ignores_leaked_method_generics() {
         // SAFETY: F1.GcHandleRooted — the test arena root remains live for this mutation.
         let gc_handle = unsafe { test_gc_handle(gc, engine) };
         let mut ctx = engine.ves_context(gc_handle);
-        ctx.push(StackValue::NativeInt(destination.as_mut_ptr() as isize));
-        ctx.push(StackValue::NativeInt(source.as_ptr() as isize));
+        ctx.push(StackValue::NativeInt(
+            destination.as_mut_ptr().expose_provenance() as isize,
+        ));
+        ctx.push(StackValue::NativeInt(
+            source.as_ptr().expose_provenance() as isize
+        ));
         ctx.push(StackValue::NativeInt(4));
         assert!(matches!(
             intrinsic_buffer_memmove(&mut ctx, memmove.clone(), &leaked),
