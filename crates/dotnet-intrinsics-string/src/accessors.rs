@@ -6,7 +6,7 @@ use dotnet_types::{
     members::{FieldDescription, MethodDescription},
 };
 use dotnet_utils::ByteOffset;
-use dotnet_value::{object::HeapStorage, string::CLRString, with_string};
+use dotnet_value::{object::HeapStorage, with_string};
 use dotnet_vm_data::StepResult;
 use dotnet_vm_ops::ops::{
     ExceptionOps, LoaderOps, RawMemoryOps, StringIntrinsicHost, TypedStackOps,
@@ -107,7 +107,7 @@ pub fn intrinsic_field_string_empty<'gc, T: StringIntrinsicHost<'gc>>(
     _type_generics: Arc<[ConcreteType]>,
     _is_address: bool,
 ) -> StepResult {
-    ctx.push_string(CLRString::new(vec![]));
+    ctx.push_interned_string(&[]);
     StepResult::Continue
 }
 

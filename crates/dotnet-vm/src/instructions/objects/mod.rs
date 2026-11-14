@@ -12,7 +12,7 @@ const OBJECT_IO_INLINE_BUFFER_SIZE: usize = 64;
 use dotnet_macros::dotnet_instruction;
 use dotnet_types::{WellKnown, comparer::decompose_type_source, members::MethodDescription};
 use dotnet_value::{
-    CLRString, StackValue,
+    StackValue,
     layout::HasLayout,
     object::{HeapStorage, ObjectRef, Vector},
     pointer::{PointerOrigin, UnmanagedPtr},
@@ -429,6 +429,6 @@ pub fn sizeof<'gc, T: ResolutionOps<'gc> + VmResolutionOps<'gc> + EvalStackOps<'
 
 #[dotnet_instruction(LoadString(chars))]
 pub fn ldstr<'gc, T: TypedStackOps<'gc>>(ctx: &mut T, chars: &[u16]) -> StepResult {
-    ctx.push_string(CLRString::new(chars.to_owned()));
+    ctx.push_interned_string(chars);
     StepResult::Continue
 }

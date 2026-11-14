@@ -1,6 +1,6 @@
 # String interning
 
-**Status:** Slice 1 complete; implementation not started
+**Status:** Slice 2 complete
 **Outcome:** String literal identity, `string.Empty` identity and `String.Intern`/`IsInterned`
 match `dotnet` in a diff fixture under both feature sets, including the same literal loaded on two
 threads.
@@ -118,6 +118,23 @@ Criterion binaries were run with `perf stat -r 3 -e instructions:u` and `--bench
 These are whole-process counts, not per-iteration measurements. In particular, `--test` runs the
 very short primitive cases once, so their counts are dominated by startup and setup; use the same
 commands for comparison and interpret small changes cautiously.
+
+### Slice 2 measurements
+
+With the same machine, profile, feature set and commands as the baseline:
+
+| Benchmark filter | Mean user instructions | Change | Variation |
+| --- | ---: | ---: | ---: |
+| `end_to_end` / `string` | 19,684,561,374 | +0.03% | ±0.02% |
+| `runtime_primitives` / `eval_stack_push_i32_pop_safe` | 8,220,613 | +0.99% | ±0.40% |
+| `runtime_primitives` / `vector_trace_i32` | 3,024,810 | -0.17% | ±0.03% |
+
+The string change is close to run-to-run variation; the primitive results are dominated by
+startup as above. No front cache was added on this evidence.
+
+The literal and empty-field fixture cases pass with and without multithreading, including UTF-16
+content and a weak-reference check of table rooting across collection. Workspace Clippy passes
+in both feature sets, doc drift passes, and all ten CLI/VM feature-matrix runs pass.
 
 ## Done when
 

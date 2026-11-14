@@ -400,6 +400,8 @@ pub struct SharedGlobalState {
     pub last_instructions: Arc<Mutex<InstructionRingBuffer>>,
     abort_requested: Arc<AtomicBool>,
     pub gc_coordinator: Arc<GCCoordinator>,
+    /// Canonical literal objects; every arena traces this table until VM shutdown.
+    pub(crate) interned_strings: DashMap<Vec<u16>, dotnet_value::object::ObjectPtr>,
     #[cfg(feature = "multithreading")]
     pub reflection_registry: SharedReflectionRegistry,
     pub resolution_shared_cache: OnceLock<Arc<crate::context::ResolutionShared>>,
@@ -501,6 +503,7 @@ impl SharedGlobalState {
             last_instructions,
             abort_requested: Arc::new(AtomicBool::new(false)),
             gc_coordinator: Arc::new(GCCoordinator::new(stw_in_progress.clone())),
+            interned_strings: DashMap::new(),
             #[cfg(feature = "multithreading")]
             reflection_registry: SharedReflectionRegistry::new(),
             resolution_shared_cache: OnceLock::new(),

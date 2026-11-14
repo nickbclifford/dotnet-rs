@@ -138,6 +138,8 @@ pub trait TypedStackOps<'gc>: EvalStackOps<'gc> {
         self.push(StackValue::ManagedPtr(value.into()));
     }
     fn push_string(&mut self, value: CLRString);
+    /// Push the canonical literal object for these UTF-16 code units.
+    fn push_interned_string(&mut self, chars: &[u16]);
 
     #[must_use]
     fn pop_i32(&mut self) -> i32 {
@@ -749,6 +751,9 @@ mod tests {
 
     impl TypedStackOps<'static> for CountingStack {
         fn push_string(&mut self, _: CLRString) {
+            unimplemented!()
+        }
+        fn push_interned_string(&mut self, _: &[u16]) {
             unimplemented!()
         }
     }

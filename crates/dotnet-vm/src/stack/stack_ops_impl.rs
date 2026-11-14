@@ -81,6 +81,24 @@ impl<'a, 'gc> TypedStackOps<'gc> for VesContext<'a, 'gc> {
         self.register_new_object(&in_heap);
         self.push(StackValue::ObjectRef(in_heap));
     }
+
+    fn push_interned_string(&mut self, chars: &[u16]) {
+        let ptr = if let Some(entry) = self.shared.interned_strings.get(chars) {
+            *entry
+        } else {
+            let object = ObjectRef::new(self.gc, HeapStorage::Str(CLRString::new(chars.to_vec())));
+            self.register_new_object(&object);
+            *self
+                .shared
+                .interned_strings
+                .entry(chars.to_vec())
+                .or_insert(object.as_ptr().expect("interned string is non-null"))
+        };
+        // SAFETY: F1.GcHandleRooted; F6.NoEscapeAcrossArena — the shared table
+        // roots this object, and its allocating arena is retained until shutdown.
+        let object = ObjectRef(Some(unsafe { gc_arena::Gc::from_ptr(ptr.as_ptr().cast()) }));
+        self.push(StackValue::ObjectRef(object));
+    }
 }
 
 impl<'a, 'gc> LocalOps<'gc> for VesContext<'a, 'gc> {

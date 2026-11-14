@@ -28,6 +28,15 @@ public static class Program
 
         Report("empty field", ReferenceEquals(string.Empty, string.Empty));
         Report("empty literal", ReferenceEquals(string.Empty, ""));
+        Report("utf16 literal", ReferenceEquals("\ud800\0\udfff", Utf16Literal()));
+        Report("computed is distinct", !ReferenceEquals(first, new string(new[] { 'l', 'i', 't', 'e', 'r', 'a', 'l', ' ', 'i', 'd', 'e', 'n', 't', 'i', 't', 'y' })));
+        WeakReference literalRoot = LiteralWeakReference();
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        Report("literal after collection", ReferenceEquals(first, LiteralFromAnotherMethod()));
+        Report("empty after collection", ReferenceEquals(string.Empty, ""));
+        Report("intern table roots literal", ReferenceEquals(literalRoot.Target, RootedLiteral()));
         Report("null pointer constructor", ReferenceEquals(new string((char*)null), string.Empty));
         Report("zero length constructor", ReferenceEquals(new string('a', 0), string.Empty));
 
@@ -48,4 +57,8 @@ public static class Program
         catch (Exception error) { ReportException("is interned after", error); }
         return 42;
     }
+
+    static string Utf16Literal() => "\ud800\0\udfff";
+    static string RootedLiteral() => "intern table root 42";
+    static WeakReference LiteralWeakReference() => new WeakReference(RootedLiteral());
 }
