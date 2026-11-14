@@ -1118,6 +1118,11 @@ diff_test!(
 );
 
 diff_test!(
+    pointer_slot_writes_match_dotnet,
+    "tests/fixtures/pointers/pointer_slot_writes_42.cs"
+);
+
+diff_test!(
     pointer_static_fields_match_dotnet,
     "tests/fixtures/pointers/static_pointer_fields_42.cs"
 );

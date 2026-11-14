@@ -127,25 +127,27 @@ impl<'gc> CTSValue<'gc> {
                 NativeInt(i) => dest.copy_from_slice(&i.to_ne_bytes()),
                 NativeUInt(i) => dest.copy_from_slice(&i.to_ne_bytes()),
                 Pointer(p) => {
-                    if dest.len() < ManagedPtr::SIZE {
+                    if dest.len() == size_of::<usize>() {
                         // A one-word slot is an unmanaged-pointer field (the layout of
                         // `T*`); `read_cts_value` decodes it as a raw address. A
                         // serialized ManagedPtr cannot fit, so store the address.
                         let address = p
                             .try_observe_address()
-                            .ok()
-                            .flatten()
+                            .expect("pointer address cannot escape its owner")
                             .map_or(0, |a| a.as_ptr().expose_provenance());
                         let word = address.to_ne_bytes();
-                        if dest.len() == word.len() {
-                            dest.copy_from_slice(&word);
-                        } else {
-                            dest.fill(0);
-                        }
+                        assert!(
+                            address != 0 || p.is_null(),
+                            "pointer address is unavailable"
+                        );
+                        dest.copy_from_slice(&word);
                         return;
                     }
-                    // This infallible CTS codec cannot reject a Transient pointer;
-                    // its encoding cannot retain its owner or be decoded.
+                    assert_eq!(dest.len(), ManagedPtr::SIZE, "invalid pointer slot size");
+                    assert!(
+                        !matches!(p.origin(), crate::pointer::PointerOrigin::Transient(_)),
+                        "transient pointer cannot be serialized"
+                    );
                     p.write(dest);
                 }
                 Float32(f) => dest.copy_from_slice(&f.to_ne_bytes()),

@@ -35,6 +35,20 @@ impl<'gc> ManagedPtrResolver<'gc> for TestManagedPtrResolver {
 
 const NO_MANAGED_BASES: TestManagedPtrResolver = TestManagedPtrResolver { static_base: None };
 
+#[test]
+fn cts_pointer_write_rejects_invalid_slot_size() {
+    let pointer = ManagedPtr::new(None, TypeDescription::NULL, None, false, None);
+    let value = crate::object::CTSValue::Value(crate::object::ValueType::Pointer(pointer));
+    let mut bytes = [0xabu8; 1];
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            value.write(&mut bytes);
+        }))
+        .is_err()
+    );
+    assert_eq!(bytes, [0xab]);
+}
+
 #[derive(Default)]
 struct CountingHeapCache<'gc> {
     entries: HashMap<usize, ObjectRef<'gc>>,
@@ -103,6 +117,12 @@ fn owner_retention_transient_native_int_conversion_is_rejected() {
     assert_eq!(
         transient.try_observe_address(),
         Err(ManagedPtrOwnershipError::TransientEscapes)
+    );
+    assert!(
+        crate::cts_cli_conversion::CliToCts::pointer_slot_address(crate::StackValue::ManagedPtr(
+            transient.clone().into()
+        ))
+        .is_err()
     );
     let (obj, _probe) = owner_retention_transient_object();
     let null_transient =

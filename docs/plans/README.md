@@ -44,6 +44,10 @@ lists the entries it closes.
 Evidence and IDs (p01…, R01…) are defined in the
 [pointer-provenance inventory](../pointer-provenance/INVENTORY.md).
 
+- **Static field reflection:** `DotnetRs.FieldInfo.SetValue` throws `NotImplementedException` for
+  static fields and `GetValue` returns null (`crates/dotnet-intrinsics-reflection/src/fields.rs`).
+  Needs static storage lookup, type-initializer triggering and access checks; surfaced by plan 21
+  slice 4's pointer-slot fixture, which therefore covers instance pointer fields only.
 - **Dependency major-version migrations:** defer the 12 exported notices without upgrading
   APIs: `gc-arena` in the workspace and both standalone fuzz manifests (3); workspace
   `parking_lot` and `lru` (2); benchmark `criterion` (1); `syn` in dotnet-macros,

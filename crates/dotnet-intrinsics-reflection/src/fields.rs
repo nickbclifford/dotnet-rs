@@ -253,6 +253,18 @@ pub fn intrinsic_field_info_get_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
             field.parent.clone(),
             field_def.name.as_ref(),
         ));
+        if matches!(
+            concrete_field_type.get(),
+            dotnetdll::prelude::BaseType::ValuePointer(..)
+        ) {
+            let boxed = dotnet_vm_ops::vm_try!(box_reflection_pointer(
+                ctx,
+                &concrete_field_type,
+                &field_bytes
+            ));
+            ctx.push_obj(boxed);
+            return StepResult::Continue;
+        }
         let value = dotnet_vm_ops::vm_try!(
             ctx.read_cts_value(&concrete_field_type, &field_bytes)
                 .map(|value| value.into_stack())
@@ -365,7 +377,12 @@ pub fn intrinsic_field_info_set_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
         return StepResult::Continue;
     }
 
-    let value = if field_is_value_type {
+    let value = if matches!(
+        concrete_field_type.get(),
+        dotnetdll::prelude::BaseType::ValuePointer(..)
+    ) {
+        dotnet_vm_ops::vm_try!(unbox_reflection_pointer(value))
+    } else if field_is_value_type {
         dotnet_vm_ops::vm_try!(coerce_field_set_value_argument(
             ctx,
             value,
@@ -384,6 +401,67 @@ pub fn intrinsic_field_info_set_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ));
 
     StepResult::Continue
+}
+
+/// Build a `System.Reflection.Pointer` box (`_ptr`, `_ptrType`) for a pointer-typed field,
+/// as `Pointer.Box` would.
+fn box_reflection_pointer<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    field_type: &ConcreteType,
+    word: &[u8],
+) -> Result<ObjectRef<'gc>, dotnet_types::error::VmError> {
+    let pointer_td = ctx.loader().corlib_type("System.Reflection.Pointer")?;
+    let runtime_type =
+        runtime_type_from_concrete(ctx.loader().as_ref(), field_type).ok_or_else(|| {
+            dotnet_types::error::ExecutionError::InternalError("unresolvable pointer type".into())
+        })?;
+    let type_obj = crate::common::get_runtime_type(ctx, runtime_type);
+    let object = ctx.new_object(pointer_td.clone())?;
+    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
+    let obj_ref = ctx.alloc_obj_ref(gc, object);
+    obj_ref.as_object_mut(gc, |instance| {
+        instance
+            .instance_storage
+            .get_field_mut_local(pointer_td.clone(), "_ptr")
+            .copy_from_slice(word);
+        type_obj.write(
+            &mut instance
+                .instance_storage
+                .get_field_mut_local(pointer_td.clone(), "_ptrType"),
+        );
+    });
+    Ok(obj_ref)
+}
+
+/// `FieldInfo.SetValue` passes a `System.Reflection.Pointer` box for pointer-typed fields;
+/// replace it with the native word it carries (its `_ptr` field).
+fn unbox_reflection_pointer<'gc>(
+    value: StackValue<'gc>,
+) -> Result<StackValue<'gc>, dotnet_types::error::ExecutionError> {
+    let StackValue::ObjectRef(obj) = value else {
+        return Ok(value);
+    };
+    if obj.0.is_none() {
+        return Ok(value);
+    }
+    let description = obj.as_heap_storage(|storage| match storage {
+        HeapStorage::Obj(o) => Some(o.description.clone()),
+        _ => None,
+    });
+    let Some(description) = description else {
+        return Ok(value);
+    };
+    if description.type_name() != "System.Reflection.Pointer" {
+        return Ok(value);
+    }
+    let bytes = read_instance_field_bytes(obj, description, "_ptr")?;
+    let word: [u8; size_of::<usize>()] = bytes.as_slice().try_into().map_err(|_| {
+        dotnet_types::error::ExecutionError::TypeMismatch {
+            expected: "pointer-sized _ptr field",
+            actual: "other size".into(),
+        }
+    })?;
+    Ok(StackValue::NativeInt(usize::from_ne_bytes(word) as isize))
 }
 
 fn coerce_field_set_value_argument<'gc, T: ReflectionIntrinsicHost<'gc>>(

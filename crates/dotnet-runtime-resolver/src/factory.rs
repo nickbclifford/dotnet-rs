@@ -341,33 +341,9 @@ where
             BaseType::UIntPtr | BaseType::FunctionPointer(_) => Ok(CTSValue::Value(
                 CliToCts::narrow_scalar_value(data, CtsScalarKind::NativeUInt)?,
             )),
-            BaseType::ValuePointer(_modifiers, inner) => match data {
-                StackValue::ManagedPtr(p) => Ok(CTSValue::Value(Pointer(p.into_inner()))),
-                StackValue::UnmanagedPtr(p) => {
-                    let inner_type = self.resolve_pointer_inner_type(inner)?;
-                    Ok(CTSValue::Value(Pointer(ManagedPtr::new(
-                        Some(p.0),
-                        inner_type,
-                        None,
-                        false,
-                        Some(ByteOffset::new(p.0.as_ptr().addr())),
-                    ))))
-                }
-                _ => {
-                    let ptr = CliToCts::convert_num::<usize>(data)?;
-                    let inner_type = self.resolve_pointer_inner_type(inner)?;
-                    Ok(CTSValue::Value(Pointer(ManagedPtr::new(
-                        // SAFETY: F10.RawMemoryAccessValid — Scalar-to-ValuePointer conversion is the CLI
-                        // unmanaged-address boundary; no managed origin exists, so the
-                        // producer supplies the resulting pointer's validity contract.
-                        NonNull::new(unsafe { unmanaged_ptr_from_addr(ptr) }),
-                        inner_type,
-                        None,
-                        false,
-                        Some(ByteOffset::new(ptr)),
-                    ))))
-                }
-            },
+            BaseType::ValuePointer(..) => Ok(CTSValue::Value(NativeUInt(
+                CliToCts::pointer_slot_address(data)?,
+            ))),
             BaseType::Object
             | BaseType::String
             | BaseType::Vector(_, _)

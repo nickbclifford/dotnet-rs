@@ -371,16 +371,8 @@ fn complete_store<'gc, T: VesOps<'gc>>(
     if matches!(t.get(), BaseType::ValuePointer(..)) {
         // See `complete_load`: pointer statics hold a single native word, like
         // instance pointer fields, never a serialized `ManagedPtr`.
-        let address = match &value {
-            StackValue::NativeInt(v) => Some(*v as usize),
-            StackValue::UnmanagedPtr(p) => Some(p.0.as_ptr().expose_provenance()),
-            StackValue::ManagedPtr(p) => p
-                .try_observe_address()
-                .ok()
-                .map(|a| a.map_or(0, |a| a.as_ptr().expose_provenance())),
-            _ => None,
-        };
-        let (Some(address), true) = (address, val_bytes.len() == size_of::<usize>()) else {
+        let address = dotnet_value::cts_cli_conversion::CliToCts::pointer_slot_address(value);
+        let (Ok(address), true) = (address, val_bytes.len() == size_of::<usize>()) else {
             return ctx.throw_by_name_with_message(
                 "System.AccessViolationException",
                 ACCESS_VIOLATION_MSG,

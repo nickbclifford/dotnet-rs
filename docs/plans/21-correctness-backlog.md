@@ -98,8 +98,9 @@ Out:
    CLI fixture failures (484 passed), including the same missing `SystemNative_SetErrNo` noted
    in slice 2, so the full matrix requirement remains open.
 4. **Pointer-slot writes.** Write a `pointers/pointer_slot_writes_42.cs` diff fixture: reflection
-   `FieldInfo.SetValue`/`GetValue` on instance and static pointer fields via
-   `System.Reflection.Pointer.Box`, `stobj` of a pointer, pointer-element arrays, a struct with
+   `FieldInfo.SetValue`/`GetValue` on instance pointer fields via
+   `System.Reflection.Pointer.Box` (static reflection field access is unimplemented and tracked in
+   the README's "Not yet planned" list), `stobj` of a pointer, pointer-element arrays, a struct with
    pointer fields stored through `stobj`, and boxed `IntPtr`/`UIntPtr` round trips. Fix whatever
    it exposes by making each caller choose the native-word encoding from the destination type.
    Then make `CTSValue::write`'s pointer arm exhaustive as described in Design.

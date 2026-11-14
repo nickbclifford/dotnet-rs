@@ -209,6 +209,31 @@ impl CtsToCli {
 pub struct CliToCts;
 
 impl CliToCts {
+    /// Convert a CLI pointer value to the native word used by unmanaged pointer slots.
+    pub fn pointer_slot_address(data: StackValue<'_>) -> Result<usize, TypeResolutionError> {
+        match data {
+            StackValue::NativeInt(value) => Ok(value as usize),
+            StackValue::Int32(value) => Ok(value as usize),
+            StackValue::UnmanagedPtr(value) => Ok(value.0.as_ptr().expose_provenance()),
+            StackValue::ManagedPtr(value) => {
+                let address = value.try_observe_address().map_err(|_| {
+                    TypeResolutionError::InvalidLayout(
+                        "pointer address cannot escape its owner".into(),
+                    )
+                })?;
+                if address.is_none() && !value.is_null() {
+                    return Err(TypeResolutionError::InvalidLayout(
+                        "pointer address is unavailable".into(),
+                    ));
+                }
+                Ok(address.map_or(0, |p| p.as_ptr().expose_provenance()))
+            }
+            other => Err(TypeResolutionError::InvalidLayout(
+                format!("invalid stack value {:?} for pointer slot", other).into(),
+            )),
+        }
+    }
+
     pub fn narrow_scalar_value<'gc>(
         data: StackValue<'gc>,
         target: CtsScalarKind,
@@ -373,6 +398,19 @@ mod tests {
     use dotnet_types::{TypeDescription, error::TypeResolutionError};
     use dotnetdll::prelude::{BaseType, LoadType};
     use std::ptr::NonNull;
+
+    #[test]
+    fn pointer_slots_preserve_native_bits_and_null() {
+        assert_eq!(
+            CliToCts::pointer_slot_address(StackValue::NativeInt(-1)).unwrap(),
+            usize::MAX
+        );
+        let ptr = ManagedPtr::new(None, TypeDescription::NULL, None, false, None);
+        assert_eq!(
+            CliToCts::pointer_slot_address(StackValue::ManagedPtr(ptr.into())).unwrap(),
+            0
+        );
+    }
 
     #[test]
     fn convert_i64_rejects_non_int64_input() {
