@@ -8,6 +8,18 @@ use dotnet_types::{
 };
 use dotnetdll::prelude::MethodMemberIndex;
 
+/// A VM error for a type or method these substitutions expect but the loaded assemblies lack,
+/// e.g. a System.Text.Json version that no longer has `ReflectionMemberAccessor`.
+#[cold]
+fn missing(what: String) -> StepResult {
+    StepResult::Error(
+        dotnet_types::error::ExecutionError::NotImplemented(
+            format!("Reflection.Emit substitution target not found: {what}").into(),
+        )
+        .into(),
+    )
+}
+
 /// Runs a static method of the support library with the arguments already on the stack.
 fn dispatch_support_static<'gc, T: VmCallOps<'gc> + VmLoaderOps>(
     ctx: &mut T,
@@ -15,12 +27,14 @@ fn dispatch_support_static<'gc, T: VmCallOps<'gc> + VmLoaderOps>(
     method_name: &str,
 ) -> StepResult {
     let ty = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type(type_name));
-    let index = ty
+    let Some(index) = ty
         .definition()
         .methods
         .iter()
         .position(|m| m.name == method_name)
-        .unwrap_or_else(|| panic!("support method {type_name}.{method_name}"));
+    else {
+        return missing(format!("support method {type_name}.{method_name}"));
+    };
     let method = MethodDescription::new(
         ty.clone(),
         GenericLookup::default(),
@@ -100,8 +114,13 @@ pub fn json_default_resolver_member_accessor<
         .find(|(_, ty)| {
             ty.type_name() == "System.Text.Json.Serialization.Metadata.ReflectionMemberAccessor"
         })
-        .map(|(index, _)| TypeDescription::new(resolution.clone(), index))
-        .expect("System.Text.Json ReflectionMemberAccessor");
+        .map(|(index, _)| TypeDescription::new(resolution.clone(), index));
+    let Some(accessor) = accessor else {
+        return missing(
+            "System.Text.Json.Serialization.Metadata.ReflectionMemberAccessor in System.Text.Json"
+                .into(),
+        );
+    };
     let type_object = ctx.get_runtime_type(RuntimeType::Type(accessor));
     ctx.push_obj(type_object);
     dispatch_support_static(ctx, "DotnetRs.JsonReflectionMemberAccessor", "Get")
