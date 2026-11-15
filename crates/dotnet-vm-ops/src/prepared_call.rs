@@ -61,11 +61,7 @@ impl<'gc> PreparedCall<'gc> {
         target: ObjectRef<'gc>,
         args: Vec<StackValue<'gc>>,
     ) -> Self {
-        let bound_this = if method.signature().instance || target.0.is_some() {
-            Some(target)
-        } else {
-            None
-        };
+        let bound_this = delegate_target_is_bound(&method, args.len()).then_some(target);
 
         Self::new(method, lookup, bound_this, args)
     }
@@ -98,4 +94,18 @@ impl<'gc> PreparedCall<'gc> {
 
         self.target
     }
+}
+
+/// Whether a delegate's target object fills the first parameter slot of `method` (a closed
+/// delegate) rather than the first `Invoke` argument doing so (an open one).
+///
+/// As in the CLR, this follows from arity, not from whether the target is null: the target is
+/// bound exactly when `Invoke` takes one argument fewer than `method` does, counting `this`. So an
+/// open-instance delegate (`Func<T, R>` over an instance method of `T`) passes its first argument
+/// as `this`, and a static method can be closed over a null first argument.
+#[must_use]
+pub fn delegate_target_is_bound(method: &MethodDescription, invoke_arg_count: usize) -> bool {
+    let signature = method.signature();
+    let slots = signature.parameters.len() + usize::from(signature.instance);
+    invoke_arg_count + 1 == slots
 }

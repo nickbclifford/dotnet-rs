@@ -102,8 +102,9 @@ pub(super) fn invoke_delegate<'gc, T: DelegateIntrinsicHost<'gc> + DelegateInvok
     let mut args = std::mem::take(ctx.call_args_buffer_mut());
 
     // Match PreparedCall::for_delegate_target without transferring ownership of the reusable
-    // buffer: an instance target (or a closed static target) is followed by the invoke arguments.
-    if target_method.signature().instance || target.0.is_some() {
+    // buffer: a bound target (closed delegate) is followed by the invoke arguments; an open
+    // delegate's first invoke argument is the callee's `this` or first parameter.
+    if dotnet_vm_ops::prepared_call::delegate_target_is_bound(&target_method, args.len()) {
         ctx.push(dotnet_value::StackValue::ObjectRef(target));
     }
     for arg in args.drain(..) {
