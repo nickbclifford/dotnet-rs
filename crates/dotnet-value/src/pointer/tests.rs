@@ -290,6 +290,109 @@ fn owner_retention_retained_ptr_heap_origin_reads_through_owner() {
 }
 
 #[test]
+fn retained_checked_range_bounds_heap_payload() {
+    use dotnet_types::error::MemoryAccessError;
+
+    with_test_gc_context(|gc_handle| {
+        let vector = Vector::new(
+            ConcreteType::new(ResolutionS::NULL, BaseType::UInt8),
+            ArrayLayoutManager {
+                element_layout: Arc::new(LayoutManager::Scalar(Scalar::UInt8)),
+                length: 4,
+            },
+            vec![1, 2, 3, 4],
+            vec![4],
+        );
+        let obj = ObjectRef::new(gc_handle, HeapStorage::Vec(Box::new(vector)));
+        let start = managed_ptr_to_heap_object_start(obj);
+        let at_two = start.clone().checked_offset(2).unwrap();
+
+        let retained =
+            RetainedPtr::try_from_stack_value(crate::StackValue::ManagedPtr(start.into())).unwrap();
+        assert_eq!(
+            retained.checked_range(&NO_MANAGED_BASES, 4),
+            Ok(retained.as_ptr())
+        );
+        assert_eq!(
+            retained.checked_range(&NO_MANAGED_BASES, 5),
+            Err(MemoryAccessError::BoundsCheck {
+                offset: 0,
+                size: 5,
+                len: 4
+            })
+        );
+
+        let retained =
+            RetainedPtr::try_from_stack_value(crate::StackValue::ManagedPtr(at_two.into()))
+                .unwrap();
+        assert_eq!(
+            retained.checked_range(&NO_MANAGED_BASES, 2),
+            Ok(retained.as_ptr())
+        );
+        assert_eq!(
+            retained.checked_range(&NO_MANAGED_BASES, 3),
+            Err(MemoryAccessError::BoundsCheck {
+                offset: 2,
+                size: 3,
+                len: 4
+            })
+        );
+    });
+}
+
+#[test]
+fn retained_checked_range_resolves_static_block() {
+    use dotnet_types::error::MemoryAccessError;
+
+    struct StaticBlock(NonNull<u8>, usize);
+    impl<'gc> ManagedPtrResolver<'gc> for StaticBlock {
+        fn static_storage_base(&self, _metadata: &StaticMetadata) -> Option<NonNull<u8>> {
+            Some(self.0)
+        }
+        fn static_storage_block(&self, _metadata: &StaticMetadata) -> Option<(NonNull<u8>, usize)> {
+            Some((self.0, self.1))
+        }
+    }
+
+    let mut bytes = [0u8; 4];
+    let base = NonNull::new(bytes.as_mut_ptr()).unwrap();
+    // Static pointers carry no cached address; the VM resolves static storage on access.
+    let static_ptr = ManagedPtr::new_static(
+        None,
+        TypeDescription::NULL,
+        TypeDescription::NULL,
+        GenericLookup::default(),
+        false,
+        ByteOffset::new(1),
+    );
+    let retained =
+        RetainedPtr::try_from_stack_value(crate::StackValue::ManagedPtr(static_ptr.into()))
+            .unwrap();
+    assert!(retained.is_null());
+
+    let resolver = StaticBlock(base, 4);
+    let address = retained.checked_range(&resolver, 3).unwrap();
+    assert_eq!(address, base.as_ptr().wrapping_add(1));
+    // SAFETY: F10.RawMemoryAccessValid — `address` lies inside `bytes`, which outlives the write
+    // and has no live reference; it was derived from the block's mutable base.
+    unsafe { address.wrapping_add(2).write(0x5A) };
+    assert_eq!(bytes[3], 0x5A);
+
+    assert_eq!(
+        retained.checked_range(&resolver, 4),
+        Err(MemoryAccessError::BoundsCheck {
+            offset: 1,
+            size: 4,
+            len: 4
+        })
+    );
+    assert_eq!(
+        retained.checked_range(&NO_MANAGED_BASES, 1),
+        Err(MemoryAccessError::InvalidOrigin)
+    );
+}
+
+#[test]
 fn owner_retention_retained_ptr_rejects_non_pointer_values() {
     use crate::StackValue;
     use dotnet_types::error::ExecutionError;

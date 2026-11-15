@@ -224,6 +224,28 @@ impl FieldStorage {
         unsafe { (*data_ptr).as_ptr() }
     }
 
+    /// Snapshots the allocation base and payload length together while excluding concurrent
+    /// field writers, without constructing a payload slice. The base comes from the Vec's own
+    /// allocation pointer, so it carries provenance for the whole payload; the snapshot retains
+    /// neither the guard nor permission to access bytes.
+    pub fn observe_data_block(&self) -> (*const u8, usize) {
+        self.validate_magic();
+        let _guard = self.data.read();
+        #[allow(
+            unused_unsafe,
+            reason = "compat::RwLock::data_ptr is unsafe while parking_lot::RwLock::data_ptr is safe"
+        )]
+        // SAFETY: F10.BorrowedStorageStable — The read guard excludes changes to the Vec.
+        let data_ptr = unsafe { self.data.data_ptr() };
+        // SAFETY: F10.RawMemoryAccessValid — The guard protects this Vec descriptor; as_ptr
+        // obtains its allocation base without constructing a payload slice.
+        let base = unsafe { (*data_ptr).as_ptr() };
+        // SAFETY: F10.RawMemoryAccessValid — The same guard protects the descriptor; reading its
+        // length does not construct a reference to the payload bytes.
+        let len = unsafe { (*data_ptr).len() };
+        (base, len)
+    }
+
     /// Invokes `f` with exactly the requested in-bounds byte range, without
     /// first constructing a slice over the whole payload.
     pub(crate) fn try_with_data_range<T>(

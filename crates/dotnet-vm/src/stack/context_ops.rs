@@ -398,6 +398,13 @@ impl<'a, 'gc, 'resolver> ManagedPtrResolver<'resolver> for VesContext<'a, 'gc> {
     }
 
     #[inline]
+    fn static_storage_block(&self, metadata: &StaticMetadata) -> Option<(NonNull<u8>, usize)> {
+        let storage = self.statics().get_for_metadata(metadata);
+        let (base, len) = storage.storage.observe_data_block();
+        NonNull::new(base.cast_mut()).map(|base| (base, len))
+    }
+
+    #[inline]
     fn frame_home_block(
         &self,
         serial: dotnet_value::pointer::FrameHomeSerial,

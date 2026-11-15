@@ -250,7 +250,9 @@ pub trait ExceptionOps<'gc> {
 }
 
 pub trait RawMemoryOps<'gc>: BorrowScopeOps {
-    /// Resolves a retained operand's complete range before raw block access.
+    /// Resolves and bounds-checks a retained operand's complete range before raw block access
+    /// (see [`RetainedPtr::checked_range`]). The default resolver rejects static and frame-home
+    /// ranges; the VM's implementation resolves them.
     fn retained_range(
         &self,
         pointer: &RetainedPtr<'gc>,

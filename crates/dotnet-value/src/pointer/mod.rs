@@ -117,6 +117,13 @@ pub trait ManagedPtrResolver<'gc> {
     /// Returns the live start address of static storage for `metadata`.
     fn static_storage_base(&self, metadata: &StaticMetadata) -> Option<NonNull<u8>>;
 
+    /// Returns the live start address and byte length of static storage for `metadata`, for
+    /// range-checked access. The address must carry provenance for writes to the whole block.
+    /// Resolvers that can't supply it reject every static range.
+    fn static_storage_block(&self, _metadata: &StaticMetadata) -> Option<(NonNull<u8>, usize)> {
+        None
+    }
+
     /// Returns the base address and length of the block with `serial` owned by a live
     /// frame, or `None` when no live frame owns that block. Resolvers without frames
     /// reject every frame-home pointer.
