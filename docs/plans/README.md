@@ -57,11 +57,23 @@ Evidence and IDs (p01…, R01…) are defined in the
   resolution on every call. Caching resolved targets per call site would help the whole VM.
   Plan 15 has the older numbers and commands.
 - **Dynamic code without Reflection.Emit:** the VM reports `IsDynamicCodeSupported` true (EF Core
-  treats false as NativeAOT) and `IsDynamicCodeCompiled` false (plan 18 slice 7). Code that checks
-  only `IsDynamicCodeSupported` and then emits IL fails; two such paths are patched per call site
-  in `crates/dotnet-vm/src/stack/call_ops_impl.rs` (`LambdaExpression.Compile()` redirected to
-  the interpreter overload, Expression's `ForceAllowDynamicCode` stubbed). Either implement
-  `DynamicMethod` or find a single switch-level answer before adding more call-site patches.
+  treats false as NativeAOT) and `IsDynamicCodeCompiled` false (plan 18 slice 7). Plan 24 slice 3
+  replaced the two call-site patches with `LambdaExpression.CanCompileToIL` and
+  `DelegateHelpers.CanEmitObjectArrayDelegate` set false (the NativeAOT values), a support-library
+  object-array delegate thunk for up to 16 parameters, and one System.Text.Json seam
+  (`DefaultJsonTypeInfoResolver.MemberAccessor`) in
+  `crates/dotnet-vm/src/intrinsics/linq_expressions.rs`. Still failing: delegates with byref or
+  pointer parameters, `Expression.GetDelegateType` on byref types (`TypeBuilder`), and any library
+  that picks Emit from `IsDynamicCodeSupported` without a switch. Plan 24 slices 4–5 decide
+  whether to implement `DynamicMethod`.
+- **Gaps behind the System.Text.Json fixture** (none involve Emit,
+  [plan 24](24-reflection-emit-investigation.md) slice 3): a `ReadOnlySpan<byte>` over a `"true"u8`
+  literal segfaults, so `Utf8JsonWriter` writing a bool or null crashes the VM;
+  `JsonSerializer.Deserialize` reads numbers wrongly (a `double` followed by more members is
+  always 0; an `int` in a nested object was 0 in about 1 run in 25); an Expression
+  tree built from C# that captures a local or sets a field in an object initializer stops in
+  `FieldInfo.GetFieldFromHandle`; `Type.GetType(string)` and `Assembly.GetType(string)` hit the
+  `QCall` DLL error.
 - **SQLite connection-string keywords:** `new SqliteConnection("Data Source=:memory:")` throws
   `ArgumentException: Connection string keyword 'data source' is not supported` on the VM
   (`SqliteConnectionStringBuilder.GetIndex`); `dotnet` accepts it. This is the first wall for an EF Core
@@ -83,7 +95,7 @@ Evidence and IDs (p01…, R01…) are defined in the
   values and byref targets containing managed pointers, byref returns and `TypedReference`.
   Non-null heap, frame-home, static, unmanaged and MT cross-arena byref arguments with
   pointer-free targets use native effects; transient byrefs are invalid. The managed-body-only
-  cctor, span equality slow path and Expression.Compile routes remain non-inline. Non-inline
+  cctor and span equality slow path routes remain non-inline. Non-inline
   intrinsics use a registered fallback or return `NotImplemented` when absent. Plan 16 retired every other
   legacy continuation (reflection return, monitor retry, static-init retry, yield-retry
   intrinsics, `VmContinuation::RetryInstruction`). Substring retains

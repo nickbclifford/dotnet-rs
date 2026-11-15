@@ -1,6 +1,6 @@
 # Investigate Reflection.Emit and `DynamicMethod`
 
-**Status:** Slices 1 (demand survey) and 2 (AV) done; slices 3–5 not started
+**Status:** Slices 1 (demand survey), 2 (AV) and 3 (switch-level experiment, on `plan24/slice3-switch`) done; slices 4–5 not started
 **Outcome:** This plan records a decision, backed by a working spike or a measured blocker:
 either a follow-up plan to implement `DynamicMethod` (and, separately, whether to do
 `AssemblyBuilder`/`TypeBuilder`), or a single switch-level answer that replaces the per-call-site
@@ -176,6 +176,101 @@ Slice 4 should count that toward both options in question 3.
 **Not fixed here:** `ParameterInfo` reports no custom attributes, so `ParamArrayAttribute` is
 invisible and `params` constructors don't bind through `CreateInstanceImpl` (logged in the README
 "Not yet planned").
+
+## Slice 3 findings: switch-level experiment
+
+Done 2026-11-14 on `plan24/slice3-switch`, with both call-site patches deleted from
+`call_ops_impl.rs` ([evidence](evidence/24-demand-survey.txt), "Slice 3").
+
+**What works.** Three intrinsics in `crates/dotnet-vm/src/intrinsics/linq_expressions.rs`, plus two
+small support classes, replace both patches and make every Linq path avoid Emit:
+
+- `LambdaExpression.get_CanCompileToIL` returns false. `Compile()` then takes `LightCompiler`
+  without the `Compile(bool)` redirect, the branch NativeAOT takes. The same property also routes
+  `Expression.Lambda<T>`/`CreateLambda` to `ExpressionCreator<T>` (plain managed),
+  `MakeUpdateDelegate` to `CreateCustomUpdateDelegate` and `GetDelegateType` to the VB-style call
+  site. These are the same branches NativeAOT takes, and EF Core doesn't read `CanCompileToIL`.
+- `DelegateHelpers.get_CanEmitObjectArrayDelegate` returns false (the value NativeAOT's trimmer
+  substitutes), and `DelegateHelpers.CreateObjectArrayDelegate(Type, Func<object[], object>)`
+  runs `DotnetRs.ObjectArrayDelegates.Create`. That stands in for NativeAOT's
+  `DynamicDelegateAugments.CreateObjectArrayDelegate`. It reuses the existing mechanism: the
+  support class has generic `ActionThunk0..16`/`FuncThunk0..16` (each packs its arguments into an
+  `object[]`, calls the handler and casts the result, the same shape as the Emit thunk), and
+  `Create` picks one by `MakeGenericMethod` and binds it with `CreateDelegate(delegateType,
+  handler)`. This is the path CoreLib already takes for 0–2 parameters, so it needs no new VM
+  delegate machinery. The intrinsic only locates the support method and dispatches to it with the
+  arguments already on the stack. The `ForceAllowDynamicCode` stub is gone because nothing reaches
+  `CreateObjectArrayDelegateRefEmit` any more.
+- `DefaultJsonTypeInfoResolver.get_MemberAccessor` runs `DotnetRs.JsonReflectionMemberAccessor.Get`,
+  which instantiates System.Text.Json's own `ReflectionMemberAccessor` (the VM passes the `Type`
+  object because `Type.GetType(string)` doesn't work yet). This is a per-library seam, not a
+  switch; see the answer below.
+
+About 100 lines of Rust and 160 lines of C# (mostly the thunk table). No dotnetdll change.
+
+**Limits of the thunk table.** Delegates with byref, pointer or byref-like parameters or return
+types, and delegates with more than 16 parameters, throw `PlatformNotSupportedException`.
+The CLR's Emit thunk supports them (byref arguments are written back in a `finally`). A byref
+thunk can't be written as a generic C# method, so it needs either a VM-built delegate whose
+`Invoke` dispatches to an intrinsic or real `DynamicMethod` support. Nothing in the rungs needs
+it; `Expression.GetDelegateType` on byref types still ends in `TypeBuilder`
+(`MakeNewCustomDelegate`, gated by `IsDynamicCodeSupported`) and fails for the same reason it did
+before.
+
+| Target | A. `CanEmit` false + `CreateObjectArrayDelegate` intrinsic, `CanCompileToIL` untouched | B. A + `CanCompileToIL` false | C. diagnostic only: `IsDynamicCodeSupported` false | D. B + STJ `MemberAccessor` seam (kept) |
+|---|---|---|---|---|
+| 3-parameter lambda probe | FAIL: `Compile()` reaches `LambdaCompiler` and `DynamicMethod.Init` | PASS | not run | PASS |
+| Expression fixtures (`expression_compile_42`, `expression_call_object_hashcode_42`) | not run | PASS | not run | PASS |
+| New fixtures (`expression_compile_many_params_42`, `expression_custom_delegate_42`) | not run | PASS | not run | PASS |
+| Newtonsoft roundtrip | not run | PASS | PASS | PASS |
+| EF InMemory | not run | PASS | FAIL: `NativeAotNoCompiledModel` | PASS |
+| STJ POCO probe | not run | stops at `Type.Module` | PASS | PASS |
+| `json_serializer_poco_42` fixture | n/a | n/a | n/a | PASS |
+
+Removing the patches with nothing added was not run on its own: attempt A shows why it can't work
+(`Compile()` goes to `LambdaCompiler` once the redirect is gone). C is a throwaway intrinsic that
+confirms plan 18's finding about EF and shows that STJ's fallback runs on the VM.
+
+**Answer to question 2.** Partly. There is no single AppContext switch or feature value, because
+the demand comes from three different mechanisms:
+
+- *Linq: covered by switch-shaped substitutions.* `CanCompileToIL` and `CanEmitObjectArrayDelegate`
+  are exactly the two switches NativeAOT flips, and they let the call-site patches go with
+  `IsDynamicCodeSupported` still true. The missing piece was NativeAOT's
+  `DynamicDelegateAugments.CreateObjectArrayDelegate`, which the VM now supplies from the support
+  assembly. Every interpreted lambda up to 16 parameters works, including the 3–4-parameter shaper
+  lambdas EF Relational compiles on every query. Byref/pointer delegate types and more than 16
+  parameters are the uncovered part.
+- *System.Text.Json: not covered by any switch.* It chooses its accessor from
+  `IsDynamicCodeSupported` alone, with no feature switch of its own, and EF's check rules out
+  flipping that. The VM can still serve the fallback with one per-library seam
+  (`get_MemberAccessor`), after which `Serialize`/`Deserialize` of a POCO matches `dotnet`.
+  That is an STJ-specific intercept, so it isn't the "one answer for every library" the question
+  asked for; a library that picks Emit the same way needs its own seam.
+- *`DynamicMethod` throwing `PlatformNotSupportedException`: rejected.* No library that reaches
+  `DynamicMethod` catches it. STJ's `ReflectionEmit*MemberAccessor` and the Linq thunk call
+  `new DynamicMethod` unguarded; Newtonsoft only emits behind `IsDynamicCodeCompiled`; EF has no
+  Emit path; the one `NotSupportedException` catch in System.Linq.Expressions
+  (`CallInstruction.Create`) surrounds `MakeGenericType`/`CreateDelegate`, not `DynamicMethod`.
+  Throwing would turn today's missing-QCall failure into a different exception at the same sites.
+  NativeAOT works because its libraries check the feature flags first, which is what the
+  substitutions above reproduce.
+
+So the call-site patches are removable now, and the switch-level approach covers everything the
+rungs reach. What it leaves is the set of libraries that emit on `IsDynamicCodeSupported` without
+a switch (STJ is the only one found), each needing its own seam, plus byref delegate types. Whether
+that favors a real `DynamicMethod` (slice 4) is a call for the decision slice: the seam approach
+stops being cheap once a library's fallback isn't a drop-in object.
+
+**Unrelated gaps found while writing the fixtures** (none touch Emit; logged in the README "Not yet
+planned" list):
+
+- `"true"u8` static spans crash the VM (`Utf8JsonWriter` writing a bool or null segfaults).
+- `JsonSerializer.Deserialize` reads numbers wrongly: a `double` followed by more members is 0 every
+  run, and an `int` in a nested object was 0 in about 1 run in 25.
+- Expression trees built from C# that capture a local or set a field through an object initializer
+  stop in `FieldInfo.GetFieldFromHandle` (`ldtoken` of a field).
+- `Type.GetType(string)` and `Assembly.GetType(string)` hit the `QCall` DLL error.
 
 ## Scope
 

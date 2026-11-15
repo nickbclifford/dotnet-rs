@@ -131,3 +131,82 @@ After the fix (scripts/diff_run.sh --host, release CLI, default features):
   DynamicMethod(owner: typeof(Program))
                       Internal VM error: no body in executing method:
                       System.RuntimeTypeHandle.GetModuleIfExists
+
+Slice 3 — switch-level experiment, 2026-11-14
+=============================================
+
+Branch plan24/slice3-switch. Release CLI, scripts/diff_run.sh --host. Both call-site patches
+(try_redirect_expression_compile_to_interpreter, try_no_body_runtime_stub) removed from
+crates/dotnet-vm/src/stack/call_ops_impl.rs in every attempt below.
+
+Mechanism (crates/dotnet-vm/src/intrinsics/linq_expressions.rs)
+  get_CanEmitObjectArrayDelegate()          -> false
+  DelegateHelpers.CreateObjectArrayDelegate -> dispatches support DotnetRs.ObjectArrayDelegates.Create
+  LambdaExpression.get_CanCompileToIL()     -> false
+  DefaultJsonTypeInfoResolver.get_MemberAccessor -> dispatches support
+                                               DotnetRs.JsonReflectionMemberAccessor.Get(Type)
+Support code: crates/dotnet-assemblies/src/support/ObjectArrayDelegates.cs (generic
+ActionThunk0..16 / FuncThunk0..16, MakeGenericMethod + CreateDelegate(type, handler)),
+JsonReflectionMemberAccessor.cs.
+
+Attempt B: CanEmitObjectArrayDelegate=false + CreateObjectArrayDelegate intrinsic, CanCompileToIL untouched
+  probe 3-param lambda (Expression<Func<int,int,int,int>>.Compile()(10,20,12))
+    dotnet-rs exit 1, stack:
+      DynamicMethod.Init <- DynamicMethod..ctor <- LambdaCompiler..ctor <- LambdaCompiler.Compile
+      <- Expression`1.Compile <- Main
+    (Compile() with no redirect goes to LambdaCompiler because CanCompileToIL is IsDynamicCodeSupported.)
+
+Attempt C: B + CanCompileToIL=false
+  3-param lambda probe                                PASS
+  fixtures/expressions/expression_call_object_hashcode_42   PASS
+  fixtures/expressions/expression_compile_42                PASS
+  fixtures/expressions/expression_compile_many_params_42    PASS  (new: 3, 8, 16 params, void/4, struct, DynamicInvoke type check)
+  fixtures/expressions/expression_custom_delegate_42        PASS  (new: user delegate types, Expression.Lambda(Type,..), GetDelegateType, nested Invoke)
+  Newtonsoft roundtrip host rung (copy in /tmp, no bin/obj)  PASS
+  EF InMemory host rung (copy in /tmp, no bin/obj)           PASS
+  STJ probe (Serialize + Deserialize of a 2-property POCO)   Internal VM error: no body in executing
+                                                             method: DotnetRs.RuntimeType.GetModule
+                                                             (ReflectionEmitMemberAccessor.CreateParameterlessConstructor)
+
+Diagnostic D (not kept): temporary intrinsic RuntimeFeature.get_IsDynamicCodeSupported() -> false
+  STJ probe                 PASS (ReflectionMemberAccessor works on the VM)
+  Newtonsoft roundtrip      PASS
+  EF InMemory               FAIL  InvalidOperationException: Model building is not supported when
+                                  publishing with NativeAOT. Use a compiled model.
+                                  at DbContextServices.CreateModel(bool designTime)
+
+Attempt E: C + DefaultJsonTypeInfoResolver.get_MemberAccessor seam
+  STJ probe                                           PASS
+  fixtures/reflection/json_serializer_poco_42         PASS  (new)
+  Newtonsoft / EF InMemory / expression fixtures: rerun after the seam, all PASS (see final run below)
+
+Catch sites that would make a DynamicMethod-throws-PlatformNotSupportedException answer work
+(ilspycmd decompile, grep "catch (PlatformNotSupported|NotSupported" and DynamicMethod):
+  System.Text.Json 10.0.14      no catch; ReflectionEmit*MemberAccessor call new DynamicMethod directly
+  System.Linq.Expressions       only CallInstruction.Create catches NotSupportedException, around
+                                SlowCreate/FastCreate (MakeGenericType/CreateDelegate, not DynamicMethod)
+  EF Core 9.0.17 (+ Relational) no catch; 6 IsDynamicCodeSupported checks, all throw NativeAotNoCompiledModel
+  Newtonsoft.Json 13.0.3        no catch; DynamicMethod only behind IsDynamicCodeCompiled
+  => no library that reaches DynamicMethod falls back when its constructor throws.
+
+LambdaExpression.CanCompileToIL readers (System.Linq.Expressions 10.0.14): Compile() x2,
+  Expression.Lambda<T> / CreateLambda (false -> ExpressionCreator<T>, plain managed),
+  UpdateDelegates.MakeUpdateDelegate (false -> CreateCustomUpdateDelegate),
+  Expression.GetDelegateType (false -> TryMakeVBStyledCallSite ?? MakeNewCustomDelegate).
+  EF Core does not read it. The NativeAOT interpreter takes the same branches.
+
+Unrelated gaps found while writing fixtures (reproduce with a trivial program; none touch Emit)
+  - ReadOnlySpan<byte> TrueValue => "true"u8; s.Length / CopyTo                  Segmentation fault (exit 139)
+    This is what Utf8JsonWriter.WriteBooleanValue/WriteNullValue hit:
+    JsonSerializer.Serialize(true), Serialize((int?)null), a POCO with a bool property.
+  - JsonSerializer.Deserialize<Q>("{\"Score\":1.5,\"Id\":3}") gives Score 0 every run (double followed by
+    another member); Utf8Parser.TryParse(double) itself returns 1.5. Reading an int in a nested object
+    also returned 0 in 1 of 25 runs ("Home":{"City":"London","Zip":1815} -> Zip 0), so number
+    reads are nondeterministic. A first version of json_serializer_poco_42 that read numbers back
+    failed 1 run in 5 under nextest for this reason; the kept fixture only writes numbers
+    (40/40 runs ok).
+  - An Expression tree built from C# that captures a local (closure display-class field) or uses an
+    object initializer that sets a field
+    stops with InvalidCastException at RuntimeFieldHandle.GetApproxDeclaringType
+    <- RuntimeType.GetFieldInfo <- FieldInfo.GetFieldFromHandle (the compiler's ldtoken field).
+  - Type.GetType(string) and Assembly.GetType(string) stop with DllNotFoundException 'QCall'.
