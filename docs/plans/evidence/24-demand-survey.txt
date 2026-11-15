@@ -91,3 +91,43 @@ Linq        LambdaExpression.CanCompileToIL => IsDynamicCodeSupported.
             Internal.Runtime.Augments.DynamicDelegateAugments is absent from CoreCLR CoreLib 10.0.14.
             Compiler.DelegateHelpers.MakeNewCustomDelegate (byref/pointer delegate types):
             TypeBuilder via AssemblyGen when IsDynamicCodeSupported, else PlatformNotSupportedException.
+
+Slice 2 — access violation, 2026-11-14
+======================================
+
+Minimal repro (before the fix):
+  Activator.CreateInstance(typeof(Foo), BindingFlags.Instance | BindingFlags.Public, null,
+                           new object[] { 42 }, null)
+  dotnet:    exit 42, 42
+  dotnet-rs: exit 1, System.AccessViolationException
+    at System.RuntimeType.get_Cache() in IP 1          (ldfld m_cache)
+    at System.RuntimeType.GetConstructorCandidates(...)
+    at System.RuntimeType.CreateInstanceImpl(...)
+    at System.Activator.CreateInstance(Type, BindingFlags, Binder, object[], CultureInfo, object[])
+
+fixtures/reflection/dynamic_method_owner_validation_42.cs with the pre-slice-2 binary:
+  FAIL 1 System.AccessViolationException   (owner typeof(IDisposable))
+  FAIL 2 System.AccessViolationException   (owner typeof(IEnumerable<int>))
+  FAIL 4                                    (owner typeof(List<>) accepted:
+                                             ContainsGenericParameters was false)
+  dotnet: ok, exit 42. With the fix: PASS (exit code and stdout match).
+
+Guard check: with the RuntimeType redirect temporarily disabled, the Activator repro stops with
+  Internal VM error: Method execution failed: Not implemented: System.RuntimeType.m_cache is not
+  modeled by support stub DotnetRs.RuntimeType (accessed from System.RuntimeType.get_Cache);
+  implement that method on the stub or as an intrinsic
+instead of raising AccessViolationException.
+
+After the fix (scripts/diff_run.sh --host, release CLI, default features):
+  fixtures/reflection/activator_create_instance_binding_flags_42   PASS
+  fixtures/reflection/dynamic_method_owner_validation_42           PASS
+  fixtures/reflection/is_generic_parameter_42                      PASS
+  Newtonsoft roundtrip host rung                                   PASS
+  EF InMemory host rung                                            PASS
+  STJ probe           Internal VM error: no body in executing method: DotnetRs.RuntimeType.GetModule
+                      (from ReflectionEmitMemberAccessor.CreateParameterlessConstructor)
+  3-param lambda      TypeInitializationException / DllNotFoundException 'QCall' (unchanged)
+  DynamicMethod ctor  TypeInitializationException / DllNotFoundException 'QCall' (unchanged)
+  DynamicMethod(owner: typeof(Program))
+                      Internal VM error: no body in executing method:
+                      System.RuntimeTypeHandle.GetModuleIfExists

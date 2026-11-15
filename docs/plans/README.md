@@ -11,7 +11,7 @@ In priority order. Each plan's own `Status:` line is the only record of its stat
 | ID | Plan | Note |
 |---|---|---|
 | 23 | [Runtime behavior gaps: static field reflection, Math FCalls, Array.Fill, Span.CopyTo, signed byref offsets and generic arity](23-runtime-behavior-gaps.md) | Validated runtime surface and remaining limits are recorded in the plan |
-| 24 | [Investigate Reflection.Emit and `DynamicMethod`](24-reflection-emit-investigation.md) | Slice 1 (demand survey) done; ends in a decision and a follow-up plan or a switch-level answer |
+| 24 | [Investigate Reflection.Emit and `DynamicMethod`](24-reflection-emit-investigation.md) | Slices 1–2 done (demand survey, AV fixed); ends in a decision and a follow-up plan or a switch-level answer |
 | 21 | [Correctness backlog: byte-read bounds, pointer slots, feature forwarding, thread IDs and the timer flake](21-correctness-backlog.md) | Complete |
 | 22 | [String interning](22-string-interning.md) | Complete; literal, empty and explicit interning identity across threads |
 | 18 | [Managed API gaps against the CLR](18-managed-api-clr-gaps.md) | Complete; Newtonsoft and EF host rungs match `dotnet` |
@@ -62,15 +62,16 @@ Evidence and IDs (p01…, R01…) are defined in the
   in `crates/dotnet-vm/src/stack/call_ops_impl.rs` (`LambdaExpression.Compile()` redirected to
   the interpreter overload, Expression's `ForceAllowDynamicCode` stubbed). Either implement
   `DynamicMethod` or find a single switch-level answer before adding more call-site patches.
-- **Access violation in `RuntimeType.GetNativeTypeHandle`:** reached from `DynamicMethod.Init`
-  (`get_IsActualInterface`) when Newtonsoft used Reflection.Emit; managed code should never
-  produce an `AccessViolationException`. No longer reached by any rung
-  ([evidence](evidence/18-array-casts-host-rungs.txt)).
 - **SQLite connection-string keywords:** `new SqliteConnection("Data Source=:memory:")` throws
   `ArgumentException: Connection string keyword 'data source' is not supported` on the VM
   (`SqliteConnectionStringBuilder.GetIndex`); `dotnet` accepts it. This is the first wall for an EF Core
   SQLite rung and is not an Emit failure
   ([evidence](evidence/24-demand-survey.txt), probe 4).
+- **ParameterInfo custom attributes:** `DotnetRs.ParameterInfo` returns no custom attributes
+  (`GetCustomAttributes`, `IsDefined`, `GetCustomAttributesData` are hard-coded empty), so
+  `ParamArrayAttribute` and other parameter attributes are invisible to reflection. This is why
+  `Activator.CreateInstance` with `BindingFlags.CreateInstance` can't bind a `params` constructor
+  ([plan 24](24-reflection-emit-investigation.md), slice 2).
 - **Userland breadth is untracked:** the only real-application rungs are the Newtonsoft
   roundtrip (`crates/dotnet-cli/tests/host_projects/newtonsoft_roundtrip`) and the EF Core
   InMemory smoke test

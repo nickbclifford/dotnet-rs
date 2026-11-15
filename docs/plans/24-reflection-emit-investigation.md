@@ -1,6 +1,6 @@
 # Investigate Reflection.Emit and `DynamicMethod`
 
-**Status:** Slice 1 (demand survey) done; slices 2–5 not started
+**Status:** Slices 1 (demand survey) and 2 (AV) done; slices 3–5 not started
 **Outcome:** This plan records a decision, backed by a working spike or a measured blocker:
 either a follow-up plan to implement `DynamicMethod` (and, separately, whether to do
 `AssemblyBuilder`/`TypeBuilder`), or a single switch-level answer that replaces the per-call-site
@@ -93,16 +93,15 @@ the VM loads. Two consequences:
 - `Expression<Func<int,int,int,int>>.Compile()` fails on the VM today
   (`TypeInitializationException`), even through the redirect.
 
-**Question 5 has moved.** The `new DynamicMethod("m", typeof(int), Type.EmptyTypes)` probe no
-longer reaches `GetNativeTypeHandle`. `DynamicMethod.Init` now gets past `get_IsActualInterface`
-and fails in `GetDynamicMethodsModule` → `AssemblyLoadContext.get_Default` →
-`DefaultAssemblyLoadContext..cctor` → `InitializeAssemblyLoadContext` with
-`DllNotFoundException: Unable to load DLL 'QCall'`, surfacing as `TypeInitializationException`.
-A `RuntimeType` AV still exists on another path: System.Text.Json's
-`ObjectConverterFactory.CreateConverter` → `Activator.CreateInstance` (on a `MakeGenericType`
-converter type) → `RuntimeType.CreateInstanceImpl` → `GetConstructorCandidates` →
-`RuntimeType.get_Cache()` raises `AccessViolationException` before STJ reaches Emit. Slice 2
-should start from that path as well as the constructor fixture.
+**Question 5 at survey time** (corrected in slice 2). The bare
+`new DynamicMethod("m", typeof(int), Type.EmptyTypes)` takes `Init`'s `transparentMethod` branch,
+which never checks `IsActualInterface`. It fails in `GetDynamicMethodsModule` →
+`AssemblyLoadContext.get_Default` → `DefaultAssemblyLoadContext..cctor` →
+`InitializeAssemblyLoadContext` with `DllNotFoundException: Unable to load DLL 'QCall'`, surfacing
+as `TypeInitializationException`. The AV that Newtonsoft hit came from the owner-type overload. A
+second AV path was System.Text.Json's `ObjectConverterFactory.CreateConverter` →
+`Activator.CreateInstance` → `RuntimeType.CreateInstanceImpl` → `GetConstructorCandidates` →
+`RuntimeType.get_Cache()`.
 
 **EF Core SQLite's first wall isn't Emit.** `new SqliteConnection("Data Source=:memory:")`
 throws `ArgumentException: Connection string keyword 'data source' is not supported` on the VM,
@@ -115,6 +114,68 @@ on `IsDynamicCodeSupported`, and the Linq interpreter's delegate creation for la
 than 2 parameters, which EF Relational/SQLite hits on every query. Neither has a fallback that
 current feature values can reach. The first maintainer question ("no real-application path needs
 Emit") does not apply.
+
+## Slice 2 findings: the access violation
+
+Done 2026-11-14 ([evidence](evidence/24-demand-survey.txt), "Slice 2").
+
+**Cause.** Every `System.RuntimeType` object on the VM is a `DotnetRs.RuntimeType` (the support stub
+that replaces it), whose only field is the type index. CoreLib methods the stub doesn't replace
+still run their own IL. When that IL reads a CoreLib-only field (`m_handle` through
+`GetNativeTypeHandle`, `m_cache` through `RuntimeType.Cache`), the field offset lies outside the
+stub object, the bounds-checked read fails, and `ldfld` reports `AccessViolationException`. Virtual
+calls already reach stub overrides. Definition-bound calls inside CoreLib (`call`/`callvirt` to a
+non-virtual member through a MethodDef token) went to CoreLib's body. Both reported paths are
+of this kind:
+
+- `DynamicMethod(name, returnType, parameterTypes, Type owner, bool skipVisibility)` →
+  `RuntimeType.IsActualInterface` → `GetNativeTypeHandle` (`m_handle`). This is the path Newtonsoft's
+  `DynamicReflectionDelegateFactory` took.
+- `Activator.CreateInstance(Type, BindingFlags, Binder, object[], CultureInfo[, object[]])` →
+  `RuntimeType.CreateInstanceImpl` → `GetConstructorCandidates` → `Cache` (`m_cache`), which is how
+  System.Text.Json creates its object converters.
+
+**Fix** (local to `RuntimeType`):
+
+- `crates/dotnet-assemblies/src/resolution.rs` sends definition-bound calls to `System.RuntimeType`
+  members to the stub when the stub implements them in IL, the same way `Array.Copy` was already
+  redirected. Stub members that are `InternalCall` externs keep their existing routing.
+- The stub implements `IsActualInterface` (as `IsInterface`) and `CreateInstanceImpl`. The latter
+  mirrors CoreLib's body, including `FilterApplyMethodBase`'s arity and `params` rules, the
+  `DefaultBinder` binding, value-type defaults and `DoNotWrapExceptions`, but enumerates
+  constructors with `GetConstructors`.
+- Two gaps the new path exposed are fixed: `MethodBase.CallingConvention` had a registered
+  intrinsic with no handler (it panicked), and `Type.IsGenericParameter` wasn't reported, so
+  `ContainsGenericParameters` was false for open generics.
+- `ldfld`/`stfld` now check, on their failure path only, whether the object is a support stub
+  standing in for the field's declaring type. If so they stop with a VM error naming the field,
+  the stub and the calling method, for example
+  `System.RuntimeType.m_cache is not modeled by support stub DotnetRs.RuntimeType (accessed from
+  System.RuntimeType.get_Cache)`, instead of raising an `AccessViolationException` that managed
+  code could catch. Any remaining member of this family now names the method to replace.
+
+**Fixtures.** `reflection/activator_create_instance_binding_flags_42`,
+`reflection/dynamic_method_owner_validation_42` (interface, array and open generic owners are
+rejected with `ArgumentException`; the interface cases raised the AV before the fix) and
+`reflection/is_generic_parameter_42` pass against `dotnet`.
+`debug_fixtures/dynamic_method_ctor_42` stays out of the suite until `DynamicMethod` works.
+
+**Next walls, all Emit-side** (for slices 3–4):
+
+- A bare `DynamicMethod` (and every Linq interpreter thunk wider than 2 parameters) stops at the
+  `InitializeAssemblyLoadContext` QCall from `GetDynamicMethodsModule`.
+- An owner-type `DynamicMethod` with a valid owner stops at `RuntimeType.GetRuntimeModule` →
+  `RuntimeTypeHandle.GetModuleIfExists` (no FCall).
+- System.Text.Json now reaches `ReflectionEmitMemberAccessor.CreateParameterlessConstructor`, which
+  stops at `Type.Module` (`DotnetRs.RuntimeType.GetModule` is an extern with no intrinsic). The VM
+  has no module reflection object (`DotnetRs.Module` is empty).
+
+So every `DynamicMethod` entry point first needs a `Module`/`RuntimeModule` the VM can hand out.
+Slice 4 should count that toward both options in question 3.
+
+**Not fixed here:** `ParameterInfo` reports no custom attributes, so `ParamArrayAttribute` is
+invisible and `params` constructors don't bind through `CreateInstanceImpl` (logged in the README
+"Not yet planned").
 
 ## Scope
 
