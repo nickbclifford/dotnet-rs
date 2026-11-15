@@ -220,7 +220,8 @@ fn main() {
                 || test_name.starts_with("exceptions_nested_filter_")
                 || matches!(
                     test_name.as_str(),
-                    "statics_cctor_filter_42"
+                    "basic_stdout_before_internal_error_42"
+                        | "statics_cctor_filter_42"
                         | "statics_cctor_filter_call_42"
                         | "statics_cctor_filter_delegate_42"
                         | "statics_cctor_filter_delegate_multicast_42"

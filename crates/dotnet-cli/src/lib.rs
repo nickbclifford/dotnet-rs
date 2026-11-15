@@ -42,6 +42,20 @@ fn finish_executor(executor: vm::Executor, shared: &Arc<state::SharedGlobalState
     shared.tracer.flush();
 }
 
+// A test-only environment switch exercises the ordinary CLI VM-error branch after guest output.
+#[cfg(debug_assertions)]
+fn inject_post_execution_error(result: ExecutorResult) -> ExecutorResult {
+    let requested =
+        std::env::var("DOTNET_RS_DEBUG_TEST_POST_EXECUTION_ERROR").is_ok_and(|value| value == "1");
+    if requested && matches!(&result, ExecutorResult::Exited(_)) {
+        ExecutorResult::Error(vm::error::VmError::Intrinsic(
+            vm::error::IntrinsicError::Static("debug test requested a post-execution failure"),
+        ))
+    } else {
+        result
+    }
+}
+
 /// Initialize the rayon global thread pool to a bounded size before any assembly parsing begins.
 ///
 /// dotnetdll fans each per-assembly metadata table across all CPU cores via rayon. On many-core
@@ -187,6 +201,8 @@ pub fn run_cli() -> ExitCode {
     }
 
     let result = executor.run();
+    #[cfg(debug_assertions)]
+    let result = inject_post_execution_error(result);
     finish_executor(executor, &shared);
     match result {
         ExecutorResult::Exited(i) => exit_fast(i as i32),

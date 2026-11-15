@@ -66,6 +66,52 @@ fn fixture_output(command: &mut std::process::Command, runtime: &str) -> std::pr
     output
 }
 
+#[cfg(all(not(feature = "fuzzing"), debug_assertions))]
+fn output_with_file_stdout_deadline(
+    command: &mut std::process::Command,
+    stdout_path: &std::path::Path,
+    timeout: std::time::Duration,
+) -> (std::process::Output, bool) {
+    use std::{fs::File, io::Read, process::Stdio, time::Instant};
+
+    let mut child = command
+        .stdout(Stdio::from(
+            File::create(stdout_path).expect("create captured stdout file"),
+        ))
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to start fixture process");
+    let mut stderr = child.stderr.take().unwrap();
+    let stderr_reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stderr.read_to_end(&mut bytes).expect("read fixture stderr");
+        bytes
+    });
+    let deadline = Instant::now() + timeout;
+    let (status, timed_out) = loop {
+        if let Some(status) = child.try_wait().expect("wait for fixture") {
+            break (status, false);
+        }
+        if Instant::now() >= deadline {
+            if let Err(error) = child.kill()
+                && child.try_wait().expect("wait for fixture").is_none()
+            {
+                panic!("failed to kill timed-out fixture: {error}");
+            }
+            break (child.wait().expect("reap fixture"), true);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    let output = std::process::Output {
+        status,
+        stdout: std::fs::read(stdout_path).expect("read captured stdout file"),
+        stderr: stderr_reader
+            .join()
+            .expect("fixture stderr reader panicked"),
+    };
+    (output, timed_out)
+}
+
 #[cfg(all(test, not(feature = "fuzzing"), unix))]
 #[test]
 fn fixture_deadline_captures_partial_output_and_drains_pipes() {
@@ -80,6 +126,62 @@ fn fixture_deadline_captures_partial_output_and_drains_pipes() {
     assert!(timed_out);
     assert!(output.stdout.ends_with(b"partial stdout"));
     assert_eq!(output.stderr, b"partial stderr");
+}
+
+#[cfg(all(not(feature = "fuzzing"), debug_assertions))]
+#[test]
+fn stdout_is_preserved_on_internal_error_exit_with_pipe_and_file_capture() {
+    use crate::integration_tests_impl::harness::TestHarness;
+    use std::{
+        path::{Path, PathBuf},
+        process::Output,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    const EXPECTED_STDOUT: &[u8] = b"stdout written before return\nwithout trailing newline";
+    const EXPECTED_STDERR: &[u8] =
+        b"Internal VM error: Intrinsic error: Intrinsic error: debug test requested a post-execution failure\n";
+
+    fn assert_internal_error_output(output: Output) {
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(output.stdout, EXPECTED_STDOUT);
+        assert_eq!(output.stderr, EXPECTED_STDERR);
+    }
+
+    struct RemoveFileOnDrop(PathBuf);
+    impl Drop for RemoveFileOnDrop {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    let harness = TestHarness::get();
+    let dll_path = harness.ensure_dll(Path::new(
+        "tests/fixtures/basic/stdout_before_internal_error_42.cs",
+    ));
+
+    let mut pipe_command = harness.cli_command(&dll_path);
+    pipe_command.env("DOTNET_RS_DEBUG_TEST_POST_EXECUTION_ERROR", "1");
+    assert_internal_error_output(fixture_output(&mut pipe_command, "VM pipe capture"));
+
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock is after Unix epoch")
+        .as_nanos();
+    let stdout_path = std::env::temp_dir().join(format!(
+        "dotnet-rs-stdout-error-{}-{nonce}.out",
+        std::process::id()
+    ));
+    let _remove_stdout_file = RemoveFileOnDrop(stdout_path.clone());
+    let mut file_command = harness.cli_command(&dll_path);
+    file_command.env("DOTNET_RS_DEBUG_TEST_POST_EXECUTION_ERROR", "1");
+    let (file_output, timed_out) = output_with_file_stdout_deadline(
+        &mut file_command,
+        &stdout_path,
+        crate::integration_tests_impl::harness::get_test_timeout(120),
+    );
+    assert!(!timed_out, "VM file capture timed out");
+    assert_internal_error_output(file_output);
 }
 
 macro_rules! diff_test {
@@ -174,6 +276,11 @@ diff_test!(
 diff_test!(
     string_equality_gc_matches_dotnet,
     "tests/fixtures/strings/equality_gc_42.cs"
+);
+
+diff_test!(
+    stdout_before_internal_error_matches_dotnet,
+    "tests/fixtures/basic/stdout_before_internal_error_42.cs"
 );
 
 diff_test!(
