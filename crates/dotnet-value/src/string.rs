@@ -92,10 +92,26 @@ macro_rules! with_string_mut {
     }};
 }
 
+/// UTF-16 characters followed by one NUL terminator, which is not part of the logical string.
+///
+/// CoreCLR strings are NUL-terminated and CoreLib relies on it when it reads a pinned `char*`:
+/// `String.GetNonRandomizedHashCode` reads characters in pairs, so for an odd length its last read
+/// covers the terminator. Without one, that read left the allocation. Every logical view (`len`,
+/// `Deref`, `as_mut_slice`, managed payload bounds) excludes the terminator.
 #[derive(Clone)]
 enum StringStorage {
     Owned(Vec<u16>),
     Interned(Arc<[u16]>),
+}
+
+impl StringStorage {
+    /// The stored characters including the terminator.
+    fn terminated(&self) -> &[u16] {
+        match self {
+            StringStorage::Owned(chars) => chars.as_slice(),
+            StringStorage::Interned(chars) => chars.as_ref(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -183,15 +199,13 @@ fn maybe_intern(chars: Vec<u16>) -> StringStorage {
 }
 
 impl CLRString {
-    pub fn new(chars: Vec<u16>) -> Self {
+    pub fn new(mut chars: Vec<u16>) -> Self {
+        chars.push(0);
         Self(maybe_intern(chars))
     }
 
     pub fn len(&self) -> usize {
-        match &self.0 {
-            StringStorage::Owned(chars) => chars.len(),
-            StringStorage::Interned(chars) => chars.len(),
-        }
+        self.0.terminated().len() - 1
     }
 
     pub fn is_empty(&self) -> bool {
@@ -209,13 +223,16 @@ impl CLRString {
     }
 
     pub fn as_mut_slice(&mut self) -> &mut [u16] {
-        match &mut self.0 {
+        let len = self.len();
+        let chars = match &mut self.0 {
             StringStorage::Owned(chars) => chars.as_mut_slice(),
             StringStorage::Interned(chars) => Arc::make_mut(chars),
-        }
+        };
+        &mut chars[..len]
     }
 
     /// Returns the raw base of the UTF-16 backing allocation without creating a slice.
+    /// The allocation holds `len()` characters followed by a NUL terminator.
     /// The address does not retain this string's owner or any borrow/lock, root the
     /// allocation, or grant write access; interned storage may be shared.
     pub(crate) fn raw_data_ptr(&self) -> *const u8 {
@@ -230,10 +247,8 @@ impl Deref for CLRString {
     type Target = [u16];
 
     fn deref(&self) -> &Self::Target {
-        match &self.0 {
-            StringStorage::Owned(chars) => chars.as_slice(),
-            StringStorage::Interned(chars) => chars.as_ref(),
-        }
+        let chars = self.0.terminated();
+        &chars[..chars.len() - 1]
     }
 }
 
@@ -252,5 +267,42 @@ impl Debug for CLRString {
 impl<T: AsRef<str>> From<T> for CLRString {
     fn from(s: T) -> Self {
         Self::new(s.as_ref().encode_utf16().collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CLRString;
+
+    /// The terminator CoreLib reads through a pinned `char*` follows the characters in the
+    /// allocation, and no logical view includes it.
+    fn assert_terminated(string: &CLRString, expected: &str) {
+        let expected: Vec<u16> = expected.encode_utf16().collect();
+        assert_eq!(&**string, expected.as_slice());
+        assert_eq!(string.len(), expected.len());
+        assert_eq!(
+            string.size_bytes(),
+            size_of::<CLRString>() + expected.len() * 2
+        );
+        let base = string.raw_data_ptr().cast::<u16>();
+        // SAFETY: F10.RawMemoryAccessValid — the allocation holds `len()` characters and a
+        // terminator, and `string` is borrowed for the read.
+        let terminator = unsafe { base.wrapping_add(string.len()).read() };
+        assert_eq!(terminator, 0);
+    }
+
+    #[test]
+    fn strings_keep_a_nul_terminator_outside_their_length() {
+        for text in ["", "A", "Id", "Zip", "Score", "Name12"] {
+            assert_terminated(&CLRString::from(text), text);
+            // Interned and owned copies compare and hash by their characters only.
+            assert_eq!(CLRString::from(text), CLRString::from(text));
+        }
+
+        let mut string = CLRString::from("abc");
+        let chars = string.as_mut_slice();
+        assert_eq!(chars.len(), 3);
+        chars[2] = u16::from(b'z');
+        assert_terminated(&string, "abz");
     }
 }

@@ -16,7 +16,6 @@ use dotnet_vm_ops::effects::{
     NativeInvocation, NativeOperandView, NativeResult, NativeSelection, VmEffects,
 };
 use dotnet_vm_ops::ops::{ExceptionOps, MemoryOps, RawMemoryOps, TypedStackOps};
-use std::hash::{DefaultHasher, Hash, Hasher};
 
 const SPAN_COPY_CHUNK_SIZE: usize = 1024;
 
@@ -514,119 +513,6 @@ pub fn intrinsic_string_concat_three_spans<'gc, T: IntrinsicStringHost<'gc>>(
     StepResult::Continue
 }
 
-/// System.String::GetHashCodeOrdinalIgnoreCase()
-const HASH_CHUNK_SIZE: usize = dotnet_vm_ops::effects::BULK_CHUNK_SIZE / 2;
-
-pub fn string_hash_select<'gc, T: TypedStackOps<'gc> + RawMemoryOps<'gc>>(
-    _ctx: &T,
-    operands: NativeOperandView<'_, 'gc>,
-    _method: &MethodDescription,
-    _generics: &GenericLookup,
-) -> NativeSelection {
-    if let StackValue::ObjectRef(ObjectRef(Some(handle))) = operands.peek_at(0) {
-        let inner = handle.borrow();
-        if let HeapStorage::Str(chars) = &inner.storage
-            && chars.len() > HASH_CHUNK_SIZE
-        {
-            return NativeSelection::Async(NativeInvocation {
-                start: 0,
-                length: chars.len(),
-                parameter_count: 1,
-            });
-        }
-    }
-    NativeSelection::Fallback
-}
-
-#[dotnet_intrinsic("int System.String::GetHashCodeOrdinalIgnoreCase()", select = string_hash_select, fallback = intrinsic_string_get_hash_code_ordinal_ignore_case)]
-pub async fn string_hash_async(mut fx: VmEffects) -> NativeResult {
-    let length = fx.invocation().length;
-    let source = fx.vm().await?.pop_string()?;
-    let mut chars = Vec::with_capacity(length);
-    while chars.len() < length {
-        {
-            let mut vm = fx.vm().await?;
-            vm.with(|region| {
-                let StackValue::ObjectRef(ObjectRef(Some(handle))) = region.fetch(&source)? else {
-                    return Err(dotnet_types::error::ExecutionError::InternalError(
-                        "native string hash operand invalid".into(),
-                    )
-                    .into());
-                };
-                let inner = handle.borrow();
-                let HeapStorage::Str(source) = &inner.storage else {
-                    return Err(dotnet_types::error::ExecutionError::InternalError(
-                        "native string hash operand invalid".into(),
-                    )
-                    .into());
-                };
-                let end = (chars.len() + HASH_CHUNK_SIZE).min(length);
-                chars.extend_from_slice(&source[chars.len()..end]);
-                Ok::<(), dotnet_types::error::VmError>(())
-            })??;
-        }
-        if chars.len() < length {
-            fx.yield_now().await?;
-        }
-    }
-    let mut h = DefaultHasher::new();
-    String::from_utf16_lossy(&chars)
-        .to_uppercase()
-        .into_bytes()
-        .hash(&mut h);
-    fx.vm()
-        .await?
-        .with(|region| region.push_int(h.finish() as i32))??;
-    Ok(())
-}
-
-pub fn intrinsic_string_get_hash_code_ordinal_ignore_case<
-    'gc,
-    T: TypedStackOps<'gc> + RawMemoryOps<'gc>,
->(
-    ctx: &mut T,
-    _method: MethodDescription,
-    _generics: &GenericLookup,
-) -> StepResult {
-    let val = ctx.pop();
-    let mut h = DefaultHasher::new();
-
-    let chars = match &val {
-        StackValue::ObjectRef(ObjectRef(Some(handle))) => {
-            let len = {
-                let inner = handle.borrow();
-                match &inner.storage {
-                    HeapStorage::Str(s) => s.len(),
-                    _ => {
-                        return StepResult::internal_error(
-                            "System.String::GetHashCodeOrdinalIgnoreCase called on non-string object",
-                        );
-                    }
-                }
-            };
-
-            let mut result = Vec::with_capacity(len);
-            let mut offset = 0;
-            while offset < len {
-                let chunk_len = std::cmp::min(HASH_CHUNK_SIZE, len - offset);
-                if !extend_from_string_chunk(ctx, *handle, offset, chunk_len, &mut result) {
-                    break;
-                }
-                offset += chunk_len;
-            }
-            result
-        }
-        _ => Vec::new(),
-    };
-
-    let value = String::from_utf16_lossy(&chars).to_uppercase().into_bytes();
-    value.hash(&mut h);
-    let code = h.finish();
-
-    ctx.push_i32(code as i32);
-    StepResult::Continue
-}
-
 /// System.String::CopyStringContent(string, int, string)
 #[dotnet_intrinsic("static void System.String::CopyStringContent(string, int, string)")]
 pub fn intrinsic_string_copy_string_content<
@@ -854,79 +740,6 @@ mod tests {
                 assert!(roots.a.upgrade(mc).is_none() && roots.b.upgrade(mc).is_none())
             });
         }
-    }
-
-    #[test]
-    fn hash_keeps_utf16_and_progress_across_collection() {
-        let length = HASH_CHUNK_SIZE * 2 + 1;
-        let mut chars = vec![b'a' as u16; length];
-        chars[HASH_CHUNK_SIZE - 1] = 0xd83d;
-        chars[HASH_CHUNK_SIZE] = 0xde00;
-        let mut expected = DefaultHasher::new();
-        String::from_utf16_lossy(&chars)
-            .to_uppercase()
-            .into_bytes()
-            .hash(&mut expected);
-        let expected = expected.finish() as i32;
-        let mut arena = Arena::<Rootable![EqualityRoots<'_>]>::new(|mc| {
-            let a = Gc::new(
-                mc,
-                ThreadSafeLock::new(ObjectInner::new(
-                    HeapStorage::Str(CLRString::new(chars)),
-                    ArenaId::new(1),
-                )),
-            );
-            EqualityRoots {
-                roots: DynamicRootSet::new(mc),
-                a: Gc::downgrade(a),
-                b: Gc::downgrade(a),
-            }
-        });
-        let control = NativeControl::new();
-        let fx = control
-            .effects(NativeInvocation {
-                start: 0,
-                length,
-                parameter_count: 1,
-            })
-            .unwrap();
-        let mut future = Box::pin(string_hash_async(fx));
-        arena.mutate(|mc, roots| {
-            let mut backend = EqualityBackend::default();
-            backend.operands.push(StackValue::ObjectRef(ObjectRef(Some(
-                roots.a.upgrade(mc).unwrap(),
-            ))));
-            let mut region = NativeRegion::new(mc, roots.roots, &mut backend);
-            assert!(matches!(
-                poll_native(&control, future.as_mut(), &mut region),
-                Ok(Poll::Pending)
-            ));
-        });
-        assert_eq!(control.take_effect(), Some(NativeEffect::Yield));
-        arena.finish_cycle();
-        arena.mutate(|mc, roots| {
-            assert!(roots.a.upgrade(mc).is_some());
-            let mut backend = EqualityBackend::default();
-            let mut region = NativeRegion::new(mc, roots.roots, &mut backend);
-            assert!(matches!(
-                poll_native(&control, future.as_mut(), &mut region),
-                Ok(Poll::Pending)
-            ));
-        });
-        assert_eq!(control.take_effect(), Some(NativeEffect::Yield));
-        arena.finish_cycle();
-        arena.mutate(|mc, roots| {
-            let mut backend = EqualityBackend::default();
-            let mut region = NativeRegion::new(mc, roots.roots, &mut backend);
-            assert!(matches!(
-                poll_native(&control, future.as_mut(), &mut region),
-                Ok(Poll::Ready(Ok(())))
-            ));
-            assert_eq!(backend.result, Some(expected));
-        });
-        drop(future);
-        arena.finish_cycle();
-        arena.mutate(|mc, roots| assert!(roots.a.upgrade(mc).is_none()));
     }
 
     #[test]
