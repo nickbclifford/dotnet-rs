@@ -137,6 +137,7 @@ pub mod cpu_intrinsics;
 pub mod diagnostics;
 pub mod exceptions;
 pub mod gc;
+pub mod linq_expressions;
 pub mod metadata;
 pub mod object_ops;
 pub mod static_registry;

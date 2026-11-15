@@ -2041,7 +2041,7 @@ pub trait NativeSelectorProvider<'gc, T> {
 }
 
 /// Inline calls and intrinsic `newobj` can suspend. `Other` covers retained multicast
-/// continuations and the managed-body-only cctor, span equality and Expression.Compile routes;
+/// continuations and the managed-body-only cctor and span equality routes;
 /// it uses the optional fallback or returns `NotImplemented` before consuming operands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NativeDispatchMode {

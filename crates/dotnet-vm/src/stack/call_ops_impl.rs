@@ -5,7 +5,7 @@ use crate::{
         context::VesContext,
         ops::{
             ArgumentOps, CallArgumentBufferOps, EvalStackOps, ExceptionOps, LoaderOps,
-            TypedStackOps, UnifiedDispatchTarget, VmCallOps, VmLoaderOps, VmResolutionOps,
+            UnifiedDispatchTarget, VmCallOps, VmLoaderOps, VmResolutionOps,
         },
         receiver_object_generics,
     },
@@ -24,10 +24,7 @@ use dotnet_value::{
 };
 use dotnet_vm_data::frame_homes::FrameHomes;
 use dotnet_vm_ops::NULL_REF_MSG;
-use dotnetdll::prelude::{
-    BaseType, Instruction, Kind, MethodMemberIndex, MethodSource, MethodType, ParameterType,
-    TypeSource, UserType,
-};
+use dotnetdll::prelude::{BaseType, Instruction, Kind, MethodSource, TypeSource, UserType};
 use std::{fmt::Write as _, sync::OnceLock};
 
 // invariant: VM internal state is inconsistent; continuing would be unsafe.
@@ -62,25 +59,6 @@ fn no_body_in_executing_method_step_result(method: &MethodDescription) -> StepRe
         )
         .into(),
     )
-}
-
-fn try_no_body_runtime_stub<'gc, T: EvalStackOps<'gc>>(
-    ctx: &mut T,
-    method: &MethodDescription,
-) -> Option<StepResult> {
-    if method.parent.type_name() == "System.Dynamic.Utils.DelegateHelpers"
-        && method.method().name.as_ref()
-            == "<CreateObjectArrayDelegateRefEmit>g__ForceAllowDynamicCode|19_1"
-    {
-        // This method is a compiler-generated UnsafeAccessor extern with no IL body.
-        // dotnet-rs doesn't support DynamicMethod emission, so treat ForceAllowDynamicCode
-        // scope creation as a no-op and return null IDisposable.
-        let _ = ctx.pop();
-        ctx.push(StackValue::ObjectRef(ObjectRef(None)));
-        return Some(StepResult::Continue);
-    }
-
-    None
 }
 
 fn concrete_from_type_description_and_lookup(
@@ -136,58 +114,6 @@ fn concrete_from_method_parent(method: &MethodDescription) -> ConcreteType {
             value_kind: None,
         },
     )
-}
-
-fn is_boolean_parameter(parameter: &ParameterType<MethodType>) -> bool {
-    matches!(
-        parameter,
-        ParameterType::Value(MethodType::Base(base)) if matches!(&**base, BaseType::Boolean)
-    )
-}
-
-fn try_redirect_expression_compile_to_interpreter(
-    method: &MethodDescription,
-) -> Option<MethodDescription> {
-    let parent_name = method.parent.type_name();
-    if parent_name != "System.Linq.Expressions.LambdaExpression"
-        && parent_name != "System.Linq.Expressions.Expression`1"
-    {
-        return None;
-    }
-
-    if method.method().name.as_ref() != "Compile" {
-        return None;
-    }
-
-    if !method.signature().parameters.is_empty() {
-        return None;
-    }
-
-    method
-        .parent
-        .definition()
-        .methods
-        .iter()
-        .enumerate()
-        .find_map(|(index, m)| {
-            if m.name.as_ref() != "Compile" {
-                return None;
-            }
-
-            let candidate = MethodDescription::new(
-                method.parent.clone(),
-                method.parent_generics.clone(),
-                method.method_resolution.clone(),
-                MethodMemberIndex::Method(index),
-            );
-
-            let signature = candidate.signature();
-            if signature.parameters.len() == 1 && is_boolean_parameter(&signature.parameters[0].1) {
-                Some(candidate)
-            } else {
-                None
-            }
-        })
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -682,16 +608,6 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             return initialized;
         }
 
-        if let Some(compile_bool_overload) = try_redirect_expression_compile_to_interpreter(&method)
-        {
-            // dotnet-rs does not implement DynamicMethod emission yet.
-            // Route parameterless Expression/Lambda Compile() through Compile(bool)
-            // with preferInterpretation=true so System.Linq.Expressions uses the
-            // interpreter path instead of Reflection.Emit.
-            self.push_i32(1);
-            return self.dispatch_method(compile_bool_overload, lookup);
-        }
-
         self.dispatch_resolved_method_with_mode(method, lookup, mode)
     }
 
@@ -784,10 +700,6 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         }
 
         if method.body().is_none() {
-            if let Some(result) = try_no_body_runtime_stub(self, &method) {
-                return result;
-            }
-
             if mode == ResolvedMethodDispatchMode::InlineCall
                 && let Some(result) = self.try_start_multicast(method.clone(), &lookup)
             {
