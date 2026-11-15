@@ -266,8 +266,15 @@ stops being cheap once a library's fallback isn't a drop-in object.
 planned" list):
 
 - `"true"u8` static spans crash the VM (`Utf8JsonWriter` writing a bool or null segfaults).
+  *Fixed after slice 3:* `RetainedPtr::checked_range` returned a static-origin pointer's null cached
+  address to `Buffer.Memmove` and never bounds-checked heap ranges; it now resolves and checks
+  every owned origin.
 - `JsonSerializer.Deserialize` reads numbers wrongly: a `double` followed by more members is 0 every
-  run, and an `int` in a nested object was 0 in about 1 run in 25.
+  run, and an `int` in a nested object was 0 in about 1 run in 25. *Fixed after slice 3:* the
+  cause was the property-name lookup, not number parsing. VM strings had no NUL terminator, so
+  `String.GetNonRandomizedHashCode` read past odd-length names ("Score", "Zip"), the string and
+  span hashes disagreed, and `Dictionary` alternate lookups missed. The VM's
+  `GetHashCodeOrdinalIgnoreCase` intrinsic had the same kind of mismatch and was removed.
 - Expression trees built from C# that capture a local or set a field through an object initializer
   stop in `FieldInfo.GetFieldFromHandle` (`ldtoken` of a field).
 - `Type.GetType(string)` and `Assembly.GetType(string)` hit the `QCall` DLL error.

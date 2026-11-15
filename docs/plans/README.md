@@ -67,13 +67,21 @@ Evidence and IDs (p01…, R01…) are defined in the
   that picks Emit from `IsDynamicCodeSupported` without a switch. Plan 24 slices 4–5 decide
   whether to implement `DynamicMethod`.
 - **Gaps behind the System.Text.Json fixture** (none involve Emit,
-  [plan 24](24-reflection-emit-investigation.md) slice 3): a `ReadOnlySpan<byte>` over a `"true"u8`
-  literal segfaults, so `Utf8JsonWriter` writing a bool or null crashes the VM;
-  `JsonSerializer.Deserialize` reads numbers wrongly (a `double` followed by more members is
-  always 0; an `int` in a nested object was 0 in about 1 run in 25); an Expression
-  tree built from C# that captures a local or sets a field in an object initializer stops in
-  `FieldInfo.GetFieldFromHandle`; `Type.GetType(string)` and `Assembly.GetType(string)` hit the
-  `QCall` DLL error.
+  [plan 24](24-reflection-emit-investigation.md) slice 3):
+  - `JsonSerializer.Deserialize<double[]>` throws `NotSupportedException: Derived classes must
+    provide an implementation` while STJ creates the array's type info: a `Type` member the
+    `DotnetRs.RuntimeType` stub doesn't override.
+  - `new Dictionary<string, T>()` (no comparer) throws from `GetAlternateLookup<ReadOnlySpan<char>>`
+    ("The collection's comparer does not support the requested operation"); with
+    `StringComparer.Ordinal`/`OrdinalIgnoreCase` it works.
+  - An Expression tree built from C# that captures a local or sets a field in an object
+    initializer stops in `FieldInfo.GetFieldFromHandle`.
+  - `Type.GetType(string)` and `Assembly.GetType(string)` hit the `QCall` DLL error.
+- **Delegate creation gaps:** `MethodInfo.CreateDelegate<T>(object target)` (a closed delegate)
+  stops with "Reflection runtime type object missing index field", so the target appears to be read
+  where the delegate type is expected; the static `Delegate.CreateDelegate(Type, MethodInfo)` and
+  `(Type, object, MethodInfo)` overloads are missing from `DotnetRs.Delegate`. Open delegates via
+  `MethodInfo.CreateDelegate(Type)` work.
 - **SQLite connection-string keywords:** `new SqliteConnection("Data Source=:memory:")` throws
   `ArgumentException: Connection string keyword 'data source' is not supported` on the VM
   (`SqliteConnectionStringBuilder.GetIndex`); `dotnet` accepts it. This is the first wall for an EF Core
