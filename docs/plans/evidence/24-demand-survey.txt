@@ -1,0 +1,93 @@
+Plan 24 slice 1 — demand survey, 2026-11-14 (main at 7f57ff73 plus the ConcreteType
+ResolvedDebug fix in this change)
+
+Binary: cargo build --release -p dotnet-cli (default features: multithreading).
+Decompiler: ilspycmd, sources from ~/.nuget/packages and
+/usr/share/dotnet/shared/Microsoft.NETCore.App/10.0.14.
+
+Tracing prerequisite
+--------------------
+Before the fix in crates/dotnet-types/src/generics.rs, any DOTNET_RS_TRACE run of either host
+rung panicked in dotnetdll (resolved/types.rs:691, "index out of bounds") from
+VesContext::trace_push → ConcreteType Debug. `ResolvedDebug for ConcreteType` formatted
+generic arguments against the enclosing type's resolution rather than their own.
+
+Host rungs, traced
+------------------
+DOTNET_RS_TRACE_METHODS="DynamicMethod::,ILGenerator::.ctor,TypeBuilder::.ctor,
+  AssemblyBuilder::Define,CreateObjectArrayDelegate,LambdaCompiler::Compile,
+  LightCompiler::CompileTop,ReflectionEmit,ILEmitResolverBuilder::Build,
+  DynamicReflectionDelegateFactory,get_IsDynamicCodeSupported,get_IsDynamicCodeCompiled,
+  MakeNewCustomDelegate"
+RUST_LOG=method=debug
+
+Calls per run (CALL events):
+                          LightCompiler  CreateObjectArray-  DynamicMethod  LambdaCompiler
+                          ::CompileTop   DelegateRefEmit     ::.ctor        ::Compile
+Newtonsoft roundtrip      4              4                   0              0
+EF InMemory               56             56                  0              0
+
+Both runs matched dotnet (exit 42 + {"name":"test","value":42}; exit 0).
+Every interpreted delegate matched DelegateHelpers.GetCSharpThunk (at most 2 parameters, no
+byref/pointer types), so no DynamicMethod was constructed.
+
+Probes (scripts/diff_run.sh --host, DOTNET_RS_BIN=target/release/dotnet-rs)
+--------------------------------------------------------------------------
+1. JsonSerializer.Serialize(new Poco()) and Deserialize<Poco>(...)
+   dotnet:    exit 42, {"Name":"a","Value":7} / b9
+   dotnet-rs: exit 1, System.AccessViolationException
+     ... ExceptionDispatchInfo.Throw ← CachingContext.GetOrAddTypeInfo ← JsonSerializer.Serialize
+   Untraced origin, reconstructed from a full method trace:
+     DefaultJsonTypeInfoResolver.GetConverterForType → JsonSerializerOptions.ExpandConverterFactory
+     → ObjectConverterFactory.CreateConverter → Activator.CreateInstance(Type, BindingFlags, ...)
+     → RuntimeType.CreateInstanceImpl → RuntimeType.GetConstructorCandidates
+     → RuntimeType.get_Cache()   ← AV raised here
+   No DynamicMethod / MemberAccessor call precedes it.
+
+2. Expression<Func<int,int,int,int>> e = (a,b,c) => a+b+c; e.Compile()(10,20,12)
+   dotnet:    exit 42, 42
+   dotnet-rs: exit 1, TypeInitializationException (DefaultAssemblyLoadContext)
+     inner DllNotFoundException: Unable to load DLL 'QCall'
+     at AssemblyLoadContext.InitializeAssemblyLoadContext
+     ← DefaultAssemblyLoadContext..cctor ← AssemblyLoadContext.get_Default
+     ← DynamicMethod.GetDynamicMethodsModule ← DynamicMethod.Init ← DynamicMethod..ctor
+     ← DelegateHelpers.CreateObjectArrayDelegateRefEmit ← LightLambda.MakeDelegate
+     ← LightDelegateCreator.CreateDelegate ← Expression`1.Compile(bool preferInterpretation)
+   (Compile() was redirected to Compile(true) by the call-site patch, as expected.)
+
+3. new DynamicMethod("m", typeof(int), Type.EmptyTypes)
+   dotnet:    exit 42, m
+   dotnet-rs: exit 1, same TypeInitializationException / 'QCall' chain as probe 2, starting at
+     DynamicMethod..ctor. get_IsActualInterface / GetNativeTypeHandle are no longer on this path.
+
+4. EF Core SQLite 9.0.17: SqliteConnection("Data Source=:memory:"), EnsureCreated, Add,
+   SaveChanges, Single(b => b.Name == "a")
+   dotnet:    exit 0, 1
+   dotnet-rs: exit 1, ArgumentException: Connection string keyword 'data source' is not
+     supported. at SqliteConnectionStringBuilder.GetIndex ← set_Item
+     ← DbConnectionStringBuilder.set_ConnectionString ← SqliteConnection..ctor
+   Not an Emit failure; EF Relational was surveyed from source instead.
+
+Source references (decompiled)
+------------------------------
+Newtonsoft  JsonTypeReflector.DynamicCodeGeneration = RuntimeFeature.IsDynamicCodeCompiled;
+            ReflectionDelegateFactory → Dynamic… if true else LateBound…;
+            ExpressionValueProvider → ExpressionReflectionDelegateFactory (the rung's 4 lambdas).
+DI          ServiceProvider.GetEngine: IsDynamicCodeCompiled && !DisableDynamicEngine
+            → CreateDynamicEngine, else RuntimeServiceProviderEngine.
+EF          DbContextServices: !IsDynamicCodeSupported → refuse runtime model building.
+            3-parameter Compile sites: DependencyInjectionMethodParameterBinding
+            (Func<MaterializationContext, IEntityType, object, object>), ServiceParameterBinding.
+Relational  RelationalShapedQueryCompilingExpressionVisitor: shaper lambdas over
+            (QueryContext, DbDataReader, ResultContext, ResultCoordinator);
+            relatedDataLoaders Func/Action<QueryContext, IExecutionStrategy,
+            SplitQueryResultCoordinator[, Task]>.
+STJ         DefaultJsonTypeInfoResolver.MemberAccessor: IsDynamicCodeSupported
+            ? ReflectionEmitCachingMemberAccessor : ReflectionMemberAccessor.
+Linq        LambdaExpression.CanCompileToIL => IsDynamicCodeSupported.
+            DelegateHelpers.CanEmitObjectArrayDelegate: [FeatureSwitchDefinition] => true (IL const).
+            CreateObjectArrayDelegateRefEmit: GetCSharpThunk (<= 2 params, no byref/ptr) else
+            new DynamicMethod. Fallback UnsafeAccessor target
+            Internal.Runtime.Augments.DynamicDelegateAugments is absent from CoreCLR CoreLib 10.0.14.
+            Compiler.DelegateHelpers.MakeNewCustomDelegate (byref/pointer delegate types):
+            TypeBuilder via AssemblyGen when IsDynamicCodeSupported, else PlatformNotSupportedException.

@@ -1,6 +1,6 @@
 # Investigate Reflection.Emit and `DynamicMethod`
 
-**Status:** Not started
+**Status:** Slice 1 (demand survey) done; slices 2–5 not started
 **Outcome:** This plan records a decision, backed by a working spike or a measured blocker:
 either a follow-up plan to implement `DynamicMethod` (and, separately, whether to do
 `AssemblyBuilder`/`TypeBuilder`), or a single switch-level answer that replaces the per-call-site
@@ -59,6 +59,62 @@ Reflection.Emit** (replaced by the follow-up plan, or closed by the switch-level
    with a direct fixture (`new DynamicMethod("m", typeof(int), Type.EmptyTypes)`). Find which
    handle or pointer is invalid. Fix it if the fix is local to type handles (it may affect other
    reflection paths), otherwise record the cause.
+
+## Slice 1 findings: demand survey
+
+Surveyed 2026-11-14 against the versions the rungs resolve (Newtonsoft.Json 13.0.3 `net6.0`,
+EF Core + InMemory + Relational + SQLite 9.0.17, Microsoft.Extensions.DependencyInjection 9.0.17
+`net9.0`, and System.Text.Json and System.Linq.Expressions from the 10.0.14 shared framework).
+Sources were read with `ilspycmd`. Runtime evidence comes from method traces of both host rungs
+and three probe programs; see [evidence](evidence/24-demand-survey.txt).
+
+| Library | Selects Emit with | Non-Emit fallback | Reaches Emit on the VM today |
+|---|---|---|---|
+| Newtonsoft.Json | `IsDynamicCodeCompiled` (`JsonTypeReflector.DynamicCodeGeneration`) | `LateBoundReflectionDelegateFactory`, `ExpressionValueProvider` | No. The rung compiles 4 lambdas, all 1–2 parameters |
+| M.E.DependencyInjection | `IsDynamicCodeCompiled && !DisableDynamicEngine` (`ServiceProvider.GetEngine`) | `RuntimeServiceProviderEngine` | No |
+| EF Core (+ InMemory) | No direct Emit. About 26 `LambdaExpression.Compile()` sites, and its `IsDynamicCodeSupported` check only refuses model building when false | Linq interpreter (see below) | No on the rung: 56 lambdas compiled, all within the thunk limit. Yes for 3-parameter lambdas, e.g. `DependencyInjectionMethodParameterBinding`, `ServiceParameterBinding` |
+| EF Core Relational / SQLite | No direct Emit. Query shapers are 3–4-parameter lambdas (`QueryContext, DbDataReader, ResultContext, ResultCoordinator`); split-include loaders take 3 | Linq interpreter | Would, on every query. The probe stops earlier on an unrelated gap (below) |
+| System.Text.Json | `IsDynamicCodeSupported` (`DefaultJsonTypeInfoResolver.MemberAccessor` picks `ReflectionEmitCachingMemberAccessor`) | `ReflectionMemberAccessor`, chosen only when `IsDynamicCodeSupported` is false | Would, for every reflection-based POCO. The probe stops earlier on an AV (below) |
+| System.Linq.Expressions | `CanCompileToIL` = `IsDynamicCodeSupported`; the interpreter separately uses `CanEmitObjectArrayDelegate` | `LightCompiler`, but see below | Yes, for any delegate with more than 2 parameters or with byref/pointer types |
+
+**The interpreter still emits.** The `LambdaExpression.Compile()` redirect avoids `LambdaCompiler`,
+but every interpreted lambda becomes a delegate through `LightLambda.MakeDelegate` →
+`DelegateHelpers.CreateObjectArrayDelegate`. Its `CanEmitObjectArrayDelegate` feature switch is a
+trimmer-substituted IL constant `true`, not an AppContext read. `CreateObjectArrayDelegateRefEmit`
+avoids Emit only when `GetCSharpThunk` matches, which needs at most 2 parameters and no
+byref, byref-like or pointer types. Anything wider constructs a `DynamicMethod`. The non-Emit
+branch calls `Internal.Runtime.Augments.DynamicDelegateAugments.CreateObjectArrayDelegate` via
+`UnsafeAccessor`, and that type exists only in NativeAOT's CoreLib, not in the CoreCLR CoreLib
+the VM loads. Two consequences:
+
+- A switch-level answer (question 2) must also cover this path, for example a VM-provided
+  `CanEmitObjectArrayDelegate` = false plus an intrinsic `CreateObjectArrayDelegate` that builds a
+  delegate packing its arguments into `object[]`. Feature values alone can't do it.
+- `Expression<Func<int,int,int,int>>.Compile()` fails on the VM today
+  (`TypeInitializationException`), even through the redirect.
+
+**Question 5 has moved.** The `new DynamicMethod("m", typeof(int), Type.EmptyTypes)` probe no
+longer reaches `GetNativeTypeHandle`. `DynamicMethod.Init` now gets past `get_IsActualInterface`
+and fails in `GetDynamicMethodsModule` → `AssemblyLoadContext.get_Default` →
+`DefaultAssemblyLoadContext..cctor` → `InitializeAssemblyLoadContext` with
+`DllNotFoundException: Unable to load DLL 'QCall'`, surfacing as `TypeInitializationException`.
+A `RuntimeType` AV still exists on another path: System.Text.Json's
+`ObjectConverterFactory.CreateConverter` → `Activator.CreateInstance` (on a `MakeGenericType`
+converter type) → `RuntimeType.CreateInstanceImpl` → `GetConstructorCandidates` →
+`RuntimeType.get_Cache()` raises `AccessViolationException` before STJ reaches Emit. Slice 2
+should start from that path as well as the constructor fixture.
+
+**EF Core SQLite's first wall isn't Emit.** `new SqliteConnection("Data Source=:memory:")`
+throws `ArgumentException: Connection string keyword 'data source' is not supported` on the VM,
+while `dotnet` accepts it. This is likely a case-insensitive keyword lookup gap and belongs in the README
+"Not yet planned" list, not in this plan.
+
+**Answer to question 1.** Real demand exists. Every library that selects on `IsDynamicCodeCompiled`
+already avoids Emit. The remaining demand comes from two sources: System.Text.Json, which selects
+on `IsDynamicCodeSupported`, and the Linq interpreter's delegate creation for lambdas with more
+than 2 parameters, which EF Relational/SQLite hits on every query. Neither has a fallback that
+current feature values can reach. The first maintainer question ("no real-application path needs
+Emit") does not apply.
 
 ## Scope
 
