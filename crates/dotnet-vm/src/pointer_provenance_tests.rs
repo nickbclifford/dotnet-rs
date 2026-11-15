@@ -1579,10 +1579,6 @@ fn frame_home_byref_resolves_into_caller_frame() {
 // ldelema + managed pointer arithmetic past the end of the array (one-past-end then beyond):
 // `Unsafe.Add(ref arr[0], 100)` style. Never dereferenced; address formation must use wrapping arithmetic.
 #[test]
-#[cfg_attr(
-    feature = "memory-validation",
-    ignore = "p13 deliberately forms an out-of-bounds managed address; memory-validation's debug bound trap rejects it by design"
-)]
 fn p13_ldelema_managed_add_far_out_of_bounds_then_conv_u() {
     let r = run_program("P13", |_res, _t| {
         (
@@ -1646,10 +1642,6 @@ fn conv_u8_heap_ldelema_matches_conv_u() {
 // Address observation after managed pointer arithmetic is allowed to form a far-OOB
 // numeric address; this regression never dereferences the resulting integer.
 #[test]
-#[cfg_attr(
-    feature = "memory-validation",
-    ignore = "conv.u8 regression deliberately forms an out-of-bounds managed address; memory-validation's debug bound trap rejects it by design"
-)]
 fn conv_u8_after_far_oob_managed_add_does_not_panic() {
     let r = run_program("ConvU8FarOob", |_res, _t| {
         (
@@ -3848,8 +3840,7 @@ fn p44_native_substring_gc_resume() {
 mod batches {
     /// Defines one batch test. Each control runs in order on the calling thread; a panic in a
     /// control fails the whole batch, and the `start`/`ok` lines let the runner name the control
-    /// that was in flight. Attributes on an entry apply to that control's run (p13 is skipped
-    /// under `memory-validation` for the same reason it is ignored there).
+    /// that was in flight. Attributes on an entry apply to that control's run.
     macro_rules! control_batch {
         ($batch:ident: [$($(#[$attr:meta])* $control:ident),+ $(,)?]) => {
             #[test]
@@ -3875,7 +3866,6 @@ mod batches {
     control_batch!(batch_1: [
         p00_smoke,
         p07_localloc_one_past_end,
-        #[cfg(not(feature = "memory-validation"))]
         p13_ldelema_managed_add_far_out_of_bounds_then_conv_u,
         p06_localloc_minus_one_then_plus_one,
         p21_localloc_signed_extreme_offsets_roundtrip,

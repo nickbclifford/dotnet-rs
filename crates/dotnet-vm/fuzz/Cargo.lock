@@ -204,6 +204,7 @@ version = "0.1.0"
 dependencies = [
  "dotnet-macros",
  "dotnet-types",
+ "dotnet-utils",
  "dotnet-value",
  "dotnet-vm-data",
  "dotnet-vm-ops",

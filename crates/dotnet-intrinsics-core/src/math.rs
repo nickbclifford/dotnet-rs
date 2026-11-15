@@ -5,12 +5,16 @@ use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
 };
+use dotnet_utils::ByteOffset;
 use dotnet_value::{
     StackValue,
     object::{HeapStorage, ObjectRef},
+    pointer::PointerOrigin,
 };
 use dotnet_vm_data::StepResult;
-use dotnet_vm_ops::ops::{LoaderOps, MemoryOps, TypedStackOps};
+use dotnet_vm_ops::ops::{
+    ExceptionOps, LoaderOps, MemoryOps, RawMemoryOps, TypeLayoutOps, TypedStackOps,
+};
 use dotnetdll::prelude::BaseType;
 use std::sync::Arc;
 
@@ -665,6 +669,386 @@ pub fn intrinsic_math_sqrt<'gc, T: TypedStackOps<'gc>>(
     let val = ctx.pop_f64();
     ctx.push_f64(val.sqrt());
     StepResult::Continue
+}
+
+#[dotnet_intrinsic("static double System.Math::Acos(double)")]
+#[dotnet_intrinsic("static float System.MathF::Acos(float)")]
+#[dotnet_intrinsic("static double System.Math::Acosh(double)")]
+#[dotnet_intrinsic("static float System.MathF::Acosh(float)")]
+#[dotnet_intrinsic("static double System.Math::Asin(double)")]
+#[dotnet_intrinsic("static float System.MathF::Asin(float)")]
+#[dotnet_intrinsic("static double System.Math::Asinh(double)")]
+#[dotnet_intrinsic("static float System.MathF::Asinh(float)")]
+#[dotnet_intrinsic("static double System.Math::Atan(double)")]
+#[dotnet_intrinsic("static float System.MathF::Atan(float)")]
+#[dotnet_intrinsic("static double System.Math::Atanh(double)")]
+#[dotnet_intrinsic("static float System.MathF::Atanh(float)")]
+#[dotnet_intrinsic("static double System.Math::Atan2(double, double)")]
+#[dotnet_intrinsic("static float System.MathF::Atan2(float, float)")]
+#[dotnet_intrinsic("static double System.Math::Cbrt(double)")]
+#[dotnet_intrinsic("static float System.MathF::Cbrt(float)")]
+#[dotnet_intrinsic("static double System.Math::Ceiling(double)")]
+#[dotnet_intrinsic("static float System.MathF::Ceiling(float)")]
+#[dotnet_intrinsic("static double System.Math::Cos(double)")]
+#[dotnet_intrinsic("static float System.MathF::Cos(float)")]
+#[dotnet_intrinsic("static double System.Math::Cosh(double)")]
+#[dotnet_intrinsic("static float System.MathF::Cosh(float)")]
+#[dotnet_intrinsic("static double System.Math::Exp(double)")]
+#[dotnet_intrinsic("static float System.MathF::Exp(float)")]
+#[dotnet_intrinsic("static double System.Math::Floor(double)")]
+#[dotnet_intrinsic("static float System.MathF::Floor(float)")]
+#[dotnet_intrinsic("static double System.Math::Log(double)")]
+#[dotnet_intrinsic("static float System.MathF::Log(float)")]
+#[dotnet_intrinsic("static double System.Math::Log2(double)")]
+#[dotnet_intrinsic("static float System.MathF::Log2(float)")]
+#[dotnet_intrinsic("static double System.Math::Log10(double)")]
+#[dotnet_intrinsic("static float System.MathF::Log10(float)")]
+#[dotnet_intrinsic("static double System.Math::Sin(double)")]
+#[dotnet_intrinsic("static float System.MathF::Sin(float)")]
+#[dotnet_intrinsic("static double System.Math::Sinh(double)")]
+#[dotnet_intrinsic("static float System.MathF::Sinh(float)")]
+#[dotnet_intrinsic("static double System.Math::Tan(double)")]
+#[dotnet_intrinsic("static float System.MathF::Tan(float)")]
+#[dotnet_intrinsic("static double System.Math::Tanh(double)")]
+#[dotnet_intrinsic("static float System.MathF::Tanh(float)")]
+pub fn intrinsic_math_transcendental<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let operation = method.method().name.as_ref();
+    if method.parent.type_name() == "System.MathF" {
+        if operation == "Atan2" {
+            let x = ctx.pop_f64() as f32;
+            let y = ctx.pop_f64() as f32;
+            ctx.push_f64(y.atan2(x) as f64);
+            return StepResult::Continue;
+        }
+        let value = ctx.pop_f64() as f32;
+        let result = match operation {
+            "Acos" => value.acos(),
+            "Acosh" => value.acosh(),
+            "Asin" => value.asin(),
+            "Asinh" => value.asinh(),
+            "Atan" => value.atan(),
+            "Atanh" => value.atanh(),
+            "Cbrt" => value.cbrt(),
+            "Ceiling" => value.ceil(),
+            "Cos" => value.cos(),
+            "Cosh" => value.cosh(),
+            "Exp" => value.exp(),
+            "Floor" => value.floor(),
+            "Log" => value.ln(),
+            "Log2" => value.log2(),
+            "Log10" => value.log10(),
+            "Sin" => value.sin(),
+            "Sinh" => value.sinh(),
+            "Tan" => value.tan(),
+            "Tanh" => value.tanh(),
+            _ => return StepResult::not_implemented(format!("MathF::{operation}")),
+        };
+        ctx.push_f64(result as f64);
+    } else {
+        if operation == "Atan2" {
+            let x = ctx.pop_f64();
+            let y = ctx.pop_f64();
+            ctx.push_f64(y.atan2(x));
+            return StepResult::Continue;
+        }
+        let value = ctx.pop_f64();
+        let result = match operation {
+            "Acos" => value.acos(),
+            "Acosh" => value.acosh(),
+            "Asin" => value.asin(),
+            "Asinh" => value.asinh(),
+            "Atan" => value.atan(),
+            "Atanh" => value.atanh(),
+            "Cbrt" => value.cbrt(),
+            "Ceiling" => value.ceil(),
+            "Cos" => value.cos(),
+            "Cosh" => value.cosh(),
+            "Exp" => value.exp(),
+            "Floor" => value.floor(),
+            "Log" => value.ln(),
+            "Log2" => value.log2(),
+            "Log10" => value.log10(),
+            "Sin" => value.sin(),
+            "Sinh" => value.sinh(),
+            "Tan" => value.tan(),
+            "Tanh" => value.tanh(),
+            _ => return StepResult::not_implemented(format!("Math::{operation}")),
+        };
+        ctx.push_f64(result);
+    }
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static double System.Math::FusedMultiplyAdd(double, double, double)")]
+pub fn intrinsic_math_fused_multiply_add<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let addend = ctx.pop_f64();
+    let right = ctx.pop_f64();
+    let left = ctx.pop_f64();
+    ctx.push_f64(left.mul_add(right, addend));
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static float System.MathF::FusedMultiplyAdd(float, float, float)")]
+pub fn intrinsic_mathf_fused_multiply_add<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let addend = ctx.pop_f64() as f32;
+    let right = ctx.pop_f64() as f32;
+    let left = ctx.pop_f64() as f32;
+    ctx.push_f64(left.mul_add(right, addend) as f64);
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static float System.MathF::Pow(float, float)")]
+pub fn intrinsic_mathf_pow<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let exponent = ctx.pop_f64() as f32;
+    let value = ctx.pop_f64() as f32;
+    ctx.push_f64(value.powf(exponent) as f64);
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static float System.MathF::Sqrt(float)")]
+pub fn intrinsic_mathf_sqrt<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let value = ctx.pop_f64() as f32;
+    ctx.push_f64(value.sqrt() as f64);
+    StepResult::Continue
+}
+
+// The float-rounding handlers preserve CoreLib's f32 intermediate rounding: its managed fallback
+// relies on each add/subtract rounding to f32, while evaluation-stack floats are represented as f64.
+#[dotnet_intrinsic("static float System.MathF::Round(float)")]
+pub fn intrinsic_mathf_round<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let value = (ctx.pop_f64() as f32).round_ties_even();
+    ctx.push_f64(value as f64);
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static float System.MathF::Round(float, System.MidpointRounding)")]
+pub fn intrinsic_mathf_round_with_mode<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let mode = ctx.pop_i32();
+    let value = ctx.pop_f64() as f32;
+    let rounded = match mode {
+        0 => value.round_ties_even(),
+        1 => value.round(),
+        2 => value.trunc(),
+        3 => value.floor(),
+        4 => value.ceil(),
+        _ => {
+            return ctx.throw_by_name_with_message(
+                "System.ArgumentException",
+                "Invalid MidpointRounding value.",
+            );
+        }
+    };
+    ctx.push_f64(rounded as f64);
+    StepResult::Continue
+}
+
+fn pop_math_output_pointer<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc>>(
+    ctx: &mut T,
+) -> Result<(PointerOrigin<'gc>, ByteOffset), StepResult> {
+    match ctx.pop() {
+        StackValue::ManagedPtr(pointer) if !pointer.is_null() => Ok((
+            pointer.origin().clone(),
+            pointer
+                .byte_offset()
+                .map_err(|e| StepResult::Error(e.into()))?,
+        )),
+        StackValue::UnmanagedPtr(pointer) => Ok((
+            PointerOrigin::Unmanaged,
+            ByteOffset::new(pointer.0.as_ptr().expose_provenance()),
+        )),
+        StackValue::NativeInt(address) if address != 0 => {
+            Ok((PointerOrigin::Unmanaged, ByteOffset::new(address as usize)))
+        }
+        StackValue::ManagedPtr(_) | StackValue::NativeInt(0) => Err(ctx
+            .throw_by_name_with_message(
+                "System.NullReferenceException",
+                "Object reference not set to an instance of an object.",
+            )),
+        other => Err(StepResult::type_error(
+            "floating-point output pointer",
+            format!("{other:?}"),
+        )),
+    }
+}
+
+fn write_math_output<'gc, T: TypedStackOps<'gc> + RawMemoryOps<'gc> + TypeLayoutOps>(
+    ctx: &mut T,
+    method: &MethodDescription,
+    pointer: (PointerOrigin<'gc>, ByteOffset),
+    value: f64,
+    scalar: BaseType<ConcreteType>,
+) -> StepResult {
+    let layout = match ctx.type_layout(ConcreteType::new(method.resolution(), scalar)) {
+        Ok(layout) => layout,
+        Err(error) => return StepResult::Error(error.into()),
+    };
+
+    // SAFETY: F10.RawMemoryAccessValid — CoreLib calls these helpers with a writable pointer for
+    // the matching scalar; `pop_math_output_pointer` preserves its exposed address for unmanaged
+    // origins, and `write_unaligned` checks the complete range for managed origins using this layout.
+    match unsafe {
+        ctx.write_unaligned(
+            pointer.0,
+            pointer.1,
+            StackValue::NativeFloat(value),
+            &layout,
+        )
+    } {
+        Ok(()) => StepResult::Continue,
+        Err(error) => StepResult::Error(error.into()),
+    }
+}
+
+#[dotnet_intrinsic("static double System.Math::ModF(double, double*)")]
+pub fn intrinsic_math_modf<'gc, T>(
+    ctx: &mut T,
+    method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult
+where
+    T: TypedStackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc> + TypeLayoutOps,
+{
+    let output = match pop_math_output_pointer(ctx) {
+        Ok(output) => output,
+        Err(step) => return step,
+    };
+    let value = ctx.pop_f64();
+    let integral = value.trunc();
+    let fraction = if value.is_nan() {
+        value
+    } else if value.is_infinite() {
+        0.0_f64.copysign(value)
+    } else {
+        (value - integral).copysign(value)
+    };
+    match write_math_output(ctx, &method, output, integral, BaseType::Float64) {
+        StepResult::Continue => {
+            ctx.push_f64(fraction);
+            StepResult::Continue
+        }
+        step => step,
+    }
+}
+
+#[dotnet_intrinsic("static float System.MathF::ModF(float, float*)")]
+pub fn intrinsic_mathf_modf<'gc, T>(
+    ctx: &mut T,
+    method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult
+where
+    T: TypedStackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc> + TypeLayoutOps,
+{
+    let output = match pop_math_output_pointer(ctx) {
+        Ok(output) => output,
+        Err(step) => return step,
+    };
+    let value = ctx.pop_f64() as f32;
+    let integral = value.trunc();
+    let fraction = if value.is_nan() {
+        value
+    } else if value.is_infinite() {
+        0.0_f32.copysign(value)
+    } else {
+        (value - integral).copysign(value)
+    };
+    match write_math_output(ctx, &method, output, integral as f64, BaseType::Float32) {
+        StepResult::Continue => {
+            ctx.push_f64(fraction as f64);
+            StepResult::Continue
+        }
+        step => step,
+    }
+}
+
+#[dotnet_intrinsic("static void System.Math::SinCos(double, double*, double*)")]
+pub fn intrinsic_math_sincos<'gc, T>(
+    ctx: &mut T,
+    method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult
+where
+    T: TypedStackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc> + TypeLayoutOps,
+{
+    let cos_output = match pop_math_output_pointer(ctx) {
+        Ok(output) => output,
+        Err(step) => return step,
+    };
+    let sin_output = match pop_math_output_pointer(ctx) {
+        Ok(output) => output,
+        Err(step) => return step,
+    };
+    let value = ctx.pop_f64();
+    if let step @ StepResult::Error(_) =
+        write_math_output(ctx, &method, sin_output, value.sin(), BaseType::Float64)
+    {
+        return step;
+    }
+    write_math_output(ctx, &method, cos_output, value.cos(), BaseType::Float64)
+}
+
+#[dotnet_intrinsic("static void System.MathF::SinCos(float, float*, float*)")]
+pub fn intrinsic_mathf_sincos<'gc, T>(
+    ctx: &mut T,
+    method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult
+where
+    T: TypedStackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc> + TypeLayoutOps,
+{
+    let cos_output = match pop_math_output_pointer(ctx) {
+        Ok(output) => output,
+        Err(step) => return step,
+    };
+    let sin_output = match pop_math_output_pointer(ctx) {
+        Ok(output) => output,
+        Err(step) => return step,
+    };
+    let value = ctx.pop_f64() as f32;
+    if let step @ StepResult::Error(_) = write_math_output(
+        ctx,
+        &method,
+        sin_output,
+        value.sin() as f64,
+        BaseType::Float32,
+    ) {
+        return step;
+    }
+    write_math_output(
+        ctx,
+        &method,
+        cos_output,
+        value.cos() as f64,
+        BaseType::Float32,
+    )
 }
 
 #[dotnet_intrinsic_field("static bool System.BitConverter::IsLittleEndian")]

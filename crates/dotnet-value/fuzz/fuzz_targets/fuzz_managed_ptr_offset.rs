@@ -84,7 +84,7 @@ fuzz_target!(|input: OffsetInput| {
         "Offset must preserve the provenance-carrying origin"
     );
     assert_eq!(
-        new_ptr.byte_offset().as_usize(),
+        new_ptr.byte_offset().unwrap().as_usize(),
         new_offset,
         "Offset mismatch"
     );

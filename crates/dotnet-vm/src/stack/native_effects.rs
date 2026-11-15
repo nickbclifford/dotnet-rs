@@ -627,7 +627,7 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
         // read_bytes resolves static storage afresh and checks the complete range for each admitted origin.
         unsafe {
             self.context
-                .read_bytes(pointer.origin().clone(), pointer.byte_offset(), &mut value)?
+                .read_bytes(pointer.origin().clone(), pointer.byte_offset()?, &mut value)?
         };
         Ok(value[0] != 0)
     }
@@ -657,7 +657,7 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
         unsafe {
             self.context.write_bytes(
                 pointer.origin().clone(),
-                pointer.byte_offset(),
+                pointer.byte_offset()?,
                 &[u8::from(value)],
             )?
         };
@@ -1158,7 +1158,9 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
             unsafe {
                 self.context.read_unaligned(
                     pointer.origin().clone(),
-                    pointer.byte_offset(),
+                    pointer
+                        .byte_offset()
+                        .map_err(dotnet_types::error::VmError::from)?,
                     &layout,
                     Some(description.clone()),
                 )
@@ -1604,7 +1606,7 @@ impl<'gc> VesContext<'_, 'gc> {
                         dotnet_value::pointer::ManagedPtrInfo {
                             address: None,
                             origin: pointer.origin().clone(),
-                            offset: pointer.byte_offset(),
+                            offset: pointer.pointer_offset(),
                         },
                         pointer.inner_type(),
                         pointer.is_pinned(),

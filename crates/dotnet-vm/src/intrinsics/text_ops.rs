@@ -136,8 +136,14 @@ fn try_write_utf16_to_span<
     // SAFETY: F10.RawMemoryAccessValid — `read_span_reference` decoded the live span origin, the length check proves room for
     // every UTF-16 code unit, and `bytes` contains exactly `chars.len() * 2` bytes.
     unsafe {
-        ctx.write_bytes(span_ptr.origin().clone(), span_ptr.byte_offset(), &bytes)
-            .map_err(|e| StepResult::Error(e.into()))?;
+        ctx.write_bytes(
+            span_ptr.origin().clone(),
+            span_ptr
+                .byte_offset()
+                .map_err(|e| StepResult::Error(e.into()))?,
+            &bytes,
+        )
+        .map_err(|e| StepResult::Error(e.into()))?;
     }
 
     Ok(true)

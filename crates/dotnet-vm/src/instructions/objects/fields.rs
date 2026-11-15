@@ -544,8 +544,8 @@ pub fn ldflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepRes
         let field_ptr = dotnet_vm_ops::vm_try!(ctx.resolve_address(&origin, field_offset));
         let info = ManagedPtrInfo {
             address: Some(field_ptr),
+            offset: dotnet_value::pointer::PointerOffset::from_byte_offset(&origin, field_offset),
             origin,
-            offset: field_offset,
         };
         ctx.push(StackValue::ManagedPtr(
             ManagedPtr::from_info_full(info, target_type, false).into(),

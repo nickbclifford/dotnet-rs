@@ -1,9 +1,8 @@
 use crate::{
-    ByteOffset,
     object::ObjectRef,
     pointer::{
         FrameHomeSerial, HeapManagedPtrDecodeCache, ManagedPtr, ManagedPtrInfo, ManagedPtrResolver,
-        PointerOrigin, unmanaged_ptr_from_addr,
+        PointerOffset, PointerOrigin, unmanaged_ptr_from_addr,
     },
 };
 use dotnet_types::error::PointerDeserializationError;
@@ -23,9 +22,8 @@ const FRAME_HOME_OFFSET_SHIFT: usize = 38;
 const FRAME_HOME_OFFSET_MIRROR_MASK: usize = 0x03FF_FFFF;
 const LOW_32_BITS: usize = 0xFFFF_FFFF;
 
-fn frame_home_managed_ptr_words(serial: FrameHomeSerial, offset: ByteOffset) -> (usize, usize) {
+fn frame_home_managed_ptr_words(serial: FrameHomeSerial, offset: usize) -> (usize, usize) {
     let serial = serial.get() as usize;
-    let offset = offset.as_usize();
     let word0 = 7
         | (FRAME_HOME_SUBTAG << 3)
         | ((serial & LOW_32_BITS) << FRAME_HOME_SERIAL_SHIFT)
@@ -37,13 +35,16 @@ fn frame_home_managed_ptr_words(serial: FrameHomeSerial, offset: ByteOffset) -> 
 fn parse_frame_home_managed_ptr(
     word0: usize,
     word1: usize,
-) -> Result<(FrameHomeSerial, ByteOffset), PointerDeserializationError> {
+) -> Result<(FrameHomeSerial, PointerOffset), PointerDeserializationError> {
     let offset = word1 & LOW_32_BITS;
     if word0 >> FRAME_HOME_OFFSET_SHIFT != offset & FRAME_HOME_OFFSET_MIRROR_MASK {
         return Err(PointerDeserializationError::OffsetMismatch);
     }
     let serial = ((word0 >> FRAME_HOME_SERIAL_SHIFT) & LOW_32_BITS) | ((word1 >> 32) << 32);
-    Ok((FrameHomeSerial::new(serial as u64), ByteOffset::new(offset)))
+    Ok((
+        FrameHomeSerial::new(serial as u64),
+        PointerOffset::Managed(offset as u32 as i32),
+    ))
 }
 
 // Preserve provenance in the first serialized word.
@@ -138,6 +139,7 @@ impl<'gc> ManagedPtr<'gc> {
     ///   offset, but it remains unserializable: metadata and resolved reads return
     ///   `PointerDeserializationError::UnknownSubtag`.
     ///
+    /// Managed offset bits encode a signed two's-complement i32 displacement.
     /// Word 2 remains the integrity word `word0 ^ word1`, computed from the
     /// first pointer's address. Do not turn managed pointers into integers for
     /// storage or reconstruction.
@@ -216,7 +218,7 @@ impl<'gc> ManagedPtr<'gc> {
                     Ok(ManagedPtrInfo {
                         address: None,
                         origin: PointerOrigin::CrossArenaObjectRef(origin),
-                        offset: ByteOffset::new(word1 & 0xFFFF_FFFF),
+                        offset: PointerOffset::Managed(word1 as u32 as i32),
                     })
                 }
                 #[cfg(not(feature = "multithreading"))]
@@ -238,7 +240,7 @@ impl<'gc> ManagedPtr<'gc> {
                     Ok(ManagedPtrInfo {
                         address: None,
                         origin: PointerOrigin::Static(metadata),
-                        offset: ByteOffset::new(word1),
+                        offset: PointerOffset::Managed(word1 as u32 as i32),
                     })
                 }
                 2 => Err(PointerDeserializationError::UnknownSubtag(2)),
@@ -256,6 +258,9 @@ impl<'gc> ManagedPtr<'gc> {
                 // The untagged encoding is either a Heap ObjectRef or an
                 // Unmanaged absolute address. Metadata decoding retains no
                 // executable address in either case.
+                if word0_addr != 0 && word1 > u32::MAX as usize {
+                    return Err(PointerDeserializationError::OffsetMismatch);
+                }
                 // SAFETY: F1.GcHandleRooted — this function's `# Safety` contract makes `source` a valid encoding, so the untagged `word0` is null (Unmanaged) or a live object's storage pointer, as `from_storage_ptr` requires.
                 let owner = unsafe { ObjectRef::from_storage_ptr(word0) };
                 Ok(ManagedPtrInfo {
@@ -263,7 +268,11 @@ impl<'gc> ManagedPtr<'gc> {
                     origin: owner.0.map_or(PointerOrigin::Unmanaged, |h| {
                         PointerOrigin::Heap(ObjectRef(Some(h)))
                     }),
-                    offset: ByteOffset::new(word1),
+                    offset: if owner.0.is_some() {
+                        PointerOffset::Managed(word1 as u32 as i32)
+                    } else {
+                        PointerOffset::Unmanaged(word1)
+                    },
                 })
             }
             tag => Err(PointerDeserializationError::UnknownTag(tag)),
@@ -323,17 +332,24 @@ impl<'gc> ManagedPtr<'gc> {
         resolver: &R,
         mut info: ManagedPtrInfo<'gc>,
     ) -> Result<ManagedPtrInfo<'gc>, PointerDeserializationError> {
-        let offset = info.offset.as_usize();
+        let displacement = match info.offset {
+            PointerOffset::Managed(d) => d as isize,
+            PointerOffset::Unmanaged(_) => 0,
+        };
         info.address = match &info.origin {
             PointerOrigin::Static(metadata) => Some(
                 resolver
                     .static_storage_base(metadata)
-                    .and_then(|base| NonNull::new(base.as_ptr().wrapping_add(offset)))
+                    .and_then(|base| NonNull::new(base.as_ptr().wrapping_offset(displacement)))
                     .ok_or(PointerDeserializationError::UnresolvedStaticStorage)?,
             ),
             PointerOrigin::FrameHome(serial) => Some(
-                crate::pointer::frame_home_window(resolver, *serial, offset, 0)
-                    .map_err(|_| PointerDeserializationError::UnresolvedFrameHome(serial.get()))?,
+                resolver
+                    .frame_home_block(*serial)
+                    .and_then(|(base, _)| NonNull::new(base.as_ptr().wrapping_offset(displacement)))
+                    .ok_or(PointerDeserializationError::UnresolvedFrameHome(
+                        serial.get(),
+                    ))?,
             ),
             PointerOrigin::Heap(owner) => match owner.0 {
                 Some(handle) => {
@@ -344,13 +360,18 @@ impl<'gc> ManagedPtr<'gc> {
                     // root or borrow/lock after this statement. Later access needs its
                     // own owner and guard, range, and access-right checks.
                     let base = unsafe { handle.borrow().storage.raw_data_ptr() };
-                    NonNull::new(base.wrapping_add(offset))
+                    NonNull::new(base.wrapping_offset(displacement))
                 }
                 None => None,
             },
             PointerOrigin::Unmanaged => {
                 // SAFETY: F10.RawMemoryAccessValid — `unmanaged_ptr_from_addr` only forms the address; its validity obligation moves to whoever later accesses through it.
-                NonNull::new(unsafe { unmanaged_ptr_from_addr(offset) })
+                NonNull::new(unsafe {
+                    unmanaged_ptr_from_addr(match info.offset {
+                        PointerOffset::Unmanaged(addr) => addr,
+                        _ => unreachable!(),
+                    })
+                })
             }
             #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(origin) => {
@@ -359,7 +380,7 @@ impl<'gc> ManagedPtr<'gc> {
                 // SAFETY: F1.ArenaGenerationMatch; F1.GcHandleRooted — `_lease` holds the origin's exact identity across the base read, and this function's `# Safety` contract (`info` decoded from a valid encoding) makes the object live.
                 let ptr = unsafe { origin.object_ptr() };
                 let base = cross_arena_storage_base_with_lease(ptr);
-                NonNull::new(base.wrapping_add(offset))
+                NonNull::new(base.wrapping_offset(displacement))
             }
             PointerOrigin::Transient(_) => unreachable!("Transient cannot be decoded"),
         };
@@ -412,6 +433,9 @@ impl<'gc> ManagedPtr<'gc> {
         }
 
         if word0_addr != 0 && word0_addr & 7 == 0 {
+            if word1 > u32::MAX as usize {
+                return Err(PointerDeserializationError::OffsetMismatch);
+            }
             let owner = match cache.get_heap_handle(word0_addr) {
                 Some(owner) => owner,
                 None => {
@@ -427,7 +451,7 @@ impl<'gc> ManagedPtr<'gc> {
             let info = ManagedPtrInfo {
                 address: None,
                 origin: PointerOrigin::Heap(owner),
-                offset: ByteOffset::new(word1),
+                offset: PointerOffset::Managed(word1 as u32 as i32),
             };
             // SAFETY: F10.RawMemoryAccessValid — `source` was completely validated above and `info` carries
             // either a rooted cached Heap handle or the normal decoded handle.
@@ -479,7 +503,11 @@ impl<'gc> ManagedPtr<'gc> {
     pub fn write(&self, dest: &mut [u8]) {
         self.validate_magic();
 
-        let byte_offset = self.byte_offset();
+        let offset = self.pointer_offset();
+        let raw_offset = match offset {
+            PointerOffset::Managed(d) => d as u32 as usize,
+            PointerOffset::Unmanaged(addr) => addr,
+        };
 
         let (word0, word1) = match &self.origin {
             PointerOrigin::Heap(owner) => {
@@ -487,7 +515,7 @@ impl<'gc> ManagedPtr<'gc> {
                     Some(handle) => gc_arena::Gc::as_ptr(handle).cast::<u8>().cast_mut(),
                     None => std::ptr::without_provenance_mut(0),
                 };
-                let w1 = byte_offset.as_usize();
+                let w1 = raw_offset;
                 (w0, w1)
             }
             PointerOrigin::Static(metadata) => {
@@ -498,11 +526,9 @@ impl<'gc> ManagedPtr<'gc> {
                     new_id
                 });
 
-                let w0: usize = 7
-                    | (1 << 3)
-                    | ((id as usize & 0xFFFFFFFF) << 6)
-                    | (byte_offset.as_usize() << 38);
-                let w1 = byte_offset.as_usize();
+                let w0: usize =
+                    7 | (1 << 3) | ((id as usize & 0xFFFFFFFF) << 6) | (raw_offset << 38);
+                let w1 = raw_offset;
                 (std::ptr::without_provenance_mut(w0), w1)
             }
             PointerOrigin::Unmanaged => {
@@ -521,18 +547,18 @@ impl<'gc> ManagedPtr<'gc> {
                 // word1 and the 32-bit offset in the low bits. The token is copied from the
                 // origin's original registration, never issued here, so stale origins encode
                 // a token that cannot resolve. Decoding needs no pointer dereference.
-                let offset_u32 = byte_offset.as_usize() & 0xFFFFFFFF;
+                let offset_u32 = raw_offset & 0xFFFFFFFF;
                 let token = origin.token().as_u32() as usize;
                 let w1 = offset_u32 | (token << 32);
                 (w0, w1)
             }
             PointerOrigin::FrameHome(serial) => {
-                let (w0, w1) = frame_home_managed_ptr_words(*serial, byte_offset);
+                let (w0, w1) = frame_home_managed_ptr_words(*serial, raw_offset);
                 (std::ptr::without_provenance_mut(w0), w1)
             }
             PointerOrigin::Transient(_) => {
-                let w0: usize = 7 | (2 << 3) | (byte_offset.as_usize() << 6);
-                let w1 = byte_offset.as_usize();
+                let w0: usize = 7 | (2 << 3) | (raw_offset << 6);
+                let w1 = raw_offset;
                 (std::ptr::without_provenance_mut(w0), w1)
             }
         };
@@ -553,7 +579,10 @@ impl<'gc> ManagedPtr<'gc> {
         {
             let expected_address = self._value.map(|address| address.as_ptr().addr());
             let base = self._value.and_then(|address| {
-                NonNull::new(address.as_ptr().wrapping_sub(byte_offset.as_usize()))
+                NonNull::new(address.as_ptr().wrapping_offset(match offset {
+                    PointerOffset::Managed(d) => -(d as isize),
+                    PointerOffset::Unmanaged(addr) => (addr as isize).wrapping_neg(),
+                }))
             });
             let resolver = DebugWriteResolver { base };
             let recovered =
@@ -573,9 +602,9 @@ impl<'gc> ManagedPtr<'gc> {
 
             if !matches!(self_origin_norm, PointerOrigin::Unmanaged) {
                 assert_eq!(
-                    recovered.offset, byte_offset,
+                    recovered.offset, offset,
                     "ManagedPtr serialization round-trip failed: offset mismatch. Original: {:?}, Recovered: {:?}",
-                    byte_offset, recovered.offset
+                    offset, recovered.offset
                 );
             }
 

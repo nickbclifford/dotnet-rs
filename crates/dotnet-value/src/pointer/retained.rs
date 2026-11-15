@@ -62,16 +62,12 @@ impl<'gc> RetainedPtr<'gc> {
             StackValue::TypedRef(slot) => Some(slot.value().deref()),
             _ => None,
         };
-        if let Some(pointer) = pointer
-            && let super::PointerOrigin::FrameHome(serial) = pointer.origin()
-        {
-            return super::frame_home_window(
-                resolver,
-                *serial,
-                pointer.byte_offset().as_usize(),
-                size,
-            )
-            .map(std::ptr::NonNull::as_ptr);
+        if let Some(pointer) = pointer {
+            let offset = pointer.byte_offset()?.as_usize();
+            if let super::PointerOrigin::FrameHome(serial) = pointer.origin() {
+                return super::frame_home_window(resolver, *serial, offset, size)
+                    .map(std::ptr::NonNull::as_ptr);
+            }
         }
         Ok(self.ptr)
     }

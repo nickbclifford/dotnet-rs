@@ -1386,8 +1386,12 @@ fn static_descriptor_survives_collection_and_resolves_raw_access() {
                 // SAFETY: F10.RawMemoryAccessValid — this is the initialized static bool field and the
                 // origin-aware access checks its range while the executor has exclusive access.
                 unsafe {
-                    ctx.read_bytes(pointer.origin().clone(), pointer.byte_offset(), &mut byte)
-                        .unwrap();
+                    ctx.read_bytes(
+                        pointer.origin().clone(),
+                        pointer.byte_offset().unwrap(),
+                        &mut byte,
+                    )
+                    .unwrap();
                 }
                 assert_eq!(byte, [1]);
             })

@@ -207,7 +207,7 @@ pub fn callvirt_constrained<'gc, T: VesOps<'gc>>(
             let value = match unsafe {
                 ctx.read_unaligned(
                     m.origin().clone(),
-                    m.byte_offset(),
+                    dotnet_vm_ops::vm_try!(m.byte_offset()),
                     &layout,
                     Some(constraint_type.clone()),
                 )
@@ -249,7 +249,7 @@ pub fn callvirt_constrained<'gc, T: VesOps<'gc>>(
                 // If the managed pointer originates from the evaluation stack (ldarga/ldloca),
                 // and targets a reference type with zero offset, the pointed memory holds a
                 // StackValue::ObjectRef, not a serialized ObjectRef. Read it via the slot.
-                match (m.origin(), m.byte_offset()) {
+                match (m.origin(), dotnet_vm_ops::vm_try!(m.byte_offset())) {
                     (PointerOrigin::FrameHome(_), offset) => {
                         let layout = dotnet_value::layout::LayoutManager::Scalar(
                             dotnet_value::layout::Scalar::ObjectRef,

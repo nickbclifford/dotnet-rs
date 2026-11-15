@@ -4,7 +4,7 @@
 //! address observation is distinct from reading, writing, copying, or atomic
 //! access. `ManagedPtr::observe_address(&self) -> Option<NonNull<u8>>`,
 //! used by `PointerLike::pointer`, obtains the retained payload base under the
-//! shared object borrow and forms `base.wrapping_add(offset)` without a payload
+//! shared object borrow and forms `base.wrapping_offset(displacement)` without a payload
 //! slice or a bounds check. A null base or a result wrapping to zero yields
 //! `None`. The raw address neither keeps the borrow/arena lease nor roots the
 //! owner; it grants no right to dereference, and later access needs its own
@@ -13,7 +13,7 @@
 //! later pointer reconstruction.
 //!
 //! Heap reads are exact-or-reject: `with_data` checks
-//! `offset.checked_add(size) <= payload_len` before forming only the requested
+//! a nonnegative offset and `offset.checked_add(size) <= payload_len` before forming only the requested
 //! slice. Offset equal to payload length is valid for size zero; overflow or an
 //! out-of-range window is rejected, never silently shortened. The unsafe
 //! `try_with_data<T>(&self, size: usize, f: impl FnOnce(&[u8]) -> T) -> Option<T>`
@@ -29,8 +29,7 @@
 //! by the heap observation/read rules.
 //!
 //! These rules do not govern `ObjectRef`/`ManagedPtr` serialization words, pointer
-//! atomics (`AtomicPtr`), or write barriers. `memory-validation`'s `validate_offset`
-//! uses accounting `size_bytes()` as a debug trap, not as an access guard.
+//! atomics (`AtomicPtr`), or write barriers.
 
 use crate::{
     ByteOffset, ValidationTag,
@@ -214,6 +213,41 @@ impl<'a> Arbitrary<'a> for UnmanagedPtr {
 }
 static_collect!(UnmanagedPtr);
 
+/// Logical managed displacement or an absolute unmanaged address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "fuzzing", derive(Arbitrary))]
+pub enum PointerOffset {
+    Managed(i32),
+    Unmanaged(usize),
+}
+
+impl PointerOffset {
+    /// Constructs an offset from a nonnegative access index and its origin.
+    pub fn from_byte_offset(origin: &PointerOrigin<'_>, offset: ByteOffset) -> Self {
+        if matches!(origin, PointerOrigin::Unmanaged) {
+            Self::Unmanaged(offset.as_usize())
+        } else {
+            Self::Managed(
+                i32::try_from(offset.as_usize()).expect("managed offset exceeds compact range"),
+            )
+        }
+    }
+
+    /// Converts to an access index only when the displacement is nonnegative.
+    pub fn checked_byte_offset(self) -> Result<ByteOffset, MemoryAccessError> {
+        match self {
+            Self::Managed(offset) => usize::try_from(offset).map(ByteOffset::new).map_err(|_| {
+                MemoryAccessError::BoundsCheck {
+                    offset: 0,
+                    size: 0,
+                    len: 0,
+                }
+            }),
+            Self::Unmanaged(address) => Ok(ByteOffset::new(address)),
+        }
+    }
+}
+
 /// Detailed information about a [`ManagedPtr`] read from memory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManagedPtrInfo<'gc> {
@@ -221,17 +255,23 @@ pub struct ManagedPtrInfo<'gc> {
     pub address: Option<NonNull<u8>>,
     pub origin: PointerOrigin<'gc>,
     /// The offset from the base of the owner (an object, static storage, or a frame-home block).
-    pub offset: ByteOffset,
+    pub offset: PointerOffset,
 }
 
 #[cfg(feature = "fuzzing")]
 impl<'a, 'gc> Arbitrary<'a> for ManagedPtrInfo<'gc> {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         let ptr_val: usize = u.arbitrary()?;
+        let origin: PointerOrigin<'gc> = u.arbitrary()?;
+        let offset = if matches!(origin, PointerOrigin::Unmanaged) {
+            PointerOffset::Unmanaged(u.arbitrary()?)
+        } else {
+            PointerOffset::Managed(u.arbitrary()?)
+        };
         Ok(Self {
             address: NonNull::new(std::ptr::without_provenance_mut(ptr_val)),
-            origin: u.arbitrary()?,
-            offset: u.arbitrary()?,
+            origin,
+            offset,
         })
     }
 }
@@ -250,8 +290,6 @@ const MANAGED_PTR_FLAG_UNMANAGED_INLINE_OFFSET: u8 = 0b0000_0010;
 /// An offset cannot be represented by the current managed-pointer form.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ManagedPtrOffsetError {
-    /// The managed offset would be negative.
-    NegativeResult,
     /// Signed offset arithmetic overflowed.
     ArithmeticOverflow,
     /// The managed offset does not fit in the compact representation.
@@ -284,7 +322,11 @@ impl<'a, 'gc> Arbitrary<'a> for ManagedPtr<'gc> {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         let ptr_val: usize = u.arbitrary()?;
         let origin: PointerOrigin<'gc> = u.arbitrary()?;
-        let offset = u.arbitrary()?;
+        let offset: ByteOffset = if matches!(origin, PointerOrigin::Unmanaged) {
+            u.arbitrary()?
+        } else {
+            ByteOffset::new(u.int_in_range(0..=i32::MAX as usize)?)
+        };
         let pinned: bool = u.arbitrary()?;
         let value = NonNull::new(std::ptr::without_provenance_mut(ptr_val));
         let packed_offset = Self::pack_offset(&origin, value, offset);
@@ -312,7 +354,7 @@ impl Debug for ManagedPtr<'_> {
             f,
             "[{}] offset: {:?} (origin: {:?}, pinned: {})",
             self.inner_type.type_name(),
-            self.byte_offset(),
+            self.pointer_offset(),
             self.origin,
             self.is_pinned()
         )
@@ -323,7 +365,7 @@ impl PartialEq for ManagedPtr<'_> {
     fn eq(&self, other: &Self) -> bool {
         self.validate_magic();
         other.validate_magic();
-        self.origin == other.origin && self.byte_offset() == other.byte_offset()
+        self.origin == other.origin && self.pointer_offset() == other.pointer_offset()
     }
 }
 
@@ -332,6 +374,12 @@ impl PartialOrd for ManagedPtr<'_> {
         self.validate_magic();
         other.validate_magic();
 
+        if self.origin == other.origin
+            && let (PointerOffset::Managed(a), PointerOffset::Managed(b)) =
+                (self.pointer_offset(), other.pointer_offset())
+        {
+            return a.partial_cmp(&b);
+        }
         // 1. Compare addresses (computed value)
         match (self._value, other._value) {
             (Some(a), Some(b)) => match a.as_ptr().partial_cmp(&b.as_ptr()) {
@@ -349,7 +397,7 @@ impl PartialOrd for ManagedPtr<'_> {
                 // If they are the same variant, we use offset as a tie-breaker.
                 // We could compare the inner origin data, but that would require
                 // implementing PartialOrd for TypeDescription, etc.
-                self.byte_offset().partial_cmp(&other.byte_offset())
+                self.offset.as_usize().partial_cmp(&other.offset.as_usize())
             }
             ord => Some(ord),
         }
@@ -389,11 +437,11 @@ impl<'gc> ManagedPtr<'gc> {
                 .unwrap_or(ManagedByteOffset::ZERO);
         }
 
-        match ManagedByteOffset::try_from(offset.as_usize()) {
+        match i32::try_from(offset.as_usize()).map(|v| ManagedByteOffset::new(v as u32)) {
             Ok(compact) => compact,
             Err(_) => {
                 // For unmanaged pointers we preserve full-width absolute address in `_value`.
-                // Any managed origin offset that exceeds u32 is unsupported by the compact form.
+                // Managed origins use the nonnegative half of the signed compact range.
                 let resolved = value.map(|p| p.as_ptr().addr()).unwrap_or(0);
                 panic!(
                     "ManagedPtr offset exceeds compact range: offset={}, origin={:?}, value=0x{resolved:X}",
@@ -427,12 +475,24 @@ impl<'gc> ManagedPtr<'gc> {
     pub fn is_pinned(&self) -> bool {
         self.flags & MANAGED_PTR_FLAG_PINNED != 0
     }
-    pub fn byte_offset(&self) -> ByteOffset {
-        self.unpack_offset()
+    pub fn pointer_offset(&self) -> PointerOffset {
+        if matches!(self.origin, PointerOrigin::Unmanaged) {
+            PointerOffset::Unmanaged(self.unpack_offset().as_usize())
+        } else {
+            PointerOffset::Managed(self.offset.as_usize() as u32 as i32)
+        }
+    }
+
+    pub fn checked_byte_offset(&self) -> Result<ByteOffset, MemoryAccessError> {
+        self.pointer_offset().checked_byte_offset()
+    }
+
+    pub fn byte_offset(&self) -> Result<ByteOffset, MemoryAccessError> {
+        self.checked_byte_offset()
     }
 
     pub fn into_info(self) -> ManagedPtrInfo<'gc> {
-        let offset = self.unpack_offset();
+        let offset = self.pointer_offset();
         ManagedPtrInfo {
             address: self._value,
             origin: self.origin,
@@ -442,7 +502,16 @@ impl<'gc> ManagedPtr<'gc> {
 
     pub fn with_origin(&self, origin: PointerOrigin<'gc>) -> Self {
         let mut clone = self.clone();
-        let byte_offset = self.byte_offset();
+        if matches!(self.pointer_offset(), PointerOffset::Managed(_))
+            && !matches!(origin, PointerOrigin::Unmanaged)
+        {
+            clone.origin = origin;
+            clone.flags = Self::with_unmanaged_inline_offset_flag(clone.flags, false);
+            return clone;
+        }
+        let byte_offset = self
+            .byte_offset()
+            .expect("changing to an unmanaged origin requires a nonnegative offset");
         let packed_offset = Self::pack_offset(&origin, clone._value, byte_offset);
         clone.origin = origin;
         clone.offset = packed_offset;
@@ -551,12 +620,36 @@ impl<'gc> ManagedPtr<'gc> {
         let offset = info.offset;
         let value = info.address;
 
-        if origin.is_null() && offset == ByteOffset::ZERO && value.is_none() {
+        if origin.is_null()
+            && value.is_none()
+            && matches!(
+                offset,
+                PointerOffset::Unmanaged(0) | PointerOffset::Managed(0)
+            )
+        {
             origin = PointerOrigin::Unmanaged;
         }
-        let packed_offset = Self::pack_offset(&origin, value, offset);
-        let unmanaged_inline_offset = matches!(origin, PointerOrigin::Unmanaged)
-            && packed_offset.as_usize() == offset.as_usize();
+        let offset =
+            if matches!(origin, PointerOrigin::Unmanaged) && offset == PointerOffset::Managed(0) {
+                PointerOffset::Unmanaged(0)
+            } else {
+                offset
+            };
+        assert_eq!(
+            matches!(origin, PointerOrigin::Unmanaged),
+            matches!(offset, PointerOffset::Unmanaged(_)),
+            "offset kind must match pointer origin"
+        );
+        let (packed_offset, unmanaged_inline_offset) = match offset {
+            PointerOffset::Managed(d) => (ManagedByteOffset::new(d as u32), false),
+            PointerOffset::Unmanaged(addr) => {
+                let packed = Self::pack_offset(&origin, value, ByteOffset::new(addr));
+                (
+                    packed,
+                    matches!(origin, PointerOrigin::Unmanaged) && packed.as_usize() == addr,
+                )
+            }
+        };
 
         Self {
             magic: ValidationTag::new(MANAGED_PTR_MAGIC as u64),
@@ -578,7 +671,10 @@ impl<'gc> ManagedPtr<'gc> {
 
     #[inline]
     fn access_window(&self, source_len: usize, requested_size: usize) -> (usize, usize) {
-        let offset = self.byte_offset().as_usize();
+        let offset = self
+            .byte_offset()
+            .expect("negative managed displacement is not accessible")
+            .as_usize();
         let available = source_len.saturating_sub(offset);
         let to_access = std::cmp::min(requested_size, available);
         (offset, to_access)
@@ -590,7 +686,7 @@ impl<'gc> ManagedPtr<'gc> {
         allow_short: bool,
         f: impl FnOnce(&[u8]) -> T,
     ) -> Option<T> {
-        let offset = self.byte_offset().as_usize();
+        let offset = self.checked_byte_offset().ok()?.as_usize();
         match &self.origin {
             PointerOrigin::Heap(owner) => {
                 let handle = owner
@@ -632,6 +728,7 @@ impl<'gc> ManagedPtr<'gc> {
     /// that the cached pointer be valid for the requested range.
     pub unsafe fn try_with_data<T>(&self, size: usize, f: impl FnOnce(&[u8]) -> T) -> Option<T> {
         self.validate_magic();
+        self.checked_byte_offset().ok()?;
         match &self.origin {
             PointerOrigin::Heap(_) => self.try_with_heap_data(size, false, f),
             #[cfg(feature = "multithreading")]
@@ -663,7 +760,7 @@ impl<'gc> ManagedPtr<'gc> {
                     .unwrap_or_else(|| {
                         panic!(
                             "ManagedPtr::with_data_up_to: heap offset {} exceeds payload extent",
-                            self.byte_offset().as_usize()
+                            self.byte_offset().map_or(0, |offset| offset.as_usize())
                         )
                     })
             }
@@ -673,7 +770,7 @@ impl<'gc> ManagedPtr<'gc> {
                 .unwrap_or_else(|| {
                     panic!(
                         "ManagedPtr::with_data_up_to: heap offset {} exceeds payload extent",
-                        self.byte_offset().as_usize()
+                        self.byte_offset().map_or(0, |offset| offset.as_usize())
                     )
                 }),
             PointerOrigin::FrameHome(_) => {
@@ -698,13 +795,15 @@ impl<'gc> ManagedPtr<'gc> {
     /// If there is no owner, this method assumes the cached pointer is valid for at least `size` bytes.
     pub unsafe fn with_data<T>(&self, size: usize, f: impl FnOnce(&[u8]) -> T) -> T {
         self.validate_magic();
+        self.checked_byte_offset()
+            .expect("negative managed displacement is not accessible");
         match &self.origin {
             PointerOrigin::Heap(_) => self
                 .try_with_heap_data(size, false, f)
                 .unwrap_or_else(|| {
                     panic!(
                         "ManagedPtr::with_data: heap range overflow or out of bounds (offset {}, size {})",
-                        self.byte_offset().as_usize(),
+                        self.byte_offset().map_or(0, |offset| offset.as_usize()),
                         size
                     )
                 }),
@@ -714,7 +813,7 @@ impl<'gc> ManagedPtr<'gc> {
                 .unwrap_or_else(|| {
                     panic!(
                         "ManagedPtr::with_data: heap range overflow or out of bounds (offset {}, size {})",
-                        self.byte_offset().as_usize(),
+                        self.byte_offset().map_or(0, |offset| offset.as_usize()),
                         size
                     )
                 }),
@@ -757,7 +856,12 @@ impl<'gc> ManagedPtr<'gc> {
         let PointerOrigin::FrameHome(serial) = self.origin else {
             panic!("ManagedPtr::with_frame_home_data: not a frame-home pointer");
         };
-        let address = frame_home_window(resolver, serial, self.byte_offset().as_usize(), size)?;
+        let address = frame_home_window(
+            resolver,
+            serial,
+            self.checked_byte_offset()?.as_usize(),
+            size,
+        )?;
         // SAFETY: F10.FrameHomeChecked — `frame_home_window` found the live frame and checked
         // that `size` bytes at `address` lie inside its home block; this function's `# Safety`
         // contract excludes writes to the block while the slice lives.
@@ -822,60 +926,38 @@ impl<'gc> ManagedPtr<'gc> {
         }
     }
 
-    #[cfg(feature = "memory-validation")]
-    fn validate_offset(&self, bytes: isize) {
-        if let PointerOrigin::Heap(owner) = self.origin
-            && let Some(handle) = owner.0
-        {
-            // Only the size and magic are read; both are immutable for the object's lifetime.
-            let inner = handle.borrow();
-            inner.validate_magic();
-            let obj_size = inner.storage.size_bytes();
-            let current_offset = self.byte_offset().as_usize();
-            let new_offset = (current_offset as isize).saturating_add(bytes);
-            if new_offset < 0 || (new_offset as usize) > obj_size {
-                panic!(
-                    "ManagedPtr::offset: bounds violation (offset={}, bytes={}, size={})",
-                    current_offset, bytes, obj_size
-                );
-            }
-        }
-    }
-
     /// Forms a wrapping address without granting any access to it.
     ///
-    /// Managed offsets must fit the compact unsigned representation. Unmanaged
+    /// Managed displacements must fit the signed 32-bit representation. Unmanaged
     /// offsets wrap at native width; a cached address wrapping to zero becomes
     /// explicit null and loses its provenance. Offsetting a canonical unmanaged
     /// null reconstructs the resulting address using exposed provenance; other
     /// missing cached addresses remain missing (heap origins can resolve theirs
     /// from their owner).
-    ///
-    /// With `memory-validation`, heap bounds violations still trap as a
-    /// diagnostic, independently of the representability errors returned here.
     pub fn checked_offset(mut self, bytes: isize) -> Result<Self, ManagedPtrOffsetError> {
-        #[cfg(feature = "memory-validation")]
-        self.validate_offset(bytes);
-
-        let current_offset = self.byte_offset().as_usize();
         let unmanaged = matches!(self.origin, PointerOrigin::Unmanaged);
+        let current_offset = if unmanaged {
+            self.unpack_offset().as_usize()
+        } else {
+            0
+        };
         if unmanaged && self._value.is_none() && current_offset == 0 && bytes == 0 {
             return Ok(self);
         }
-        let new_offset = if unmanaged {
-            current_offset.wrapping_add_signed(bytes)
+        let (new_offset, packed_offset) = if unmanaged {
+            let address = current_offset.wrapping_add_signed(bytes);
+            (
+                address,
+                Self::pack_offset(&self.origin, self._value, ByteOffset::new(address)),
+            )
         } else {
-            // The compact unsigned offset can exceed isize::MAX on a 32-bit
-            // host. Widen before adding so valid offsets are not sign-flipped.
-            let result = (current_offset as i64)
+            let current = self.offset.as_usize() as u32 as i32 as i64;
+            let result = current
                 .checked_add(bytes as i64)
                 .ok_or(ManagedPtrOffsetError::ArithmeticOverflow)?;
-            if result < 0 {
-                return Err(ManagedPtrOffsetError::NegativeResult);
-            }
-            u32::try_from(result)
-                .map(|offset| offset as usize)
-                .map_err(|_| ManagedPtrOffsetError::CompactRangeExceeded)?
+            let displacement =
+                i32::try_from(result).map_err(|_| ManagedPtrOffsetError::CompactRangeExceeded)?;
+            (0, ManagedByteOffset::new(displacement as u32))
         };
 
         let address = if unmanaged && self._value.is_none() && current_offset == 0 {
@@ -898,11 +980,9 @@ impl<'gc> ManagedPtr<'gc> {
             return Ok(self);
         }
 
-        let new_offset = ByteOffset::new(new_offset);
-        let packed_offset = Self::pack_offset(&self.origin, self._value, new_offset);
         self.flags = Self::with_unmanaged_inline_offset_flag(
             self.flags,
-            unmanaged && packed_offset.as_usize() == new_offset.as_usize(),
+            unmanaged && packed_offset.as_usize() == new_offset,
         );
         self.offset = packed_offset;
         self._value = address.flatten();
@@ -915,20 +995,15 @@ impl<'gc> ManagedPtr<'gc> {
     /// pointer value is UB-free even if it leaves allocation bounds. However, callers must ensure
     /// the resulting `ManagedPtr` is only used in ways that are valid for the same allocation
     /// provenance as the original pointer (for example, any eventual dereference must be in
-    /// bounds and properly aligned for the accessed type). When `memory-validation` is enabled,
-    /// an additional bounds check traps diagnostically, but that check is not a correctness guard.
+    /// bounds and properly aligned for the accessed type).
     pub unsafe fn offset(self, bytes: isize) -> Self {
-        let current_offset = self.byte_offset().as_usize();
+        let current_offset = self.pointer_offset();
         let origin = self.origin.clone();
         let value = self._value;
         self.checked_offset(bytes).unwrap_or_else(|error| match error {
             ManagedPtrOffsetError::ArithmeticOverflow => panic!("ManagedPtr::offset overflow"),
-            ManagedPtrOffsetError::NegativeResult => panic!(
-                "ManagedPtr::offset: negative result (offset={}, bytes={})",
-                current_offset, bytes
-            ),
             ManagedPtrOffsetError::CompactRangeExceeded => {
-                let result = current_offset as i64 + bytes as i64;
+                let result = format!("{current_offset:?} + {bytes}");
                 let resolved = value.map(|p| p.as_ptr().addr()).unwrap_or(0);
                 panic!(
                     "ManagedPtr offset exceeds compact range: offset={}, origin={:?}, value=0x{resolved:X}",
@@ -975,11 +1050,11 @@ impl<'gc> ManagedPtr<'gc> {
 }
 
 // Wrapping address formation is observation only, not a bounds check or access right.
-fn observed_address(base: *const u8, offset: usize) -> Option<NonNull<u8>> {
+fn observed_address(base: *const u8, offset: isize) -> Option<NonNull<u8>> {
     if base.is_null() {
         return None;
     }
-    NonNull::new(base.wrapping_add(offset).cast_mut())
+    NonNull::new(base.wrapping_offset(offset).cast_mut())
 }
 
 impl<'gc> ManagedPtr<'gc> {
@@ -1006,7 +1081,7 @@ impl<'gc> ManagedPtr<'gc> {
             }
             _ => return self._value,
         };
-        observed_address(base, self.byte_offset().as_usize())
+        observed_address(base, self.offset.as_usize() as u32 as i32 as isize)
     }
 
     /// Observes an address for conversion to a representation that cannot retain an owner.

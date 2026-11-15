@@ -193,7 +193,10 @@ fn resolve_indirect_origin_and_offset<'gc, T: ExceptionOps<'gc>>(
 
     match addr_val {
         StackValue::NativeInt(p) => Ok((PointerOrigin::Unmanaged, ByteOffset::new(p as usize))),
-        StackValue::ManagedPtr(m) => Ok((m.origin().clone(), m.byte_offset())),
+        StackValue::ManagedPtr(m) => Ok((
+            m.origin().clone(),
+            m.byte_offset().map_err(|e| StepResult::Error(e.into()))?,
+        )),
         StackValue::UnmanagedPtr(u) => Ok((
             PointerOrigin::Unmanaged,
             ByteOffset::new(u.0.as_ptr().expose_provenance()),

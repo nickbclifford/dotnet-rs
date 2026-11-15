@@ -17,29 +17,9 @@ use std::{
     ptr::{self, NonNull},
 };
 
-/// Returns the raw address represented by a managed pointer for unsafe intrinsics.
-///
-/// Heap origins use slice-free, wrapping address observation from the retained
-/// allocation base. The returned raw pointer carries no root or borrow/lock and
-/// grants no read/write/copy/atomic right; the caller must separately retain the
-/// owner and establish the required access contract. Other origins return their
-/// cached address through a zero-length `with_data`. Transient ownership is shared,
-/// but this address does not retain it or grant access.
+/// Observes the address without granting access or retaining a storage guard.
 pub(crate) fn managed_ptr_address(m: &ManagedPtr<'_>) -> *mut u8 {
-    match m.origin() {
-        PointerOrigin::Heap(_) => m.observe_address().map_or(ptr::null_mut(), NonNull::as_ptr),
-        #[cfg(feature = "multithreading")]
-        PointerOrigin::CrossArenaObjectRef(_) => {
-            m.observe_address().map_or(ptr::null_mut(), NonNull::as_ptr)
-        }
-        // Observation only: a frame-home byref is accessed through its frame check.
-        PointerOrigin::FrameHome(_) => m.observe_address().map_or(ptr::null_mut(), NonNull::as_ptr),
-        _ => {
-            // SAFETY: F10.RawMemoryAccessValid — a zero-length window only reads the
-            // cached address of a non-heap origin; no payload bytes are accessed.
-            unsafe { m.with_data(0, |data| data.as_ptr().cast_mut()) }
-        }
-    }
+    m.observe_address().map_or(ptr::null_mut(), NonNull::as_ptr)
 }
 
 // System.Runtime.CompilerServices.Unsafe::AsPointer<T>(ref T source)
@@ -273,13 +253,25 @@ pub fn intrinsic_unsafe_is_address_ordered<'gc, T: EvalStackOps<'gc> + TypedStac
     method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let right = ctx.pop_address();
-    let left = ctx.pop_address();
+    let right = ctx.pop();
+    let left = ctx.pop();
+    let ordering = match (&left, &right) {
+        (StackValue::ManagedPtr(a), StackValue::ManagedPtr(b))
+            if a.origin() == b.origin()
+                && matches!(
+                    a.pointer_offset(),
+                    dotnet_value::pointer::PointerOffset::Managed(_)
+                ) =>
+        {
+            a.partial_cmp(b)
+        }
+        _ => left.as_ptr().addr().partial_cmp(&right.as_ptr().addr()),
+    };
 
     let method_name = method.method().name.as_ref();
     let is_true = match method_name {
-        "IsAddressLessThan" => left < right,
-        "IsAddressGreaterThan" => left > right,
+        "IsAddressLessThan" => ordering == Some(std::cmp::Ordering::Less),
+        "IsAddressGreaterThan" => ordering == Some(std::cmp::Ordering::Greater),
         _ => false,
     };
 
@@ -573,7 +565,7 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, T: UnsafeIntrinsicHost<'gc>>(
     let target_type = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(target_type_gen));
 
     let val = ctx.pop();
-    let (ptr, pinned, origin, offset_base) = match val {
+    let (ptr, pinned, origin, original) = match val {
         StackValue::NativeInt(p) => {
             // SAFETY: F10.RawMemoryAccessValid — `Unsafe.AsRef(void*)` reconstructs an
             // unmanaged address from NativeInt only. The integer does not root storage
@@ -590,7 +582,7 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, T: UnsafeIntrinsicHost<'gc>>(
             managed_ptr_address(&m),
             m.is_pinned(),
             m.origin().clone(),
-            Some(m.byte_offset()),
+            Some(m),
         ),
         StackValue::UnmanagedPtr(p) => (p.0.as_ptr(), false, PointerOrigin::Unmanaged, None),
         _ => {
@@ -616,14 +608,11 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, T: UnsafeIntrinsicHost<'gc>>(
         // panic!("Heap Corruption: Casting unmanaged pointer to Ref type is unsafe");
     }
 
-    let mut m = ManagedPtr::new(
-        NonNull::new(ptr),
-        target_type,
-        None, // We will set the origin manually to preserve non-heap origins
-        pinned,
-        offset_base,
-    );
-    m = m.with_origin(origin);
+    let m = if let Some(original) = original {
+        original.with_inner_type(target_type)
+    } else {
+        ManagedPtr::new(NonNull::new(ptr), target_type, None, pinned, None).with_origin(origin)
+    };
     ctx.push(StackValue::ManagedPtr(m.into()));
     StepResult::Continue
 }
@@ -658,9 +647,9 @@ pub fn intrinsic_unsafe_byte_offset<'gc, T: EvalStackOps<'gc> + TypedStackOps<'g
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let target = ctx.pop_address();
-    let origin = ctx.pop_address();
-    let offset = target.wrapping_sub(origin) as isize;
+    let target = ctx.pop();
+    let origin = ctx.pop();
+    let offset = target.pointer_byte_offset(&origin);
     ctx.push_isize(offset);
     StepResult::Continue
 }

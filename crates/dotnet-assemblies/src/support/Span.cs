@@ -8,6 +8,31 @@ namespace DotnetRs
     {
         [MethodImpl(MethodImplOptions.InternalCall)]
         public static extern ref T GetArrayData<T>(T[] array);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void Memmove<T>(ref T destination, ref T source, nuint count);
+
+        internal static void CopySpan<T>(ref T destination, ref T source, int length)
+        {
+            if (length == 0)
+                return;
+            if (!RuntimeHelpers.IsReferenceOrContainsReferences<T>())
+            {
+                Memmove(ref destination, ref source, (nuint)length);
+                return;
+            }
+
+            if (Unsafe.IsAddressGreaterThan(ref destination, ref source))
+            {
+                for (int i = length - 1; i >= 0; i--)
+                    Unsafe.Add(ref destination, i) = Unsafe.Add(ref source, i);
+            }
+            else
+            {
+                for (int i = 0; i < length; i++)
+                    Unsafe.Add(ref destination, i) = Unsafe.Add(ref source, i);
+            }
+        }
     }
 }
 
@@ -86,13 +111,16 @@ namespace System
 
         public void CopyTo(Span<T> destination)
         {
-             if ((uint)_length > (uint)destination.Length)
-                 throw new ArgumentException();
-             
-             for (int i = 0; i < _length; i++)
-             {
-                 destination[i] = this[i];
-             }
+            if (!TryCopyTo(destination))
+                throw new ArgumentException();
+        }
+
+        public bool TryCopyTo(Span<T> destination)
+        {
+            if ((uint)_length > (uint)destination.Length)
+                return false;
+            Internal.CopySpan(ref destination._reference, ref _reference, _length);
+            return true;
         }
 
         public void Clear()
@@ -228,13 +256,16 @@ namespace System
 
         public void CopyTo(Span<T> destination)
         {
-             if ((uint)_length > (uint)destination.Length)
-                 throw new ArgumentException();
-             
-             for (int i = 0; i < _length; i++)
-             {
-                 destination[i] = this[i];
-             }
+            if (!TryCopyTo(destination))
+                throw new ArgumentException();
+        }
+
+        public bool TryCopyTo(Span<T> destination)
+        {
+            if ((uint)_length > (uint)destination.Length)
+                return false;
+            Internal.CopySpan(ref destination._reference, ref _reference, _length);
+            return true;
         }
 
         public ReadOnlySpan<T> Slice(int start)

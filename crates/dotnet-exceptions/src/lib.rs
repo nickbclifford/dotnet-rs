@@ -18,7 +18,6 @@ use dotnet_types::{
 };
 use dotnet_utils::{StackSlotIndex, gc::GCHandle};
 use dotnet_value::{
-    StackValue,
     object::{HeapStorage, Object, ObjectRef},
     string::CLRString,
 };
@@ -33,7 +32,7 @@ use std::{cmp::Reverse, collections::HashMap, ops::Range};
 
 fn read_exception_string_field<'gc>(
     obj: &Object<'gc>,
-    gc: &GCHandle<'gc>,
+    _gc: &GCHandle<'gc>,
     exception_type: &TypeDescription,
     field_name: &str,
 ) -> Option<String> {
@@ -44,13 +43,11 @@ fn read_exception_string_field<'gc>(
         return None;
     }
 
-    let field_bytes = obj
+    let field = obj
         .instance_storage
-        .get_field_local(exception_type.clone(), field_name);
-    // SAFETY: F2.DescriptorMatchesEcmaLayout; F1.GcHandleRooted — The exception descriptor
-    // selects this named field as an ObjectRef-sized payload in the object's managed storage,
-    // and `gc` supplies the arena brand that roots the decoded reference for this access.
-    let field_ref = unsafe { ObjectRef::read_branded(&field_bytes, gc) };
+        .field::<ObjectRef<'gc>>(exception_type.clone(), field_name)
+        .expect("Exception string field must be an object reference");
+    let field_ref = field.read();
     let field_inner = field_ref.0?;
 
     let storage = &field_inner.borrow().storage;
@@ -80,16 +77,11 @@ fn write_exception_string_field<'gc>(
     let str_obj = ObjectRef::new(gc, HeapStorage::Str(clr_str));
     ctx.register_new_object(&str_obj);
 
-    let mut field_data = obj
+    let field = obj
         .instance_storage
-        .get_field_mut_local(exception_type.clone(), field_name);
-    let val = StackValue::ObjectRef(str_obj);
-    // SAFETY: F10.RawMemoryAccessValid — `get_field_mut_local` returns the resolved,
-    // ObjectRef-sized field range as an exclusive mutable slice of the live instance storage,
-    // and `val` is an initialized ObjectRef payload for the selected StoreType.
-    unsafe {
-        val.store(field_data.as_mut_ptr(), StoreType::Object);
-    }
+        .field::<ObjectRef<'gc>>(exception_type.clone(), field_name)
+        .expect("Exception string field must be an object reference");
+    field.write(str_obj);
 }
 
 /// Extracts human-readable information from a managed exception object.

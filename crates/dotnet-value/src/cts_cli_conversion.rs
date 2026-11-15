@@ -1,7 +1,7 @@
 use crate::{
     StackValue,
     object::{CTSValue, ValueType},
-    pointer::{ManagedPtr, PointerOrigin},
+    pointer::ManagedPtr,
 };
 use dotnet_types::error::TypeResolutionError;
 use dotnetdll::prelude::{BaseType, LoadType};
@@ -15,26 +15,7 @@ fn managed_ptr_address(pointer: &ManagedPtr<'_>) -> Result<*const u8, TypeResolu
             "cannot convert a Transient managed pointer to an integer".into(),
         )
     })?;
-    Ok(match pointer.origin() {
-        PointerOrigin::Heap(_) => {
-            observed.map_or(std::ptr::null(), |address| address.as_ptr().cast_const())
-        }
-        #[cfg(feature = "multithreading")]
-        PointerOrigin::CrossArenaObjectRef(_) => {
-            observed.map_or(std::ptr::null(), |address| address.as_ptr().cast_const())
-        }
-        // A frame-home address is converted, not accessed; the integer is unchecked like any
-        // native address.
-        PointerOrigin::FrameHome(_) => {
-            observed.map_or(std::ptr::null(), |address| address.as_ptr().cast_const())
-        }
-        _ => {
-            // SAFETY: F10.RawMemoryAccessValid — a zero-length window only reads the cached
-            // address of a Stack, Static or Unmanaged origin; no payload bytes are accessed.
-            // Transient was rejected above because an integer cannot retain its owner.
-            unsafe { pointer.with_data(0, |data| data.as_ptr()) }
-        }
-    })
+    Ok(observed.map_or(std::ptr::null(), |address| address.as_ptr().cast_const()))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

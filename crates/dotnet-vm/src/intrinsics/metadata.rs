@@ -281,6 +281,85 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(miri))]
+    fn span_copy_methods_are_not_intercepted() {
+        use dotnet_types::generics::GenericLookup;
+        use dotnetdll::prelude::MethodMemberIndex;
+
+        let runtime = dotnet_assemblies::find_dotnet_app_path().unwrap();
+        let loader = AssemblyLoader::new(runtime.to_string_lossy().into_owned()).unwrap();
+        let registry = IntrinsicRegistry::initialize();
+        for name in ["System.Span`1", "System.ReadOnlySpan`1"] {
+            let ty = loader.corlib_type(name).unwrap();
+            for method_name in ["CopyTo", "TryCopyTo"] {
+                let method = (0..ty.definition().methods.len())
+                    .map(|index| {
+                        MethodDescription::new(
+                            ty.clone(),
+                            GenericLookup::default(),
+                            ty.resolution.clone(),
+                            MethodMemberIndex::Method(index),
+                        )
+                    })
+                    .find(|method| method.method().name == method_name)
+                    .unwrap();
+                assert!(
+                    registry.get_metadata(&method, &loader).is_none(),
+                    "{name}::{method_name} is intercepted"
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(not(miri))]
+    fn math_and_mathf_bodiless_methods_have_intrinsic_handlers() {
+        use dotnet_types::generics::GenericLookup;
+        use dotnetdll::prelude::MethodMemberIndex;
+
+        let runtime = dotnet_assemblies::find_dotnet_app_path().unwrap();
+        let loader = AssemblyLoader::new(runtime.to_string_lossy().into_owned()).unwrap();
+        let registry = IntrinsicRegistry::initialize();
+        let mut missing = Vec::new();
+
+        for type_name in ["System.Math", "System.MathF"] {
+            let ty = loader.corlib_type(type_name).unwrap();
+            for index in 0..ty.definition().methods.len() {
+                let method = MethodDescription::new(
+                    ty.clone(),
+                    GenericLookup::default(),
+                    ty.resolution.clone(),
+                    MethodMemberIndex::Method(index),
+                );
+                if !method.method().internal_call && method.body().is_some() {
+                    continue;
+                }
+
+                match classify_intrinsic(method.clone(), &loader, Some(&registry)) {
+                    Some(metadata) if metadata.handler != MethodIntrinsicId::Missing => {}
+                    Some(metadata) => missing.push(format!(
+                        "{type_name}::{} {:?} classified as {:?}",
+                        method.method().name,
+                        method.signature(),
+                        metadata.handler,
+                    )),
+                    None => missing.push(format!(
+                        "{type_name}::{} {:?} was not classified",
+                        method.method().name,
+                        method.signature(),
+                    )),
+                }
+            }
+        }
+
+        assert!(
+            missing.is_empty(),
+            "bodiless Math/MathF methods need executable handlers:\n{}",
+            missing.join("\n")
+        );
+    }
+
+    #[test]
     fn test_intrinsic_kind_categories() {
         // Test that we have the three expected categories
         assert_ne!(IntrinsicKind::Static, IntrinsicKind::VirtualOverride);

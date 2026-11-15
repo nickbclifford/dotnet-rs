@@ -60,7 +60,7 @@ pub fn intrinsic_volatile_read<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 RawMemoryOps::load_atomic(
                     ctx,
                     target_ptr.origin().clone(),
-                    target_ptr.byte_offset(),
+                    dotnet_vm_ops::vm_try!(target_ptr.byte_offset()),
                     1,
                     Ordering::Acquire,
                 )
@@ -79,7 +79,7 @@ pub fn intrinsic_volatile_read<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 RawMemoryOps::load_atomic(
                     ctx,
                     target_ptr.origin().clone(),
-                    target_ptr.byte_offset(),
+                    dotnet_vm_ops::vm_try!(target_ptr.byte_offset()),
                     2,
                     Ordering::Acquire,
                 )
@@ -98,7 +98,7 @@ pub fn intrinsic_volatile_read<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 RawMemoryOps::load_atomic(
                     ctx,
                     target_ptr.origin().clone(),
-                    target_ptr.byte_offset(),
+                    dotnet_vm_ops::vm_try!(target_ptr.byte_offset()),
                     4,
                     Ordering::Acquire,
                 )
@@ -121,7 +121,7 @@ pub fn intrinsic_volatile_read<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 RawMemoryOps::load_atomic(
                     ctx,
                     target_ptr.origin().clone(),
-                    target_ptr.byte_offset(),
+                    dotnet_vm_ops::vm_try!(target_ptr.byte_offset()),
                     8,
                     Ordering::Acquire,
                 )
@@ -145,7 +145,7 @@ pub fn intrinsic_volatile_read<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 RawMemoryOps::load_atomic(
                     ctx,
                     target_ptr.origin().clone(),
-                    target_ptr.byte_offset(),
+                    dotnet_vm_ops::vm_try!(target_ptr.byte_offset()),
                     size,
                     Ordering::Acquire,
                 )
@@ -165,7 +165,7 @@ pub fn intrinsic_volatile_read<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 RawMemoryOps::object_atomic(
                     ctx,
                     target_ptr.origin().clone(),
-                    target_ptr.byte_offset(),
+                    dotnet_vm_ops::vm_try!(target_ptr.byte_offset()),
                     PointerAtomicOp::Load(Ordering::Acquire),
                 )
                 .expect(
@@ -205,7 +205,7 @@ fn store_int_volatile<'gc, T: ThreadingIntrinsicHost<'gc>>(
         RawMemoryOps::store_atomic(
             ctx,
             target_ptr.origin().clone(),
-            target_ptr.byte_offset(),
+            dotnet_vm_ops::vm_try!(target_ptr.byte_offset()),
             val,
             width,
             Ordering::Release,
@@ -280,7 +280,7 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 RawMemoryOps::store_atomic(
                     ctx,
                     target_ptr.origin().clone(),
-                    target_ptr.byte_offset(),
+                    dotnet_vm_ops::vm_try!(target_ptr.byte_offset()),
                     val,
                     4,
                     Ordering::Release,
@@ -308,7 +308,7 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 RawMemoryOps::store_atomic(
                     ctx,
                     target_ptr.origin().clone(),
-                    target_ptr.byte_offset(),
+                    dotnet_vm_ops::vm_try!(target_ptr.byte_offset()),
                     val,
                     8,
                     Ordering::Release,
@@ -336,7 +336,7 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 RawMemoryOps::store_atomic(
                     ctx,
                     target_ptr.origin().clone(),
-                    target_ptr.byte_offset(),
+                    dotnet_vm_ops::vm_try!(target_ptr.byte_offset()),
                     val,
                     size,
                     Ordering::Release,
@@ -367,7 +367,7 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 RawMemoryOps::object_atomic(
                     ctx,
                     target_ptr.origin().clone(),
-                    target_ptr.byte_offset(),
+                    dotnet_vm_ops::vm_try!(target_ptr.byte_offset()),
                     PointerAtomicOp::Store(val_raw, Ordering::Release),
                 )
                 .expect(

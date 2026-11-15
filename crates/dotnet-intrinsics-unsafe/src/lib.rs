@@ -81,7 +81,10 @@ pub(crate) fn ptr_info<'gc, T: dotnet_vm_ops::ops::ExceptionOps<'gc>>(
             }),
             dotnet_utils::ByteOffset::new(0),
         )),
-        dotnet_value::StackValue::ManagedPtr(m) => Ok((m.origin().clone(), m.byte_offset())),
+        dotnet_value::StackValue::ManagedPtr(m) => Ok((
+            m.origin().clone(),
+            m.byte_offset().map_err(|e| StepResult::Error(e.into()))?,
+        )),
         dotnet_value::StackValue::UnmanagedPtr(dotnet_value::pointer::UnmanagedPtr(p)) => Ok((
             PointerOrigin::Unmanaged,
             dotnet_utils::ByteOffset::new(p.as_ptr().expose_provenance()),

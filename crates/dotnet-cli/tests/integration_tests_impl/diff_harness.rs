@@ -521,6 +521,14 @@ diff_test!(
     "tests/fixtures/arithmetic/arithmetic_operations_42.cs"
 );
 diff_test!(
+    arithmetic_math_extern_42_matches_dotnet,
+    "tests/fixtures/arithmetic/math_extern_42.cs"
+);
+diff_test!(
+    arrays_array_fill_42_matches_dotnet,
+    "tests/fixtures/arrays/array_fill_42.cs"
+);
+diff_test!(
     exceptions_exception_batch_42_matches_dotnet,
     "tests/fixtures/exceptions/exception_batch_42.cs"
 );
@@ -1230,4 +1238,14 @@ diff_test!(
 diff_test!(
     threading_lock_contended_matches_dotnet,
     "tests/fixtures/threading/lock_contended_42.cs"
+);
+
+diff_test!(
+    memory_span_copyto_overlap_42_matches_dotnet,
+    "tests/fixtures/memory/span_copyto_overlap_42.cs"
+);
+
+diff_test!(
+    unsafe_byref_negative_offset_42_matches_dotnet,
+    "tests/fixtures/unsafe/byref_negative_offset_42.cs"
 );

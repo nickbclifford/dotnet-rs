@@ -47,7 +47,7 @@ fn heap_read_error(pointer: &ManagedPtr<'_>, size: usize) -> StepResult {
     };
     StepResult::Error(
         MemoryAccessError::BoundsCheck {
-            offset: pointer.byte_offset().as_usize(),
+            offset: pointer.byte_offset().map_or(0, |offset| offset.as_usize()),
             size,
             len,
         }

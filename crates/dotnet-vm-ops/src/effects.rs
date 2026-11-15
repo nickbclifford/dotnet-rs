@@ -9,11 +9,12 @@ use std::{
 };
 
 use dotnet_types::error::{ExecutionError, VmError};
+#[cfg(test)]
 use dotnet_utils::ByteOffset;
 use dotnet_value::{
     ManagedPtr, StackValue,
     object::{HeapStorage, ObjectRef},
-    pointer::{FrameHomeSerial, ManagedPtrInfo, PointerOrigin},
+    pointer::{FrameHomeSerial, ManagedPtrInfo, PointerOffset, PointerOrigin},
 };
 use gc_arena::{Collect, DynamicRoot, DynamicRootSet, Gc, Mutation, Rootable};
 
@@ -49,7 +50,8 @@ enum RootCellValue<'gc> {
         origin: PointerOrigin<'gc>,
         #[collect(require_static)]
         inner_type: dotnet_types::TypeDescription,
-        offset: ByteOffset,
+        #[collect(require_static)]
+        offset: PointerOffset,
         pinned: bool,
         #[collect(require_static)]
         unmanaged_address: Option<NonNull<u8>>,
@@ -128,7 +130,7 @@ impl RootedValue {
                 let value = RootCellValue::Pointer {
                     origin: pointer.origin().clone(),
                     inner_type: pointer.inner_type(),
-                    offset: pointer.byte_offset(),
+                    offset: pointer.pointer_offset(),
                     pinned: pointer.is_pinned(),
                     unmanaged_address: matches!(pointer.origin(), PointerOrigin::Unmanaged)
                         .then(|| pointer.observe_address())
@@ -173,13 +175,13 @@ impl RootedValue {
                     let address = if matches!(origin, PointerOrigin::Unmanaged) {
                         *unmanaged_address
                     } else if let PointerOrigin::FrameHome(serial) = origin {
-                        let (base, length) = backend
+                        let (base, _length) = backend
                             .frame_home_block(*serial)
                             .ok_or_else(|| internal("native frame home is no longer live"))?;
-                        if offset.as_usize() > length {
-                            return Err(internal("native frame home offset out of range"));
-                        }
-                        NonNull::new(base.as_ptr().wrapping_add(offset.as_usize()))
+                        let PointerOffset::Managed(displacement) = offset else {
+                            return Err(internal("invalid frame home displacement"));
+                        };
+                        NonNull::new(base.as_ptr().wrapping_offset(*displacement as isize))
                     } else {
                         let pointer = ManagedPtr::from_info_full(
                             ManagedPtrInfo {
@@ -2917,12 +2919,28 @@ mod tests {
                 panic!("expected byrefs")
             };
             assert_eq!(first.origin(), &PointerOrigin::FrameHome(serial));
-            assert_eq!(first.byte_offset(), ByteOffset::new(2));
+            assert_eq!(first.byte_offset().unwrap(), ByteOffset::new(2));
             assert_eq!(first.observe_address(), second.observe_address());
             backend.block = Some((base, 1));
-            assert!(value.fetch(roots, &backend).is_err());
+            // Fetching forms an address; the later access must validate the range.
+            assert!(value.fetch(roots, &backend).is_ok());
+            backend.block = Some((base, bytes.len()));
+            let negative = first.clone().into_inner().checked_offset(-3).unwrap();
+            let negative_root =
+                RootedValue::stash(mc, roots, StackValue::ManagedPtr(negative.into())).unwrap();
+            let StackValue::ManagedPtr(negative) = negative_root.fetch(roots, &backend).unwrap()
+            else {
+                panic!("expected byref")
+            };
+            assert_eq!(negative.pointer_offset(), PointerOffset::Managed(-1));
+            assert!(negative.byte_offset().is_err());
+            assert_eq!(
+                negative.observe_address(),
+                NonNull::new(base.as_ptr().wrapping_sub(1))
+            );
             backend.block = None;
             assert!(value.fetch(roots, &backend).is_err());
+            assert!(negative_root.fetch(roots, &backend).is_err());
             let static_pointer = ManagedPtr::new_static(
                 Some(address),
                 dotnet_types::TypeDescription::NULL,
@@ -2939,7 +2957,7 @@ mod tests {
                 panic!("expected static pointer")
             };
             assert!(matches!(fetched.origin(), PointerOrigin::Static(_)));
-            assert_eq!(fetched.byte_offset(), ByteOffset::new(2));
+            assert_eq!(fetched.byte_offset().unwrap(), ByteOffset::new(2));
             assert!(fetched.observe_address().is_none());
             let unmanaged = ManagedPtr::new(
                 Some(address),
@@ -2955,7 +2973,10 @@ mod tests {
                 panic!("expected unmanaged pointer")
             };
             assert_eq!(fetched.observe_address(), Some(address));
-            assert_eq!(fetched.byte_offset().as_usize(), address.as_ptr().addr());
+            assert_eq!(
+                fetched.byte_offset().unwrap().as_usize(),
+                address.as_ptr().addr()
+            );
             let layout = dotnet_value::layout::FieldLayoutManager {
                 fields: Default::default(),
                 total_size: 0,
@@ -3018,7 +3039,7 @@ mod tests {
                 pointer.origin(),
                 PointerOrigin::Heap(ObjectRef(Some(_)))
             ));
-            assert_eq!(pointer.byte_offset(), ByteOffset::new(0));
+            assert_eq!(pointer.byte_offset().unwrap(), ByteOffset::new(0));
             assert!(value.fetch(DynamicRootSet::new(mc), &mock()).is_err());
         });
         drop(value);

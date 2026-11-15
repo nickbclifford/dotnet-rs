@@ -195,6 +195,31 @@ public class Array : ICloneable, IList, IStructuralComparable, IStructuralEquata
         return LastIndexOf((Array)(object)array, value, startIndex, count);
     }
 
+    public static void Fill<T>(T[] array, T value)
+    {
+        if (array is null) throw new ArgumentNullException(nameof(array));
+        Fill(array, value, 0, array.Length);
+    }
+
+    public static void Fill<T>(T[] array, T value, int startIndex, int count)
+    {
+        if (array is null) throw new ArgumentNullException(nameof(array));
+        if (startIndex < 0 || startIndex > array.Length)
+        {
+            throw new ArgumentOutOfRangeException(nameof(startIndex));
+        }
+        if (count < 0 || count > array.Length - startIndex)
+        {
+            throw new ArgumentOutOfRangeException(nameof(count));
+        }
+
+        int endIndex = startIndex + count;
+        for (int i = startIndex; i < endIndex; i++)
+        {
+            array[i] = value;
+        }
+    }
+
     public static void Copy(Array sourceArray, Array destinationArray, int length)
     {
         Copy(sourceArray, 0, destinationArray, 0, length);

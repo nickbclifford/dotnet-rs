@@ -118,7 +118,7 @@ fn write_counts<'gc, T: ThreadingIntrinsicHost<'gc>>(
             RawMemoryOps::write_unaligned(
                 ctx,
                 ptr.origin().clone(),
-                ptr.byte_offset(),
+                dotnet_vm_ops::vm_try!(ptr.byte_offset()),
                 StackValue::Int32(value),
                 &layout,
             )

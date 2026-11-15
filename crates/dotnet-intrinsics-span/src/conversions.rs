@@ -431,7 +431,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, T: SpanIntrinsicHost<'g
             unsafe {
                 ctx.write_bytes(
                     length_ref.origin().clone(),
-                    length_ref.byte_offset(),
+                    dotnet_vm_ops::vm_try!(length_ref.byte_offset()),
                     &element_count.to_ne_bytes(),
                 )
             }
@@ -888,87 +888,5 @@ pub fn intrinsic_span_to_readonly_span<'gc, T: SpanIntrinsicHost<'gc>>(
         .write(length);
 
     ctx.push_value_type(span);
-    StepResult::Continue
-}
-
-#[dotnet_intrinsic("void System.Span<T>::CopyTo(System.Span<T>)")]
-#[dotnet_intrinsic("void System.ReadOnlySpan<T>::CopyTo(System.Span<T>)")]
-pub fn intrinsic_span_copy_to<'gc, T: SpanIntrinsicHost<'gc>>(
-    ctx: &mut T,
-    _method: MethodDescription,
-    generics: &GenericLookup,
-) -> StepResult {
-    let destination = ctx.pop();
-    let source = ctx.pop();
-
-    let element_type = dotnet_vm_ops::vm_try!(generics.type_arg(0));
-    let element_layout = dotnet_vm_ops::vm_try!(ctx.span_type_layout(element_type.clone()));
-    let element_desc =
-        dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(element_type.clone()));
-    let element_size = element_layout.size().as_usize();
-
-    let (source_reference, source_length) =
-        match span_reference_and_length(ctx, source, &element_desc) {
-            Ok(data) => data,
-            Err(step) => return step,
-        };
-    let (destination_reference, destination_length) =
-        match span_reference_and_length(ctx, destination, &element_desc) {
-            Ok(data) => data,
-            Err(step) => return step,
-        };
-    let Ok(source_length) = usize::try_from(source_length) else {
-        return StepResult::internal_error("Span had a negative length");
-    };
-    let Ok(destination_length) = usize::try_from(destination_length) else {
-        return StepResult::internal_error("Span had a negative length");
-    };
-    if destination_length < source_length {
-        return ctx
-            .throw_by_name_with_message("System.ArgumentException", "Destination is too short.");
-    }
-
-    // Materialize before writing so overlapping source/destination spans retain CopyTo's
-    // memmove semantics and reference-type elements use the normal typed write path.
-    let mut values = Vec::with_capacity(source_length);
-    for index in 0..source_length {
-        let offset = ByteOffset::new(index * element_size);
-        // SAFETY: F10.RawMemoryAccessValid — source span metadata supplied the managed origin and base offset; the length
-        // check above and element-size stride keep this read within the source span.
-        let value = unsafe {
-            ctx.read_unaligned(
-                source_reference.origin().clone(),
-                source_reference.byte_offset() + offset,
-                &element_layout,
-                Some(element_desc.clone()),
-            )
-        };
-        match value {
-            Ok(value) => values.push(value),
-            Err(err) => {
-                return StepResult::Error(
-                    ExecutionError::InternalError(err.to_string().into()).into(),
-                );
-            }
-        }
-    }
-
-    for (index, value) in values.into_iter().enumerate() {
-        let offset = ByteOffset::new(index * element_size);
-        // SAFETY: F10.RawMemoryAccessValid — destination span metadata supplied the managed origin and base offset; its
-        // validated length is at least the source length, so this write is in bounds.
-        let result = unsafe {
-            ctx.write_unaligned(
-                destination_reference.origin().clone(),
-                destination_reference.byte_offset() + offset,
-                value,
-                &element_layout,
-            )
-        };
-        if let Err(err) = result {
-            return StepResult::Error(ExecutionError::InternalError(err.to_string().into()).into());
-        }
-    }
-
     StepResult::Continue
 }

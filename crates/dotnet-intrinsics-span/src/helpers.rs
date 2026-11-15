@@ -68,7 +68,7 @@ where
     unsafe {
         ctx.read_bytes(
             span_ptr.origin().clone(),
-            span_ptr.byte_offset() + ref_field.position,
+            span_ptr.byte_offset().map_err(IntrinsicError::Memory)? + ref_field.position,
             &mut ptr_bytes,
         )
     }
@@ -113,7 +113,7 @@ pub fn read_span_length_from_ptr<'gc, T: RawMemoryOps<'gc>>(
     let val = unsafe {
         ctx.read_unaligned(
             span_ptr.origin().clone(),
-            span_ptr.byte_offset() + length_field.position,
+            span_ptr.byte_offset().map_err(IntrinsicError::Memory)? + length_field.position,
             &length_field.layout,
             None,
         )
@@ -144,7 +144,7 @@ pub fn write_span_fields<'gc, T: RawMemoryOps<'gc>>(
     unsafe {
         ctx.write_unaligned(
             span_ptr.origin().clone(),
-            span_ptr.byte_offset() + ref_field.position,
+            span_ptr.byte_offset().map_err(IntrinsicError::Memory)? + ref_field.position,
             StackValue::ManagedPtr(managed.clone().into()),
             &ref_field.layout,
         )
@@ -157,7 +157,7 @@ pub fn write_span_fields<'gc, T: RawMemoryOps<'gc>>(
     unsafe {
         ctx.write_unaligned(
             span_ptr.origin().clone(),
-            span_ptr.byte_offset() + length_field.position,
+            span_ptr.byte_offset().map_err(IntrinsicError::Memory)? + length_field.position,
             StackValue::Int32(length),
             &length_field.layout,
         )
@@ -213,9 +213,13 @@ pub fn with_span_data<
 
     let m_ptr = ManagedPtr::from_info_full(info, element_type, false);
     if let PointerOrigin::FrameHome(_) = m_ptr.origin() {
+        let offset = m_ptr
+            .byte_offset()
+            .map_err(IntrinsicError::Memory)?
+            .as_usize();
         let total_size = len
             .checked_mul(element_size)
-            .ok_or_else(|| memory_bounds_error(m_ptr.byte_offset().as_usize(), usize::MAX, 0))?;
+            .ok_or_else(|| memory_bounds_error(offset, usize::MAX, 0))?;
         // SAFETY: F10.FrameHomeChecked — `with_frame_home_data` checks the frame and range;
         // span-data callbacks read or copy the elements and do not write to the frame's homes.
         return unsafe { m_ptr.with_frame_home_data(ctx, total_size, f) }
@@ -226,7 +230,10 @@ pub fn with_span_data<
             "ManagedPtr::with_data: null owner handle",
         ));
     }
-    let offset = m_ptr.byte_offset().as_usize();
+    let offset = m_ptr
+        .byte_offset()
+        .map_err(IntrinsicError::Memory)?
+        .as_usize();
     let payload_len = heap_payload_len(&m_ptr).map_err(IntrinsicError::Memory)?;
     let total_size = if let Some(payload_len) = payload_len {
         len.checked_mul(element_size)

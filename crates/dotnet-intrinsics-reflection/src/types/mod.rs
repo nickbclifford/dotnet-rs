@@ -343,7 +343,7 @@ pub fn runtime_type_handle_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
             unsafe {
                 dotnet_vm_ops::vm_try!(ctx.write_unaligned(
                     pfn_allocator.origin().clone(),
-                    pfn_allocator.byte_offset(),
+                    dotnet_vm_ops::vm_try!(pfn_allocator.byte_offset()),
                     val,
                     &layout,
                 ));
@@ -354,7 +354,7 @@ pub fn runtime_type_handle_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
             unsafe {
                 dotnet_vm_ops::vm_try!(ctx.write_unaligned(
                     allocator_first_arg.origin().clone(),
-                    allocator_first_arg.byte_offset(),
+                    dotnet_vm_ops::vm_try!(allocator_first_arg.byte_offset()),
                     val,
                     &layout,
                 ));
@@ -388,7 +388,7 @@ pub fn runtime_type_handle_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
             unsafe {
                 dotnet_vm_ops::vm_try!(ctx.write_unaligned(
                     pfn_ctor.origin().clone(),
-                    pfn_ctor.byte_offset(),
+                    dotnet_vm_ops::vm_try!(pfn_ctor.byte_offset()),
                     method_val,
                     &layout,
                 ));
@@ -400,7 +400,7 @@ pub fn runtime_type_handle_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
             unsafe {
                 dotnet_vm_ops::vm_try!(ctx.write_unaligned(
                     ctor_is_public.origin().clone(),
-                    ctor_is_public.byte_offset(),
+                    dotnet_vm_ops::vm_try!(ctor_is_public.byte_offset()),
                     public_val,
                     &byte_layout,
                 ));

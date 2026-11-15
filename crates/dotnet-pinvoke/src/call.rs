@@ -70,8 +70,16 @@ fn live_frame_home_address<'gc>(
 ) -> Result<*mut u8, StepResult> {
     // SAFETY: F10.FrameHomeChecked — a zero-byte `read_bytes` resolves the frame-home origin
     // through its live frame and checks the offset; it copies nothing.
-    unsafe { ctx.read_bytes(pointer.origin().clone(), pointer.byte_offset(), &mut []) }
-        .map_err(|error| StepResult::Error(error.into()))?;
+    unsafe {
+        ctx.read_bytes(
+            pointer.origin().clone(),
+            pointer
+                .byte_offset()
+                .map_err(|e| StepResult::Error(e.into()))?,
+            &mut [],
+        )
+    }
+    .map_err(|error| StepResult::Error(error.into()))?;
     Ok(pointer
         .observe_address()
         .map_or(std::ptr::null_mut(), NonNull::as_ptr))
@@ -926,7 +934,7 @@ fn external_call_impl<'gc>(
                         let value = guard
                             .guard
                             .storage
-                            .observe_address(p.byte_offset().as_usize())
+                            .observe_address(dotnet_vm_ops::vm_try!(p.byte_offset()).as_usize())
                             .map_or(std::ptr::null_mut(), NonNull::as_ptr);
                         local_guards.push(guard);
                         value
@@ -956,6 +964,7 @@ fn external_call_impl<'gc>(
                         Err(error) => return error,
                     },
                     _ => {
+                        dotnet_vm_ops::vm_try!(p.byte_offset());
                         // SAFETY: F10.RawMemoryAccessValid — a zero-length window only reads
                         // the cached address of a non-heap origin; no payload bytes are accessed
                         // here. The address retains no owner or guard: for Stack, Static and
@@ -997,7 +1006,11 @@ fn external_call_impl<'gc>(
                         // SAFETY: F10.FrameHomeChecked — `read_bytes` resolves the frame-home
                         // origin through its live frame and checks the range before copying.
                         let read = unsafe {
-                            ctx.read_bytes(p.origin().clone(), p.byte_offset(), &mut buf[..buf_len])
+                            ctx.read_bytes(
+                                p.origin().clone(),
+                                dotnet_vm_ops::vm_try!(p.byte_offset()),
+                                &mut buf[..buf_len],
+                            )
                         };
                         if let Err(error) = read {
                             return StepResult::Error(error.into());
@@ -1033,7 +1046,10 @@ fn external_call_impl<'gc>(
                     }
 
                     write_backs.push((
-                        WriteBackSource::Managed(p.origin().clone(), p.byte_offset()),
+                        WriteBackSource::Managed(
+                            p.origin().clone(),
+                            dotnet_vm_ops::vm_try!(p.byte_offset()),
+                        ),
                         buf_idx,
                         buf_len,
                     ));
@@ -1085,7 +1101,7 @@ fn external_call_impl<'gc>(
                                 let ptr = guard
                                     .guard
                                     .storage
-                                    .observe_address(p.byte_offset().as_usize())
+                                    .observe_address(dotnet_vm_ops::vm_try!(p.byte_offset()).as_usize())
                                     .map_or(std::ptr::null_mut(), NonNull::as_ptr);
                                 local_guards.push(guard);
                                 ptr
@@ -1094,9 +1110,10 @@ fn external_call_impl<'gc>(
                                 // reaches this raw-address fallback only. Rebuilding
                                 // its address from integer bits does not root an allocation or grant
                                 // access; native-call validity remains the caller's contract.
-                                unmanaged_ptr_from_addr(p.byte_offset().as_usize())
+                                unmanaged_ptr_from_addr(dotnet_vm_ops::vm_try!(p.byte_offset()).as_usize())
                             }
                         } else {
+                            dotnet_vm_ops::vm_try!(p.byte_offset());
                             p.with_data(0, |data| data.as_ptr().cast_mut())
                         }
                     };

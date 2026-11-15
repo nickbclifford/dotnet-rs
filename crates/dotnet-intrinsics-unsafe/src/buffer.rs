@@ -95,6 +95,7 @@ pub fn memmove_select<'gc, T: UnsafeIntrinsicHost<'gc>>(
 
 /// Copies in bounded chunks. Pointers are rooted descriptors resolved afresh for every chunk,
 /// so a collection between chunks neither invalidates them nor restarts the move.
+#[dotnet_intrinsic("static void DotnetRs.Internal::Memmove<T>(T&, T&, nuint)", select = memmove_select, fallback = intrinsic_buffer_memmove)]
 #[dotnet_intrinsic("static void System.Buffer::Memmove(byte*, byte*, ulong)", select = memmove_select, fallback = intrinsic_buffer_memmove)]
 #[dotnet_intrinsic("static void System.Buffer::Memmove<T>(T&, T&, ulong)", select = memmove_select, fallback = intrinsic_buffer_memmove)]
 #[dotnet_intrinsic("static void System.Buffer::Memmove<T>(T&, T&, nuint)", select = memmove_select, fallback = intrinsic_buffer_memmove)]

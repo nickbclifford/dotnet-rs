@@ -81,7 +81,7 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, T: ThreadingIntrinsicHost<'gc
                 RawMemoryOps::compare_exchange_atomic(
                     ctx,
                     target_ptr.origin().clone(),
-                    target_ptr.byte_offset(),
+                    dotnet_vm_ops::vm_try!(target_ptr.byte_offset()),
                     comparand as u64,
                     value as u64,
                     1,
@@ -113,7 +113,7 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, T: ThreadingIntrinsicHost<'gc
                 RawMemoryOps::compare_exchange_atomic(
                     ctx,
                     target_ptr.origin().clone(),
-                    target_ptr.byte_offset(),
+                    dotnet_vm_ops::vm_try!(target_ptr.byte_offset()),
                     comparand as u64,
                     value as u64,
                     2,
@@ -145,7 +145,7 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, T: ThreadingIntrinsicHost<'gc
                 RawMemoryOps::compare_exchange_atomic(
                     ctx,
                     target_ptr.origin().clone(),
-                    target_ptr.byte_offset(),
+                    dotnet_vm_ops::vm_try!(target_ptr.byte_offset()),
                     comparand as u64,
                     value as u64,
                     4,
@@ -173,7 +173,7 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, T: ThreadingIntrinsicHost<'gc
                 RawMemoryOps::compare_exchange_atomic(
                     ctx,
                     target_ptr.origin().clone(),
-                    target_ptr.byte_offset(),
+                    dotnet_vm_ops::vm_try!(target_ptr.byte_offset()),
                     comparand as u64,
                     value as u64,
                     8,
@@ -202,7 +202,7 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, T: ThreadingIntrinsicHost<'gc
                 RawMemoryOps::compare_exchange_atomic(
                     ctx,
                     target_ptr.origin().clone(),
-                    target_ptr.byte_offset(),
+                    dotnet_vm_ops::vm_try!(target_ptr.byte_offset()),
                     comparand as u64,
                     value as u64,
                     size,
@@ -231,7 +231,7 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, T: ThreadingIntrinsicHost<'gc
                 RawMemoryOps::object_atomic(
                     ctx,
                     target_ptr.origin().clone(),
-                    target_ptr.byte_offset(),
+                    dotnet_vm_ops::vm_try!(target_ptr.byte_offset()),
                     PointerAtomicOp::CompareExchange(
                         comp_raw,
                         val_raw,
@@ -286,7 +286,7 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 RawMemoryOps::exchange_atomic(
                     ctx,
                     target_ptr.origin().clone(),
-                    target_ptr.byte_offset(),
+                    dotnet_vm_ops::vm_try!(target_ptr.byte_offset()),
                     value as u64,
                     1,
                     Ordering::SeqCst,
@@ -313,7 +313,7 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 RawMemoryOps::exchange_atomic(
                     ctx,
                     target_ptr.origin().clone(),
-                    target_ptr.byte_offset(),
+                    dotnet_vm_ops::vm_try!(target_ptr.byte_offset()),
                     value as u64,
                     2,
                     Ordering::SeqCst,
@@ -339,7 +339,7 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 RawMemoryOps::exchange_atomic(
                     ctx,
                     target_ptr.origin().clone(),
-                    target_ptr.byte_offset(),
+                    dotnet_vm_ops::vm_try!(target_ptr.byte_offset()),
                     value as u64,
                     4,
                     Ordering::SeqCst,
@@ -361,7 +361,7 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 RawMemoryOps::exchange_atomic(
                     ctx,
                     target_ptr.origin().clone(),
-                    target_ptr.byte_offset(),
+                    dotnet_vm_ops::vm_try!(target_ptr.byte_offset()),
                     value as u64,
                     8,
                     Ordering::SeqCst,
@@ -384,7 +384,7 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 RawMemoryOps::exchange_atomic(
                     ctx,
                     target_ptr.origin().clone(),
-                    target_ptr.byte_offset(),
+                    dotnet_vm_ops::vm_try!(target_ptr.byte_offset()),
                     value as u64,
                     size,
                     Ordering::SeqCst,
@@ -420,7 +420,7 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 RawMemoryOps::object_atomic(
                     ctx,
                     target_ptr.origin().clone(),
-                    target_ptr.byte_offset(),
+                    dotnet_vm_ops::vm_try!(target_ptr.byte_offset()),
                     PointerAtomicOp::Exchange(val_raw, Ordering::SeqCst),
                 )
             } {
@@ -470,7 +470,7 @@ pub fn intrinsic_interlocked_exchange_add<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 RawMemoryOps::exchange_add_atomic(
                     ctx,
                     target_ptr.origin().clone(),
-                    target_ptr.byte_offset(),
+                    dotnet_vm_ops::vm_try!(target_ptr.byte_offset()),
                     value as u64,
                     4,
                     Ordering::SeqCst,
@@ -497,7 +497,7 @@ pub fn intrinsic_interlocked_exchange_add<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 RawMemoryOps::exchange_add_atomic(
                     ctx,
                     target_ptr.origin().clone(),
-                    target_ptr.byte_offset(),
+                    dotnet_vm_ops::vm_try!(target_ptr.byte_offset()),
                     value as u64,
                     8,
                     Ordering::SeqCst,

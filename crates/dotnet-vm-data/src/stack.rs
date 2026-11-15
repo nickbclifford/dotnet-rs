@@ -564,7 +564,7 @@ mod tests {
             panic!("expected managed pointer");
         };
         let origin = p.origin().clone();
-        let offset = p.byte_offset();
+        let offset = p.byte_offset().unwrap();
         drop(peeked);
         drop(stack.pop_retained_ptr());
         assert_eq!(

@@ -1,7 +1,7 @@
 use crate::{
     cts_cli_conversion::CtsToCli,
     object::{HeapStorage, Object, ObjectRef},
-    pointer::{self, ManagedPtr, PointerOrigin, UnmanagedPtr},
+    pointer::{self, ManagedPtr, PointerOffset, UnmanagedPtr},
     string::CLRString,
 };
 use dotnet_types::{TypeDescription, error::ExecutionError};
@@ -248,7 +248,14 @@ fn pointer_address(value: &StackValue<'_>) -> Option<usize> {
 }
 
 #[inline]
-fn pointer_difference(lhs: &StackValue<'_>, rhs: &StackValue<'_>) -> isize {
+fn pointer_difference<'gc>(lhs: &StackValue<'gc>, rhs: &StackValue<'gc>) -> isize {
+    if let (StackValue::ManagedPtr(lhs), StackValue::ManagedPtr(rhs)) = (lhs, rhs)
+        && lhs.origin() == rhs.origin()
+        && let (PointerOffset::Managed(lhs), PointerOffset::Managed(rhs)) =
+            (lhs.pointer_offset(), rhs.pointer_offset())
+    {
+        return (lhs as isize).wrapping_sub(rhs as isize);
+    }
     let lhs = pointer_address(lhs).expect("left pointer value has an observable address");
     let rhs = pointer_address(rhs).expect("right pointer value has an observable address");
     lhs.wrapping_sub(rhs) as isize
@@ -511,6 +518,11 @@ impl<'gc> StackValue<'gc> {
         Self::ObjectRef(ObjectRef::new(gc, HeapStorage::Str(s)))
     }
 
+    /// Returns the signed byte distance between pointer values without granting access.
+    pub fn pointer_byte_offset(&self, origin: &Self) -> isize {
+        pointer_difference(self, origin)
+    }
+
     pub fn as_ptr(&self) -> *mut u8 {
         match self {
             Self::NativeInt(i) => {
@@ -541,27 +553,9 @@ impl<'gc> StackValue<'gc> {
     }
 
     fn managed_ptr_as_ptr(pointer: &ManagedPtr<'gc>) -> *mut u8 {
-        match pointer.origin() {
-            PointerOrigin::Heap(_) => pointer
-                .observe_address()
-                .map_or(std::ptr::null_mut(), |address| address.as_ptr()),
-            #[cfg(feature = "multithreading")]
-            PointerOrigin::CrossArenaObjectRef(_) => pointer
-                .observe_address()
-                .map_or(std::ptr::null_mut(), |address| address.as_ptr()),
-            // Observation only: a frame-home byref is accessed through its frame check.
-            PointerOrigin::FrameHome(_) => pointer
-                .observe_address()
-                .map_or(std::ptr::null_mut(), |address| address.as_ptr()),
-            _ => {
-                // SAFETY: F10.RawMemoryAccessValid — a zero-length window only reads the
-                // cached address of a non-heap origin; no payload bytes are accessed. The
-                // address grants no access right: for Stack, Static and Unmanaged origins the
-                // caller supplies range and lifetime, and a Transient address does not retain
-                // its shared owner.
-                unsafe { pointer.with_data(0, |data| data.as_ptr() as *mut u8) }
-            }
-        }
+        pointer
+            .observe_address()
+            .map_or(std::ptr::null_mut(), NonNull::as_ptr)
     }
 
     pub fn try_as_i32(&self) -> Result<i32, ExecutionError> {
@@ -960,6 +954,12 @@ impl<'gc> PartialOrd for StackValue<'gc> {
             (NativeInt(l), Int32(r)) => l.partial_cmp(&(*r as isize)),
             (NativeInt(l), NativeInt(r)) => l.partial_cmp(r),
             (NativeFloat(l), NativeFloat(r)) => l.partial_cmp(r),
+            (ManagedPtr(l), ManagedPtr(r))
+                if l.origin() == r.origin()
+                    && matches!(l.pointer_offset(), PointerOffset::Managed(_)) =>
+            {
+                l.partial_cmp(r)
+            }
             (ManagedPtr(_) | UnmanagedPtr(_), ManagedPtr(_) | UnmanagedPtr(_)) => {
                 pointer_address(self).partial_cmp(&pointer_address(other))
             }
@@ -975,7 +975,7 @@ impl<'gc> PartialOrd for StackValue<'gc> {
 
 fn managed_offset_error() -> ExecutionError {
     ExecutionError::NotImplemented(
-        "managed pointer offset is unrepresentable (negative or beyond the compact offset range is not supported; overflow or null cached address is unsupported)".into(),
+        "managed pointer offset is unrepresentable (outside the compact displacement range or overflow or null cached address)".into(),
     )
 }
 
@@ -1137,7 +1137,7 @@ impl<'gc> Neg for StackValue<'gc> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pointer::FrameHomeSerial;
+    use crate::pointer::{FrameHomeSerial, PointerOrigin};
 
     #[test]
     fn test_stack_value_arithmetic() {
@@ -1198,6 +1198,38 @@ mod tests {
     }
 
     #[test]
+    fn signed_managed_pointer_arithmetic_comparison_and_difference() {
+        let mut storage = [42u8; 4];
+        let base = NonNull::new(storage.as_mut_ptr()).unwrap();
+        let ptr = ManagedPtr::new_frame_home(
+            base,
+            TypeDescription::NULL,
+            FrameHomeSerial::FIRST,
+            ByteOffset::ZERO,
+            false,
+        );
+        let origin = StackValue::ManagedPtr(ptr.into());
+        let before = (origin.clone() - StackValue::Int32(1)).unwrap();
+        assert!(before < origin);
+        assert_eq!(
+            (before.clone() - origin.clone()).unwrap(),
+            StackValue::NativeInt(-1)
+        );
+        assert_eq!(
+            (origin.clone() - before.clone()).unwrap(),
+            StackValue::NativeInt(1)
+        );
+        assert_eq!((before + StackValue::Int32(1)).unwrap(), origin);
+        let extreme = (origin.clone() + StackValue::Int32(i32::MIN)).unwrap();
+        assert!(extreme < origin);
+        assert_eq!(extreme.pointer_byte_offset(&origin), i32::MIN as isize);
+        assert_eq!(
+            origin.pointer_byte_offset(&extreme),
+            (i32::MIN as isize).wrapping_neg()
+        );
+    }
+
+    #[test]
     fn typed_reference_slot_copy_retains_type_lifetime_and_pointer_origin() {
         let type_desc = Arc::new(TypeDescription::NULL);
         let origin = PointerOrigin::FrameHome(FrameHomeSerial::new(7));
@@ -1217,8 +1249,8 @@ mod tests {
         assert_eq!(Arc::strong_count(&type_desc), 3);
         assert_eq!(slot.value().origin(), &origin);
         assert_eq!(copied.value().origin(), &origin);
-        assert_eq!(slot.value().byte_offset(), ByteOffset::new(3));
-        assert_eq!(copied.value().byte_offset(), ByteOffset::new(3));
+        assert_eq!(slot.value().byte_offset().unwrap(), ByteOffset::new(3));
+        assert_eq!(copied.value().byte_offset().unwrap(), ByteOffset::new(3));
     }
 
     #[test]

@@ -374,7 +374,7 @@ fn owner_retention_from_info_full_retains_transient_owner() {
     let info = ManagedPtrInfo {
         address: Some(base),
         origin: PointerOrigin::new_transient(obj),
-        offset: ByteOffset::new(0),
+        offset: PointerOffset::Managed(0),
     };
     assert_eq!(Arc::strong_count(&probe), 2);
     let m = ManagedPtr::from_info_full(info, TypeDescription::NULL, false);
@@ -395,7 +395,7 @@ fn owner_retention_from_info_full_transient_access_after_info_consumed() {
     let info = ManagedPtrInfo {
         address: Some(base),
         origin: PointerOrigin::new_transient(obj),
-        offset: ByteOffset::new(0),
+        offset: PointerOffset::Managed(0),
     };
     let m = ManagedPtr::from_info_full(info, TypeDescription::NULL, false);
     // SAFETY: F10.RawMemoryAccessValid — m retains the initialized one-byte
@@ -783,14 +783,14 @@ fn heap_address_observation_wraps_without_granting_read_access() {
             // Managed offsets are u32-packed, so full usize wrap is exercised on
             // the same address-formation helper rather than an unrepresentable ManagedPtr.
             assert_eq!(
-                observed_address(base, usize::MAX).map(|p| p.as_ptr().addr()),
+                observed_address(base, -1).map(|p| p.as_ptr().addr()),
                 match base.addr().wrapping_add(usize::MAX) {
                     0 => None,
                     address => Some(address),
                 }
             );
             assert_eq!(
-                observed_address(base, 0usize.wrapping_sub(base.addr())),
+                observed_address(base, (0usize.wrapping_sub(base.addr())) as isize),
                 None
             );
             assert_eq!(observed_address(std::ptr::null(), 1), None);
@@ -831,22 +831,15 @@ fn heap_access_safe_oob_address_observation() {
 }
 
 #[test]
-#[cfg(feature = "memory-validation")]
-#[should_panic(expected = "ManagedPtr::offset: bounds violation")]
 fn test_managed_ptr_offset_oob() {
     with_test_gc_context(|gc_handle| {
-        // Create a small object (4 bytes for Int32)
         let storage = HeapStorage::Str(crate::string::CLRString::from("test"));
         let obj = ObjectRef::new(gc_handle, storage);
-
         let ptr = managed_ptr_to_heap_object_start(obj);
-
-        // Offset by much more than size of ValueType should panic.
-        // SAFETY: F10.RawMemoryAccessValid — The test invokes the unsafe operation specifically to verify its
-        // runtime bounds validation rejects this out-of-bounds offset.
-        unsafe {
-            ptr.offset(1000);
-        }
+        let outside = ptr.clone().checked_offset(1000).unwrap();
+        // SAFETY: F10.RawMemoryAccessValid — the heap path rejects out-of-range windows before the callback.
+        assert!(unsafe { outside.try_with_data(1, |_| ()) }.is_none());
+        assert_eq!(outside.checked_offset(-1000).unwrap(), ptr);
     });
 }
 
@@ -916,6 +909,69 @@ fn frame_home_ptr(
     )
 }
 
+fn assert_negative_roundtrip<'gc>(ptr: ManagedPtr<'gc>, resolver: &impl ManagedPtrResolver<'gc>) {
+    let current = match ptr.pointer_offset() {
+        PointerOffset::Managed(d) => d,
+        _ => panic!("managed origin required"),
+    };
+    let negative = ptr.clone().checked_offset(-(current as isize) - 1).unwrap();
+    let expected = negative.observe_address().unwrap();
+    let mut bytes = ManagedPtr::serialization_buffer();
+    negative.write(&mut bytes);
+    let word1 = usize::from_ne_bytes(
+        bytes[ObjectRef::SIZE..ObjectRef::SIZE * 2]
+            .try_into()
+            .unwrap(),
+    );
+    assert_eq!(word1 as u32, u32::MAX);
+    // SAFETY: F10.RawMemoryAccessValid — the complete encoding was just written; the owner remains live.
+    let decoded = unsafe { ManagedPtr::read_resolved_unchecked(&bytes, resolver) }.unwrap();
+    assert_eq!(decoded.offset, PointerOffset::Managed(-1));
+    assert_eq!(decoded.address, Some(expected));
+    let recovered = ManagedPtr::from_info_full(decoded, TypeDescription::NULL, false);
+    assert!(recovered.byte_offset().is_err());
+    assert_eq!(recovered.checked_offset(current as isize + 1).unwrap(), ptr);
+}
+
+#[test]
+fn signed_frame_home_serialization_and_bounds() {
+    let mut block = [42u8; 8];
+    let base = NonNull::new(block.as_mut_ptr()).unwrap();
+    let serial = FrameHomeSerial::new(0x1234_5678_9abc_def0);
+    let ptr = frame_home_ptr(base, serial, 0);
+    let resolver = FrameHomeResolver {
+        serial,
+        base,
+        len: block.len(),
+    };
+    assert_eq!(ManagedPtr::SIZE, ObjectRef::SIZE * 3);
+    assert_negative_roundtrip(ptr.clone(), &resolver);
+    let negative = ptr.clone().checked_offset(-1).unwrap();
+    let retained = negative.with_origin(PointerOrigin::FrameHome(serial));
+    assert_eq!(retained.pointer_offset(), PointerOffset::Managed(-1));
+    assert_eq!(retained.checked_offset(1).unwrap(), ptr);
+    // SAFETY: F10.FrameHomeChecked — the resolver checks the live frame and range before forming a slice.
+    assert!(unsafe { negative.with_frame_home_data(&resolver, 1, |_| ()) }.is_err());
+    let min = ptr.clone().checked_offset(i32::MIN as isize).unwrap();
+    assert_eq!(min.pointer_offset(), PointerOffset::Managed(i32::MIN));
+    let mut encoded_min = ManagedPtr::serialization_buffer();
+    min.write(&mut encoded_min);
+    let word1 = usize::from_ne_bytes(
+        encoded_min[ObjectRef::SIZE..ObjectRef::SIZE * 2]
+            .try_into()
+            .unwrap(),
+    );
+    assert_eq!(word1 as u32, 0x8000_0000);
+    // SAFETY: F10.RawMemoryAccessValid — the frame pointer encoding was just written and the block is live.
+    let decoded_min =
+        unsafe { ManagedPtr::read_resolved_unchecked(&encoded_min, &resolver) }.unwrap();
+    assert_eq!(decoded_min.offset, PointerOffset::Managed(i32::MIN));
+    assert!(min.checked_offset(-1).is_err());
+    let max = ptr.checked_offset(i32::MAX as isize).unwrap();
+    assert_eq!(max.pointer_offset(), PointerOffset::Managed(i32::MAX));
+    assert!(max.checked_offset(1).is_err());
+}
+
 #[test]
 fn frame_home_pointer_round_trips_serial_and_offset() {
     let mut block = [0u8; 32];
@@ -929,7 +985,7 @@ fn frame_home_pointer_round_trips_serial_and_offset() {
     // SAFETY: F10.RawMemoryAccessValid — `buffer` holds the complete encoding written above.
     let metadata = unsafe { ManagedPtr::read_metadata_unchecked(&buffer) }.expect("metadata");
     assert_eq!(metadata.origin, PointerOrigin::FrameHome(serial));
-    assert_eq!(metadata.offset, ByteOffset::new(12));
+    assert_eq!(metadata.offset, PointerOffset::Managed(12));
     assert_eq!(metadata.address, None);
 
     let resolver = FrameHomeResolver {
@@ -1110,7 +1166,10 @@ fn test_managed_ptr_serialization_roundtrip() {
             NonNull::new(std::ptr::without_provenance_mut(unmanaged_addr))
         );
         assert_eq!(info.origin, PointerOrigin::Unmanaged);
-        assert_eq!(info.offset.as_usize(), unmanaged_addr);
+        assert_eq!(
+            info.offset.checked_byte_offset().unwrap().as_usize(),
+            unmanaged_addr
+        );
 
         // 3. Heap
         let s = crate::string::CLRString::from("test");
@@ -1124,12 +1183,19 @@ fn test_managed_ptr_serialization_roundtrip() {
             false,
             Some(ByteOffset::new(offset)),
         );
+        assert_negative_roundtrip(ptr_heap.clone(), &NO_MANAGED_BASES);
+        let negative_heap = ptr_heap.clone().checked_offset(-3).unwrap();
+        // SAFETY: F10.RawMemoryAccessValid — `try_with_data` checks the managed range before invoking the callback.
+        assert!(unsafe { negative_heap.try_with_data(1, |_| ()) }.is_none());
         ptr_heap.write(&mut buf);
         // SAFETY: F6.NoEscapeAcrossArena — Heap decoding gets its base from the branded ObjectRef handle.
         let info = unsafe { ManagedPtr::read_resolved_unchecked(&buf, &NO_MANAGED_BASES) }.unwrap();
         assert_eq!(info.address, ptr);
         assert_eq!(info.origin, PointerOrigin::Heap(obj));
-        assert_eq!(info.offset.as_usize(), offset);
+        assert_eq!(
+            info.offset.checked_byte_offset().unwrap().as_usize(),
+            offset
+        );
         // SAFETY: F6.NoEscapeAcrossArena — `info.address` was resolved from the
         // live Heap handle recovered from `buf`, and the offset selects the
         // second UTF-16 code unit in the rooted string.
@@ -1150,6 +1216,12 @@ fn test_managed_ptr_serialization_roundtrip() {
             generics,
             false,
             ByteOffset::new(static_offset),
+        );
+        assert_negative_roundtrip(
+            ptr_static.clone(),
+            &TestManagedPtrResolver {
+                static_base: Some(static_base),
+            },
         );
         ptr_static.write(&mut buf);
         let word1 = usize::from_ne_bytes(buf[8..16].try_into().unwrap());
@@ -1175,7 +1247,10 @@ fn test_managed_ptr_serialization_roundtrip() {
         }
         .unwrap();
         assert_eq!(info.address, static_addr);
-        assert_eq!(info.offset.as_usize(), static_offset);
+        assert_eq!(
+            info.offset.checked_byte_offset().unwrap().as_usize(),
+            static_offset
+        );
 
         // 5. CrossArenaObjectRef (if enabled)
         #[cfg(feature = "multithreading")]
@@ -1205,6 +1280,7 @@ fn test_managed_ptr_serialization_roundtrip() {
             };
             drop(lease);
 
+            assert_negative_roundtrip(ptr_cross.clone(), &NO_MANAGED_BASES);
             ptr_cross.write(&mut buf);
             // SAFETY: F1.GcHandleRooted — CrossArena decoding obtains its base while holding the encoded arena lease.
             let info =
@@ -1217,7 +1293,10 @@ fn test_managed_ptr_serialization_roundtrip() {
             } else {
                 panic!("Expected CrossArenaObjectRef, got {:?}", info.origin);
             }
-            assert_eq!(info.offset.as_usize(), cross_offset);
+            assert_eq!(
+                info.offset.checked_byte_offset().unwrap().as_usize(),
+                cross_offset
+            );
         }
     });
 }
@@ -1383,7 +1462,7 @@ fn test_managed_ptr_unmanaged_roundtrip_miri() {
         NonNull::new(std::ptr::without_provenance_mut(addr))
     );
     assert_eq!(info.origin, PointerOrigin::Unmanaged);
-    assert_eq!(info.offset.as_usize(), addr);
+    assert_eq!(info.offset.checked_byte_offset().unwrap().as_usize(), addr);
 }
 
 #[test]
@@ -1402,13 +1481,13 @@ fn ptr_arith_managed_ptr_checked_offset_reports_errors() {
     )
     .with_origin(PointerOrigin::FrameHome(FrameHomeSerial::new(1)));
 
-    assert_eq!(
-        ptr.clone().checked_offset(-4).err(),
-        Some(ManagedPtrOffsetError::NegativeResult)
-    );
+    let before = ptr.clone().checked_offset(-4).unwrap();
+    assert_eq!(before.pointer_offset(), PointerOffset::Managed(-1));
+    assert!(before.byte_offset().is_err());
+    assert_eq!(before.checked_offset(4).unwrap(), ptr);
     assert_eq!(
         ptr.clone().checked_offset(isize::MIN).err(),
-        Some(ManagedPtrOffsetError::NegativeResult)
+        Some(ManagedPtrOffsetError::CompactRangeExceeded)
     );
     #[cfg(target_pointer_width = "64")]
     assert_eq!(
@@ -1417,11 +1496,8 @@ fn ptr_arith_managed_ptr_checked_offset_reports_errors() {
     );
     #[cfg(target_pointer_width = "32")]
     assert_eq!(
-        ptr.clone()
-            .checked_offset(isize::MAX)
-            .unwrap()
-            .byte_offset(),
-        ByteOffset::new(isize::MAX as usize + 3)
+        ptr.clone().checked_offset(isize::MAX).err(),
+        Some(ManagedPtrOffsetError::CompactRangeExceeded)
     );
     #[cfg(target_pointer_width = "64")]
     assert_eq!(
@@ -1429,7 +1505,7 @@ fn ptr_arith_managed_ptr_checked_offset_reports_errors() {
         Some(ManagedPtrOffsetError::CompactRangeExceeded)
     );
     let displaced = ptr.checked_offset(2).unwrap();
-    assert_eq!(displaced.byte_offset(), ByteOffset::new(5));
+    assert_eq!(displaced.byte_offset().unwrap(), ByteOffset::new(5));
     assert_eq!(
         displaced.observe_address().unwrap().as_ptr(),
         base.wrapping_add(5)
@@ -1464,7 +1540,7 @@ fn ptr_arith_managed_ptr_checked_offset_reports_errors() {
     let zero_delta = (address.as_ptr().addr() as isize).wrapping_neg();
     let null = unmanaged.checked_offset(zero_delta).unwrap();
     assert!(null.is_null());
-    assert_eq!(null.byte_offset(), ByteOffset::ZERO);
+    assert_eq!(null.byte_offset().unwrap(), ByteOffset::ZERO);
     assert!(matches!(null.origin(), PointerOrigin::Unmanaged));
     assert!(null.observe_address().is_none());
     assert!(null.clone().checked_offset(0).unwrap().is_null());
@@ -1492,12 +1568,16 @@ fn ptr_arith_managed_ptr_checked_offset_reports_errors() {
         TypeDescription::NULL,
         None,
         false,
-        Some(ByteOffset::new(u32::MAX as usize)),
+        Some(ByteOffset::new(i32::MAX as usize)),
     )
     .with_origin(PointerOrigin::FrameHome(FrameHomeSerial::new(1)));
     assert_eq!(
-        far.clone().checked_offset(-1).unwrap().byte_offset(),
-        ByteOffset::new(u32::MAX as usize - 1)
+        far.clone()
+            .checked_offset(-1)
+            .unwrap()
+            .byte_offset()
+            .unwrap(),
+        ByteOffset::new(i32::MAX as usize - 1)
     );
     assert_eq!(
         far.checked_offset(1).err(),
@@ -1862,8 +1942,7 @@ fn ptr_arith_managed_ptr_far_oob_compare_and_difference() {
             false,
             Some(ByteOffset::new(0)),
         );
-        // Construct logical far offsets directly: memory-validation's diagnostic
-        // guard is intentionally exercised only by the later arithmetic test.
+        // Construct logical far offsets without accessing them.
         let far = ManagedPtr::new(
             None,
             TypeDescription::NULL,
@@ -1871,12 +1950,12 @@ fn ptr_arith_managed_ptr_far_oob_compare_and_difference() {
             false,
             Some(ByteOffset::new(4096)),
         );
-        let far_u32_max = ManagedPtr::new(
+        let far_i32_max = ManagedPtr::new(
             None,
             TypeDescription::NULL,
             Some(owner),
             false,
-            Some(ByteOffset::new(u32::MAX as usize)),
+            Some(ByteOffset::new(i32::MAX as usize)),
         );
 
         let near_value = crate::StackValue::ManagedPtr(near.clone().into());
@@ -1904,10 +1983,10 @@ fn ptr_arith_managed_ptr_far_oob_compare_and_difference() {
             Some(std::cmp::Ordering::Greater)
         );
 
-        let observed_max = far_u32_max
+        let observed_max = far_i32_max
             .observe_address()
-            .expect("observed u32::MAX address");
-        let far_max_value = crate::StackValue::ManagedPtr(far_u32_max.into());
+            .expect("observed i32::MAX address");
+        let far_max_value = crate::StackValue::ManagedPtr(far_i32_max.into());
         assert_eq!(
             far_max_value,
             crate::StackValue::NativeInt(observed_max.addr().get() as isize)
@@ -1951,10 +2030,6 @@ fn ptr_arith_managed_ptr_far_oob_compare_and_difference() {
 }
 
 #[test]
-#[cfg_attr(
-    feature = "memory-validation",
-    ignore = "managed-pointer arithmetic deliberately forms an out-of-bounds managed address; memory-validation's debug bound trap rejects it by design"
-)]
 fn ptr_arith_managed_ptr_arithmetic_boundaries_report_explicit_errors() {
     with_test_gc_context(|gc_handle| {
         let vector = Vector::new(
@@ -1977,33 +2052,24 @@ fn ptr_arith_managed_ptr_arithmetic_boundaries_report_explicit_errors() {
         let value = crate::StackValue::ManagedPtr(near.clone().into());
 
         let errors = [
-            value.clone() + crate::StackValue::Int32(-1),
-            crate::StackValue::Int32(i32::MIN) + value.clone(),
-            value.clone() - crate::StackValue::NativeInt(1),
             value.clone() + crate::StackValue::NativeInt(isize::MIN),
             value.clone() - crate::StackValue::NativeInt(isize::MIN),
-            value.clone() - crate::StackValue::Int32(1),
-            value.clone() - crate::StackValue::Int64(1),
             value.clone() - crate::StackValue::Int64(i64::MIN),
         ];
         for result in errors {
             let Err(dotnet_types::error::ExecutionError::NotImplemented(message)) = result else {
                 panic!("expected an explicit managed-offset NotImplemented error");
             };
-            assert!(
-                message.contains("negative")
-                    && message.contains("compact")
-                    && message.contains("not supported")
-            );
+            assert!(message.contains("compact"));
         }
 
-        if let Ok(max) = isize::try_from(u32::MAX) {
+        if let Ok(max) = isize::try_from(i32::MAX) {
             let far = (crate::StackValue::NativeInt(max) + value.clone()).unwrap();
             assert!(matches!(
                 far.clone() + crate::StackValue::Int32(1),
                 Err(dotnet_types::error::ExecutionError::NotImplemented(_))
             ));
-            let restored = (far - crate::StackValue::Int64(i64::from(u32::MAX))).unwrap();
+            let restored = (far - crate::StackValue::Int64(i64::from(i32::MAX))).unwrap();
             let crate::StackValue::ManagedPtr(restored) = restored else {
                 panic!("managed-pointer arithmetic changed the StackValue variant");
             };
