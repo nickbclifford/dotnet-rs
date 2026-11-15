@@ -1,55 +1,31 @@
 # Runtime behavior gaps: static field reflection, Math FCalls, Array.Fill, Span.CopyTo, signed byref offsets and generic arity
 
-**Status:** Not started
-**Outcome:** Differential fixtures for static `FieldInfo.GetValue`/`SetValue`, the extern `Math`
-methods, `Array.Fill`, overlapping `Span<T>.CopyTo`, negative `Unsafe.Add`/`Unsafe.Subtract` and
-leaked-generics calls all match `dotnet`. The buffered-stdout entry is either reproduced and
-fixed or closed with its repro fixture as evidence.
+**Status:** Complete
+**Outcome:** The enabled differential fixtures for static `FieldInfo.GetValue`/`SetValue`, bodiless
+Math/MathF methods, `Array.Fill`, overlapping `Span<T>.CopyTo`, signed byref offsets and generic
+context match `dotnet` in both base feature sets. The buffered-stdout report is closed with its
+pipe/file repro evidence.
 
 Closes these README "Not yet planned" entries: **Static field reflection**, **Support
-`Span<T>.CopyTo` is a per-element loop**, **Negative and wide managed-pointer offsets**, and every
-sub-bullet of **Other missing or incorrect runtime behavior** (buffered stdout, extern
-`System.Math`, `Array.Fill<T>`, generic-arity checks). The access violation in
+`Span<T>.CopyTo` is a per-element loop**, the negative-offset portion of **Negative and wide
+managed-pointer offsets**, and every sub-bullet of **Other missing or incorrect runtime behavior**
+(buffered stdout, extern `System.Math`, `Array.Fill<T>`, generic-arity checks). The positive compact
+range limit remains documented. The access violation in
 `RuntimeType.GetNativeTypeHandle` is only reached through `DynamicMethod`, so
 [plan 24](24-reflection-emit-investigation.md) covers it.
 
-## Problem
+## Resolved behavior
 
-- **Static field reflection.** `DotnetRs.FieldInfo.GetValue`
-  (`crates/dotnet-intrinsics-reflection/src/fields.rs`, around line 230) pushes null for a static
-  non-literal field. `SetValue` (around line 338) throws `NotImplementedException`. The CLR reads
-  and writes the static storage, runs the type initializer first if it hasn't run, and throws
-  `FieldAccessException` from `SetValue` on a static `initonly` field once the type is initialized.
-  `AttributeCollection.GetDefaultAttribute` currently relies on the null. Plan 21 slice 4's
-  pointer-slot fixture covers instance pointer fields only for this reason.
-- **Extern `System.Math`.** `crates/dotnet-intrinsics-core/src/math.rs` registers only `Abs`,
-  `Min`, `Max`, `Pow` and `Sqrt` (some overloads). Every other `Math` or `MathF` method that is an
-  FCall with no IL body (`Ceiling`, `Floor`, `Round(double)`, `Truncate`, `Sin`, `Cos`, `Tan`,
-  `Atan2`, `Exp`, `Log`, `Log10`, `Cbrt`, `FusedMultiplyAdd`, …) fails with "no body in executing
-  method" (`call_ops_impl.rs`). `Stopwatch.Elapsed.TotalMilliseconds` reaches `Math.Round`'s
-  callees.
-- **`Array.Fill<T>`.** The support `DotnetRs.Array`
-  (`crates/dotnet-assemblies/src/support/Array.cs`) replaces `System.Array` and has no `Fill`
-  overloads, so callers get `MethodNotFound`.
-- **`Span<T>.CopyTo`.** `Span<T>.CopyTo` and `ReadOnlySpan<T>.CopyTo` (`support/Span.cs` lines
-  87 and 229) copy one element at a time in interpreted IL and always go forward. That is slow
-  for large spans, and when the spans overlap with the destination after the source, it smears
-  the source. The CLR's `Buffer.Memmove` handles overlap. `TryCopyTo` shares the bug if it is
-  implemented the same way.
-- **Signed managed-pointer offsets.** `ManagedPtr` stores a compact unsigned offset, so
-  `StackValue` arithmetic (`managed_offset` in `crates/dotnet-value/src/stack_value.rs`) returns
-  `NotImplemented` for any byref below its base, even transiently (`Unsafe.Subtract`,
-  `Unsafe.Add(ref r, -1)`, `ref Unsafe.Add(ref r, i - 1)` loops). CoreLib's span helpers use these
-  patterns.
-- **Generic arity.** Intrinsics that read method generics use `MethodDescription::own_method_arg`,
-  except `Activator.CreateInstance<T>` (`native_effects.rs` around line 800, which reads
-  `entry_generics.cloned_method_arg(0)`). Intrinsics that read *type* generics
-  (`Span<T>.get_Item`, `EqualityComparer<T>.Default`, …) are not checked against the declaring
-  type's arity. Constrained calls and effect resumption have not been audited for caller generics
-  leaking into callees. Commits 31f94e72 and 0e971baa fixed the two instances found so far.
-- **Buffered stdout on internal-error exit.** Reported but never reproduced. The VM has no stdout
-  buffer of its own (`Console` writes go to `write(2)` through the native shim, and the CLI flushes
-  on every exit path).
+The tracked runtime gaps are implemented and exercised by enabled CLR differential fixtures.
+Static field reflection uses the declaring type's initialized static storage; Math and MathF
+handlers cover the loaded CoreLib's bodiless methods; both `Array.Fill<T>` overloads are present;
+span copies handle overlap with `Memmove` for reference-free elements and direction-aware typed
+stores for reference-containing elements. Managed-pointer arithmetic carries signed compact
+displacements, and generic readers validate callee-owned type and method slots while constrained
+calls and resumed native effects preserve the target context. The stdout repro confirms guest
+bytes survive the internal-error exit path without a flush change. The enabled fixtures and their
+verification are recorded below; the compatibility surface and its limits are summarized in
+[`COMPATIBILITY.md`](../COMPATIBILITY.md).
 
 ## Scope
 
@@ -130,14 +106,100 @@ the full `dotnet-cli` + `dotnet-vm` matrix (`cargo run -p xtask -- matrix test-f
 5. **Generic arity.** Make the `CreateInstance<T>` fix, add `own_type_arg` and migrate callers,
    audit constrained calls and effect resumption, and add a fixture per path. Record the audit
    result (paths checked, fixes) in this plan.
+   **Audit record.** `call_constrained` resolves the implementation on every dispatch using a
+   metadata-only static-constrained cache, then builds the implementation's type lookup from the
+   closed constraint (or the declaring interface lookup for a default body), retaining method
+   arguments. `resolve_static_constrained_method_uncached` resolves MethodImpls in the constraint
+   context and compares declaration and candidate signatures in their respective contexts.
+   `callvirt_constrained` uses separate declaration and constraint lookups for direct value
+   methods, boxes when necessary, and resolves reference and boxed receivers virtually; its final
+   lookup follows the selected declaring type, including inherited generic bases. The virtual
+   resolver's `method_for_lookup`, ancestor substitution,
+   MethodImpl and cached paths were checked alongside these routes.
+
+   `start_native_inner` retains the entry descriptor, lookup and roots in `NativeActivation`;
+   `advance_native_effect_once`, `dispatch_pending_native_call`, `deliver_native_return` and
+   `deliver_native_exception` construct regions from that activation, not the child frame.
+   `VmEffects::call`/`try_call` and `ensure_initialized` carry the requested child lookup and
+   generation through call, capture, initializer completion and wait/retry. Reflection's
+   `Adapter::reflection_call` resolves virtual targets with receiver type arguments before
+   rebinding to the selected declaring method. Reflection target-context construction is distinct
+   from callee-slot reads: its arity-limited enumeration and signature/declaring-type construction are
+   not intrinsic reads of the entry callee's generic slots.
+
+   Enabled differential fixtures `constrained_context_42` and `resumed_intrinsic_context_42`
+   cover nested interface instantiations, explicit and implicit static methods, default bodies,
+   direct values, boxing and inherited reference methods, managed constructor and virtual child
+   calls, collection, initializer completion and exception capture. Repeated calls exercise cache
+   hits. `static_dispatch_uses_target_type_and_preserves_method_arguments` and
+   `resumed_native_reflection_rejects_surplus_lookup_after_child` supply synthetic surplus entries;
+   the latter crosses a managed child, collection and yield before checking entry arity.
+
+   **Verification:** The fixture build passed (NuGet vulnerability-feed warning). All four generic
+   differential registrations passed in both base configurations; the constrained fixture also
+   passed with the static cache disabled and with cache shadow checking enabled in both. The
+   types/resolver/VM suites passed 287 tests without features and 418 with multithreading, five
+   skipped in each, including both surplus controls and `byte_memmove_ignores_leaked_method_generics`.
+   Both workspace clippy configurations and doc drift (59 checks) passed. The CLI/VM nextest matrix
+   actually ran all ten configurations in xtask order: 687/57 skipped, 942/6, 687/57, 942/6,
+   688/56, 687/57, 687/57, 942/6, 943/5 and 514/106. Fuzzing excludes differential subprocess
+   tests; the separate base differential runs above provide that evidence.
 6. **Static field reflection.** Implement `GetValue`/`SetValue` for statics, with
    type-initializer triggering and the `initonly` check. Add a `reflection_static_fields_42`
    fixture: primitive, struct, reference, pointer static, cctor side-effect ordering and the
    `initonly` exception. Extend plan 21's pointer-slot fixture to cover static pointer fields.
    Rerun the Newtonsoft and EF host rungs, because `AttributeCollection` defaults change behavior.
 7. **Buffered stdout.** Add the repro fixture, then fix the flush path or close the entry.
-8. **Docs.** Remove the closed README entries, update `docs/COMPATIBILITY.md` where it lists any of
-   these as unsupported, and mark this plan complete.
+
+   **Verification:** The rebuilt fixture has several writes and a final fragment without a
+   newline. `stdout_before_internal_error_matches_dotnet` compares its exact output and exit
+   status against the CLR. The debug-only `DOTNET_RS_DEBUG_TEST_POST_EXECUTION_ERROR` hook
+   replaces only a successful executor result at the CLI result/error boundary (no stable natural
+   post-write VM-error trigger was found). The enabled
+   `stdout_is_preserved_on_internal_error_exit_with_pipe_and_file_capture` subprocess test runs
+   that fixture through a draining pipe and direct file redirection. Both captures contain every
+   expected byte; stderr is the `Internal VM error` diagnostic and the process exits with status
+   1. The hook is absent from release builds and inactive unless the explicit test variable is
+   set. No flush change was needed: writes survive executor shutdown and the existing `exit_fast`
+   path. The injected failure runs deliberately do not compare the CLR's successful exit result
+   with the VM's injected failure exit.
+
+   The fixture build passed (NU1900 vulnerability-feed warning only). The generated fixture, normal
+   differential test and pipe/file subprocess regression passed 3/3 in both base configurations.
+   Both workspace clippy configurations, doc drift (59 checks), formatting, `git diff --check`,
+   and the release CLI check passed. The xtask matrix printed all ten configurations and every
+   CLI/VM nextest run completed successfully. Fuzzing intentionally omits the differential and
+   injected subprocess tests; its generated Console fixture is explicitly ignored because that
+   mode denies the native calls used by console output.
+8. **Docs (complete).** Removed the closed entries from the plans README while retaining the
+   positive compact-offset limit, the Reflection.Emit/`RuntimeType.GetNativeTypeHandle` item, and
+   bulk-operation barrier work. Updated `docs/COMPATIBILITY.md` with the validated surface and
+   remaining limits, cited the stdout differential and pipe/file repro tests, and reconciled the
+   directly affected pointer-slot and memory-safety records.
+
+## Completion evidence
+
+- Rebuilt the C# fixtures successfully with `cargo run -p xtask -- fixtures build`; the build
+  reported only the existing NU1900 vulnerability-feed warning. With
+  `DOTNET_USE_PREBUILT_FIXTURES=1`, the enabled plan fixtures passed as real CLR differential
+  comparisons: 14 tests in no-default-features and 15 with multithreading, including the stdout
+  pipe/file subprocess assertions and the thread-static field fixture where enabled.
+- `math_and_mathf_bodiless_methods_have_intrinsic_handlers` passed 1/1 in each base configuration.
+  The generic-reader audit found raw `GenericLookup::method_arg`/`type_arg` access only inside the
+  checked `MethodDescription` accessors and their tests; intrinsic callee-slot readers use
+  `own_method_arg`/`own_type_arg`. Direct generic-vector inspection in reflection and dispatch
+  constructs or substitutes a separate target lookup, as described in the slice 5 audit record.
+- Fresh-CLI Newtonsoft and clean EF InMemory host rungs matched `dotnet` in both configurations
+  (four host comparisons passed).
+- Both workspace clippy configurations passed. `scripts/check_doc_drift.sh` passed all 59 checks;
+  rustdoc broken-intra-link lint passed (it reports an unrelated existing private-intra-doc-link
+  warning in `managed_ptr_decode_cache.rs`).
+- The full CLI/VM matrix was executed with freshly rebuilt prebuilt fixtures in all ten printed
+  configurations: no features (691 passed, 57 skipped); multithreading (947/6); simd (691/57);
+  multithreading+simd (947/6); generic-constraint-validation (692/56); memory-validation (691/57);
+  metadata-validation (691/57); multithreading+memory-validation (947/6);
+  multithreading+validation-all (948/5); fuzzing (514/107). Every run passed. Fuzzing excludes
+  differential subprocess tests; the explicit base runs above provide that evidence.
 
 ## Done when
 

@@ -253,6 +253,14 @@ VM-specific extensions (all `Vm`-prefixed) that add resolver, shared state, and 
 - `VmExceptionContext` / `VmPInvokeContext` (VM-side extensions of `ExceptionContext` / `PInvokeContext`)
 - `VesOps`: The unified trait combining `PInvokeContext + VmStackOps + VmRawMemoryOps + VmResolutionOps + VmReflectionOps + VmLoaderOps + VmStaticsOps + ThreadOps + VmCallOps` plus the composite host traits defined by the `dotnet-intrinsics-*` crates. These crate-level composites—such as `SpanIntrinsicHost`, `ThreadingIntrinsicHost`, `ReflectionIntrinsicHost`, and `UnsafeIntrinsicHost`—are the names bound directly in `VesOps`; the corresponding `*BaseOps` aliases remain in `dotnet-vm-ops`. `VesOps` is the primary generic bound for instruction handlers.
 
+Intrinsic handlers read a callee's generic slots through `MethodDescription::own_method_arg`
+and `MethodDescription::own_type_arg`, which check the declaring metadata arity before consulting
+the call lookup. Native activations retain the entry method with its lookup across polling. In
+reflection, lookups for a separately reflected target and runtime object type arguments describe
+that target rather than the intrinsic entry; target method slots are checked against the target's
+own descriptor. Constructing, substituting or iterating a target type's arguments is distinct from
+reading an intrinsic callee slot.
+
 ### Usage Pattern
 ```rust
 pub fn handle_instruction<'gc, T: VesOps<'gc>>(

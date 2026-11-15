@@ -99,9 +99,9 @@ Out:
    in slice 2, so the full matrix requirement remains open.
 4. **Pointer-slot writes (implemented).** Write a `pointers/pointer_slot_writes_42.cs` diff fixture: reflection
    `FieldInfo.SetValue`/`GetValue` on instance pointer fields via
-   `System.Reflection.Pointer.Box` (static reflection field access is unimplemented and tracked in
-   the README's "Not yet planned" list), `stobj` of a pointer, pointer-element arrays, a struct with
-   pointer fields stored through `stobj`, and boxed `IntPtr`/`UIntPtr` round trips. Fix whatever
+   `System.Reflection.Pointer.Box`, `stobj` of a pointer, pointer-element arrays, a struct with
+   pointer fields stored through `stobj`, and boxed `IntPtr`/`UIntPtr` round trips. Static pointer
+   fields are covered by `pointer_static_fields_match_dotnet`. Fix whatever
    it exposes by making each caller choose the native-word encoding from the destination type.
    Then make `CTSValue::write`'s pointer arm exhaustive as described in Design. C# cannot
    express `stobj` of a pointer, so `pointer_stobj_writes_native_word` exercises that IL directly.

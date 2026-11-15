@@ -21,7 +21,7 @@ soundness proof. Native benchmark numbers are performance measurements, not Miri
 
 The pre-repair Miri baseline covered p10, p13, p14, p16 and p20 in no-features and multithreading. All ten separate runs were classified **miri-ub** (exit 1): Miri reported a dangling, out-of-allocation `&[u8]` in `ManagedPtr::with_data`; the caller was the `conv.u` handler for p10/p13/p20 and `StackValue::as_ptr` for p14/p16. No-features wall times were 268/233/236/241/245 seconds, respectively; multithreading times were 243/277/258/259/244 seconds. The source commits were `775886fc7554f9d5b58014f2b3db30c2e17d1982` (no-features) and `9524740e01953416a5d68eeee377eb18c9f51851` (multithreading; intervening changes were tracking-only). The full per-probe table is in [INVENTORY.md](INVENTORY.md#pre-repair-baseline-steps-1112).
 
-After the heap repairs, all five probes passed their individual diagnostics in both configurations. They were promoted as blocking controls without changing their VM probe bodies, IL or assertions (p10=7, p13=1, p14/p16=`0x01010101`, p20=7). The p13 test is ignored under `memory-validation` because that feature's bounds trap rejects its deliberate 4096-byte managed offset; the Miri control lane does not enable memory-validation. The separate far-OOB `conv.u8` regression is ignored under the same feature for the same reason; it passed pinned Miri in both configurations without that feature.
+After the heap repairs, all five probes passed their individual diagnostics in both configurations. They were promoted as blocking controls without changing their VM probe bodies, IL or assertions (p10=7, p13=1, p14/p16=`0x01010101`, p20=7). At that stage p13 and the separate far-OOB `conv.u8` regression were ignored under `memory-validation` because its formation-time diagnostic rejected their managed offsets; both ran in the Miri control lane without that feature.
 
 Three library regressions in `crates/dotnet-value/src/pointer/tests.rs` passed individually in both feature configurations, each with 1 passed/0 failed/0 ignored:
 
@@ -52,7 +52,7 @@ At M1b completion the catalog contained **31 entries: 24 controls and 7 diagnost
 | 11 | p25, p26 |
 | 12 | p27, p28 |
 
-The eight `dotnet-value` `pointer::tests::ptr_arith_` regressions passed natively and under pinned Miri in both configurations (8 passed, 0 failed, 0 ignored per run). With `memory-validation`, 7 passed and 1 was ignored because that feature's bounds trap rejects its deliberate out-of-bounds offset.
+The eight `dotnet-value` `pointer::tests::ptr_arith_` regressions passed natively and under pinned Miri in both configurations (8 passed, 0 failed, 0 ignored per run). At that stage, `memory-validation` passed 7 and ignored 1 because the formation-time diagnostic rejected its deliberate out-of-bounds offset.
 
 Shard 12's fresh-pointer `stind.i` controls were run using `bash scripts/pointer_provenance.sh controls --configuration CFG --shard 12`: p27 passed in 296 s (no-features) and 348 s (multithreading); p28 passed in 302 s and 321 s, respectively. These are per-probe times in the filtered Miri lane, not native timings. Details are in the [inventory](INVENTORY.md#m1b-phase-6-control-outcome-comparison-2026-10-29).
 

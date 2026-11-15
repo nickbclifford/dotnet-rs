@@ -21,6 +21,21 @@ The `// SAFETY:` predicates this subsystem relies on are stated in the
 `F1.GcHandleRooted`, `F5.TracesEveryGcRef`,
 `F6.NoEscapeAcrossArena` and `F9.MetadataArenaOutlivesDescriptors`.
 
+## Managed pointer displacement and access
+
+`ManagedPtr` stores managed displacements as signed 32-bit two's-complement byte offsets
+from their origin, with a maximum positive displacement of `i32::MAX`. Unmanaged addresses
+retain native width. The three-word serialization keeps its existing tags, origin handles,
+serials, registration tokens, mirrors and checksum; the offset bits contain the two's-complement
+displacement. Address observation uses wrapping arithmetic and retains no access permission.
+A negative displacement may be formed and carried while a byref is transiently below its origin.
+`ManagedPtr::checked_byte_offset` rejects it when an operation needs an unsigned access index.
+VM origin-aware managed accesses check the complete range against the live owner, so forming a
+byref does not authorize an out-of-range dereference; frame-home access uses
+`frame_home_window`. Native descriptors reconstruct only an observed address and revalidate the
+owner and range on access. Unchecked non-heap helpers retain their documented caller-supplied
+range and lifetime contract.
+
 ## Managed pointer placement
 
 ECMA-335 §II.14.4.2 and §III.1.1.5.2 separate where a managed pointer (byref) may *point* from

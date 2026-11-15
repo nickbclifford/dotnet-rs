@@ -10,7 +10,7 @@ In priority order. Each plan's own `Status:` line is the only record of its stat
 
 | ID | Plan | Note |
 |---|---|---|
-| 23 | [Runtime behavior gaps: static field reflection, Math FCalls, Array.Fill, Span.CopyTo, signed byref offsets and generic arity](23-runtime-behavior-gaps.md) | Not started |
+| 23 | [Runtime behavior gaps: static field reflection, Math FCalls, Array.Fill, Span.CopyTo, signed byref offsets and generic arity](23-runtime-behavior-gaps.md) | Validated runtime surface and remaining limits are recorded in the plan |
 | 24 | [Investigate Reflection.Emit and `DynamicMethod`](24-reflection-emit-investigation.md) | Not started; ends in a decision and a follow-up plan or a switch-level answer |
 | 21 | [Correctness backlog: byte-read bounds, pointer slots, feature forwarding, thread IDs and the timer flake](21-correctness-backlog.md) | Complete |
 | 22 | [String interning](22-string-interning.md) | Complete; literal, empty and explicit interning identity across threads |
@@ -46,10 +46,6 @@ lists the entries it closes.
 Evidence and IDs (p01…, R01…) are defined in the
 [pointer-provenance inventory](../pointer-provenance/INVENTORY.md).
 
-- **Static field reflection:** `DotnetRs.FieldInfo.SetValue` throws `NotImplementedException` for
-  static fields and `GetValue` returns null (`crates/dotnet-intrinsics-reflection/src/fields.rs`).
-  Needs static storage lookup, type-initializer triggering and access checks; surfaced by plan 21
-  slice 4's pointer-slot fixture, which therefore covers instance pointer fields only.
 - **Warm managed resource lookup cost:** after plan 15 removed the `SR` resource-string
   intrinsic, `exception_messages` went from about 3.4 ms to about 121 ms; accepted for
   CLR-matching messages (no VM-side decoder). Serving manifest resources as an
@@ -88,15 +84,15 @@ Evidence and IDs (p01…, R01…) are defined in the
   its measured valid-small fast path ([plan 13](13-async-intrinsic-api.md#substring-fast-path-measurement)).
 - **Single-threaded finalizer identity:** without `multithreading`, finalizers run on the
   interrupted managed context and share its thread identity, including monitor and initializer ownership.
-- **Negative and wide managed-pointer offsets:** `ManagedPtr` stores a compact unsigned offset,
-  so byref arithmetic that goes below the base or past the compact range (for example
-  `Unsafe.Subtract`, or `Unsafe.Add` with a negative count) fails with `NotImplemented`
-  (`managed_offset_error` in `crates/dotnet-value/src/stack_value.rs`).
+- **Positive managed-pointer offsets beyond the compact range:** `ManagedPtr` uses signed 32-bit
+  displacements, so positive offsets above `i32::MAX` are not representable. Negative offsets
+  may be formed and carried, but access remains checked against the owner's extent; this does not
+  permit out-of-range dereferences. See [the memory-safety contract](../GC_AND_MEMORY_SAFETY.md#managed-pointer-displacement-and-access).
 - **Static field addresses:** `ldsflda; conv.u` writes and static payload alignment
   (`p12_ldsflda_convu_stind_static`).
 - **Instance field alignment:** `FieldStorage` uses `Vec<u8>`, which does not promise the
-  alignment required by `get_field_mut_local`; exception stack-trace writes can trip its
-  alignment assertion under Miri.
+  alignment required by `get_field_mut_local`; callers of that path can trip its alignment
+  assertion under Miri.
 - **Native call boundary:** payload addresses, ABI returns, by-ref/out copy-back and pinned
   lifetime for P/Invoke (R06/R07). The current cross-arena raw-escape and by-value
   managed-pointer aggregate rejections stay until this is done.
@@ -117,11 +113,6 @@ Evidence and IDs (p01…, R01…) are defined in the
 - **Thread-static retention:** thread-static storage and its object references remain rooted until
   VM shutdown, including after an explicit worker exits, so outstanding byrefs remain valid.
   Reclaiming these values when no byref can reach them remains unplanned.
-- **Support `Span<T>.CopyTo` is a per-element loop:** `Span<T>.CopyTo` and
-  `ReadOnlySpan<T>.CopyTo` in `crates/dotnet-assemblies/src/support/Span.cs` copy one element at
-  a time in interpreted IL, so large copies are as slow as `Clear` was before it was routed to
-  `initblk`. The forward loop also differs from the CLR when the spans overlap and the
-  destination starts after the source. Route both to `Buffer.Memmove`.
 - **String benchmark is code-placement sensitive in MT:** `string` moved +7% in plan 16 slice 6
   (and +33%, then −8%, in slice 3) with unchanged instruction counts, because its hot
   `IsNullOrWhiteSpace` loop shifts across cache-line boundaries as the binary changes. Measured
@@ -130,22 +121,6 @@ Evidence and IDs (p01…, R01…) are defined in the
   fast time on the two layouts tried; check more layouts and the `dispatch` bench before adding
   it to the bench profile. Until then, compare `perf stat` instructions before attributing a
   `string` change to a commit.
-- **Other missing or incorrect runtime behavior:**
-  - Buffered stdout lost on an internal-error exit: not reproduced. The VM has no stdout buffer
-    of its own (`Console` writes reach `write(2)` through the native shim, and the CLI flushes
-    stdio on every exit path), so a repro (a fixture that writes, then fails with `Internal VM
-    error`) is needed first.
-  - Extern `System.Math` methods without handlers: only `Abs`, `Max`, `Min`, `Pow` and `Sqrt`
-    are registered, so `Math.Ceiling` (and other extern FCalls such as `Floor`) fail with "no
-    body in executing method"; `Stopwatch.Elapsed.TotalMilliseconds` reaches it.
-  - `Array.Fill<T>(T[], T)` fails with `MethodNotFound` because the support `DotnetRs.Array`
-    replaces `System.Array` without a `Fill`.
-  - Generic-arity checks are incomplete: method-generic reads in intrinsics go through
-    `MethodDescription::own_method_arg`, except `Activator.CreateInstance<T>` in
-    `crates/dotnet-vm/src/stack/native_effects.rs`. Intrinsics reading type generics
-    (`Span<T>.get_Item`, `EqualityComparer<T>.Default`, ...) are not checked against the
-    declaring type's arity, and constrained calls and effect resumption were not audited for
-    caller generics leaking into callees.
 - **Loom model coverage:** the hand-written `loom_stw.rs` model does not compile the production
   `WorkerRegistry` and does not cover every stop-the-world, retirement or shutdown interleaving.
   `dotnet-vm` does not compile under `cfg(loom)` with `multithreading`, so only
