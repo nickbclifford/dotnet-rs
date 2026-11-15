@@ -334,8 +334,15 @@ impl Debug for ConcreteType {
 }
 
 impl ResolvedDebug for ConcreteType {
+    /// Formats against this type's own resolution when it has one. A generic argument can come from
+    /// a different assembly than the type containing it, so the caller's `res` would index the
+    /// wrong module's tables.
     fn show(&self, res: &Resolution) -> String {
-        self.base.show(res)
+        if self.source.is_null() {
+            self.base.show(res)
+        } else {
+            self.base.show(&self.source)
+        }
     }
 }
 
@@ -1294,7 +1301,7 @@ mod generic_lookup_arg_tests {
 #[cfg(test)]
 mod concrete_type_identity_tests {
     use super::*;
-    use dotnetdll::prelude::ValueKind;
+    use dotnetdll::prelude::{TypeIndex, ValueKind};
 
     fn type_with_value_kind(value_kind: Option<ValueKind>) -> ConcreteType {
         ConcreteType::new(
@@ -1310,6 +1317,49 @@ mod concrete_type_identity_tests {
         let mut hasher = DefaultHasher::new();
         ty.hash(&mut hasher);
         hasher.finish()
+    }
+
+    /// Builds a leaked resolution holding `type_names` and returns it with the index of the last
+    /// name pushed.
+    fn leaked_resolution(
+        module: &'static str,
+        type_names: &[&'static str],
+    ) -> (ResolutionS, TypeIndex) {
+        use crate::resolution::MetadataArena;
+        use dotnetdll::prelude::{Module, TypeDefinition};
+
+        let mut resolution = Resolution::new(Module::new(module));
+        let mut last = None;
+        for name in type_names {
+            last = Some(resolution.push_type_definition(TypeDefinition::new(None, *name)));
+        }
+        let ptr = Box::into_raw(Box::new(resolution));
+        let arena = Arc::new(MetadataArena::new());
+        // SAFETY: F10.RawAllocationOwnership — ptr was created by Box::into_raw and the arena owns it.
+        unsafe { arena.add_resolution(ptr) };
+        (
+            ResolutionS::new(ptr, arena),
+            last.expect("type_names is not empty"),
+        )
+    }
+
+    #[test]
+    fn debug_formats_nested_types_against_their_own_resolution() {
+        // `Inner` sits past the end of the enclosing module's type table, so formatting it
+        // against the enclosing resolution would index out of bounds.
+        let (outer_res, _) = leaked_resolution("outer.dll", &["Outer"]);
+        let (inner_res, inner_index) = leaked_resolution("inner.dll", &["Pad0", "Pad1", "Inner"]);
+        let inner = ConcreteType::new(
+            inner_res,
+            BaseType::Type {
+                source: TypeSource::User(UserType::Definition(inner_index)),
+                value_kind: None,
+            },
+        );
+        let vector = ConcreteType::new(outer_res, BaseType::Vector(vec![], inner));
+
+        let shown = format!("{vector:?}");
+        assert!(shown.contains("Inner"), "{shown}");
     }
 
     #[test]
