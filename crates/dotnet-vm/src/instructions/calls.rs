@@ -8,7 +8,11 @@ use crate::{
         receiver_object_generics,
     },
 };
-use dotnet_types::{TypeDescription, generics::GenericLookup};
+use dotnet_types::{
+    TypeDescription,
+    generics::{ConcreteType, GenericLookup},
+    members::MethodDescription,
+};
 use dotnet_value::{StackValue, object::ObjectRef, pointer::PointerOrigin};
 
 const ACCESS_VIOLATION_MSG: &str = "Attempted to read or write protected memory.";
@@ -122,14 +126,38 @@ pub fn call_constrained<'gc, T: VmCallOps<'gc> + VmResolutionOps<'gc> + VmLoader
             .find_generic_method(source, &ctx.current_context())
     );
     let target = dotnet_vm_ops::vm_try!(ctx.resolver().resolve_static_constrained_method(
-        constraint_type,
+        constraint_type.clone(),
         method,
         &lookup,
     ));
 
-    // The resolver cache contains only target metadata. The source lookup remains live here so
-    // no cached route can capture caller state, a managed pointer, or tail-call eligibility.
-    ctx.dispatch_method_inline(target, lookup)
+    // The implementation's declaring type, not the interface declaration, owns its type
+    // slots. A default interface body instead retains the declaration's instantiation.
+    // Construct this on every dispatch; the resolver cache stores metadata only.
+    let constraint_description =
+        dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(constraint_type.clone()));
+    let dispatch_lookup = static_constraint_dispatch_lookup(
+        &target,
+        &constraint_description,
+        &constraint_type,
+        &lookup,
+    );
+    ctx.dispatch_method_inline(target, dispatch_lookup)
+}
+
+fn static_constraint_dispatch_lookup(
+    target: &MethodDescription,
+    constraint_description: &TypeDescription,
+    constraint_type: &ConcreteType,
+    source: &GenericLookup,
+) -> GenericLookup {
+    let mut result = if &target.parent == constraint_description {
+        constraint_type.make_lookup()
+    } else {
+        target.parent_generics.clone()
+    };
+    result.set_method_generics(source.method_generics.clone());
+    result
 }
 
 #[dotnet_instruction(CallVirtualConstrained(constraint, source))]
@@ -177,12 +205,13 @@ pub fn callvirt_constrained<'gc, T: VesOps<'gc>>(
             .is_value_type(&ctx.current_context())
     ) {
         // Value type: check for direct override first
-        if let Some(overriding_method) = ctx.loader().find_method_in_type_with_substitution(
+        if let Some(overriding_method) = ctx.loader().find_method_in_type_internal(
             constraint_type.clone(),
             &base_method.method().name,
             base_method.signature(),
             base_method.resolution(),
-            &lookup,
+            Some(&lookup),
+            Some(&constraint_lookup),
             false,
         ) {
             // Value type has its own implementation: run it under the constraint
@@ -321,6 +350,26 @@ pub fn callvirt_constrained<'gc, T: VesOps<'gc>>(
     };
 
     let method = dotnet_vm_ops::vm_try!(method);
+    // Virtual resolution may select an inherited implementation whose declaring type has a
+    // different instantiation from the receiver. Use the resolver's ancestor lookup, as the
+    // ordinary virtual dispatch pipeline does, while retaining the call's method arguments.
+    let mut dispatch_lookup = dispatch_lookup;
+    let arity = method.parent.definition().generic_parameters.len();
+    if arity == 0 {
+        dispatch_lookup.set_type_generics(Vec::new().into());
+    } else if method.parent_generics.type_generics.len() == arity {
+        dispatch_lookup.set_type_generics(method.parent_generics.type_generics.clone());
+    } else {
+        dispatch_lookup.set_type_generics(
+            dispatch_lookup
+                .type_generics
+                .iter()
+                .take(arity)
+                .cloned()
+                .collect::<Vec<_>>()
+                .into(),
+        );
+    }
 
     for arg in args.drain(..) {
         ctx.push(arg);
@@ -332,4 +381,79 @@ pub fn callvirt_constrained<'gc, T: VesOps<'gc>>(
     // (boxing value types, constraint-specific lookup) that doesn't fit the
     // standard virtual dispatch pattern. The method is already fully resolved here.
     ctx.dispatch_method_inline(method, dispatch_lookup)
+}
+
+#[cfg(test)]
+mod constrained_lookup_tests {
+    use super::*;
+    use crate::test_utils::parameterless_i32_signature;
+    use dotnet_assemblies::AssemblyLoader;
+    use dotnet_types::resolution::ResolutionS;
+    use dotnetdll::resolved::{generic::Generic, members::Method};
+
+    #[test]
+    fn static_dispatch_uses_target_type_and_preserves_method_arguments() {
+        let loader = AssemblyLoader::new_bare("constrained-lookup".into()).unwrap();
+        let mut res = Resolution::new(Module::new("constrained.dll"));
+        let mut implementation = TypeDefinition::new(None, "Implementation");
+        implementation.generic_parameters.push(Generic::new("T"));
+        let implementation = res.push_type_definition(implementation);
+        let mut interface = TypeDefinition::new(None, "Interface");
+        interface.generic_parameters.push(Generic::new("T"));
+        let interface = res.push_type_definition(interface);
+        for ty in [implementation, interface] {
+            res.push_method(
+                ty,
+                Method::new(
+                    Accessibility::Public,
+                    parameterless_i32_signature(),
+                    "Run",
+                    None,
+                ),
+            );
+        }
+        let res = loader.register_owned_assembly(res);
+        let implementation = TypeDescription::new(res.clone(), implementation);
+        let interface = TypeDescription::new(res.clone(), interface);
+        let int = ConcreteType::new(ResolutionS::NULL, BaseType::Int32);
+        let long = ConcreteType::new(ResolutionS::NULL, BaseType::Int64);
+        let string = ConcreteType::new(ResolutionS::NULL, BaseType::String);
+        let concrete = ConcreteType::new(
+            res.clone(),
+            BaseType::Type {
+                source: TypeSource::Generic {
+                    base: UserType::Definition(implementation.index),
+                    parameters: vec![int.clone()],
+                },
+                value_kind: None,
+            },
+        );
+        let leaked = GenericLookup::from_arcs(
+            vec![long.clone(), string.clone()].into(),
+            vec![string.clone(), long.clone()].into(),
+        );
+        let target = MethodDescription::new(
+            implementation.clone(),
+            leaked.clone(),
+            res.clone(),
+            MethodMemberIndex::Method(0),
+        );
+        let actual =
+            static_constraint_dispatch_lookup(&target, &implementation, &concrete, &leaked);
+        assert_eq!(&*actual.type_generics, std::slice::from_ref(&int));
+        assert_eq!(actual.method_generics, leaked.method_generics);
+        let mut default_target = MethodDescription::new(
+            interface,
+            GenericLookup::default(),
+            res,
+            MethodMemberIndex::Method(0),
+        );
+        default_target
+            .parent_generics
+            .set_type_generics(vec![long.clone()].into());
+        let actual =
+            static_constraint_dispatch_lookup(&default_target, &implementation, &concrete, &leaked);
+        assert_eq!(&*actual.type_generics, &[long]);
+        assert_eq!(actual.method_generics, leaked.method_generics);
+    }
 }

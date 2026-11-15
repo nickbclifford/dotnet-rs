@@ -576,13 +576,13 @@ pub fn intrinsic_internal_get_array_data<'gc, T: SpanIntrinsicHost<'gc>>(
 #[dotnet_intrinsic("T& System.ReadOnlySpan<T>::GetPinnableReference()")]
 pub fn intrinsic_span_get_pinnable_reference<'gc, T: SpanIntrinsicHost<'gc>>(
     ctx: &mut T,
-    _method: MethodDescription,
+    method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
     let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let span = ctx.pop_managed_ptr();
 
-    let element_type = dotnet_vm_ops::vm_try!(generics.type_arg(0));
+    let element_type = dotnet_vm_ops::vm_try!(method.own_type_arg(generics, 0));
     let element_desc =
         dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(element_type.clone()));
 
@@ -697,7 +697,7 @@ pub fn intrinsic_span_slice<'gc, T: SpanIntrinsicHost<'gc>>(
         Err(step) => return step,
     };
 
-    let element_type = dotnet_vm_ops::vm_try!(generics.type_arg(0));
+    let element_type = dotnet_vm_ops::vm_try!(method.own_type_arg(generics, 0));
     let element_layout = dotnet_vm_ops::vm_try!(ctx.span_type_layout(element_type.clone()));
     let element_size = element_layout.size().as_usize();
     let element_desc =
@@ -824,7 +824,7 @@ pub fn intrinsic_span_to_readonly_span<'gc, T: SpanIntrinsicHost<'gc>>(
     generics: &GenericLookup,
 ) -> StepResult {
     let source = ctx.pop();
-    let element_type = dotnet_vm_ops::vm_try!(generics.type_arg(0));
+    let element_type = dotnet_vm_ops::vm_try!(method.own_type_arg(generics, 0));
     let element_desc =
         dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(element_type.clone()));
     let (reference, length) = match source {

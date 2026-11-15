@@ -66,13 +66,11 @@ pub fn intrinsic_vector256_is_hardware_accelerated<'gc, T: SimdIntrinsicHost<'gc
 #[dotnet_intrinsic("static bool System.Runtime.Intrinsics.Vector256<T>::get_IsSupported()")]
 pub fn intrinsic_vector_is_supported<'gc, T: SimdIntrinsicHost<'gc>>(
     ctx: &mut T,
-    _method: MethodDescription,
+    method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let supported = generics
-        .type_generics
-        .first()
-        .is_some_and(vector_element_type_is_supported);
+    let element_type = dotnet_vm_ops::vm_try!(method.own_type_arg(generics, 0));
+    let supported = vector_element_type_is_supported(element_type);
     ctx.push_i32(i32::from(supported));
     StepResult::Continue
 }

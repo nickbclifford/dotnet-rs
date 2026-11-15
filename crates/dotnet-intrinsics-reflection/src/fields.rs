@@ -3,7 +3,7 @@ use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
     TypeDescription, WellKnown,
     generics::{ConcreteType, GenericLookup},
-    members::MethodDescription,
+    members::{FieldDescription, MethodDescription},
     runtime::{RuntimeType, runtime_type_from_concrete},
 };
 use dotnet_value::{
@@ -12,6 +12,9 @@ use dotnet_value::{
 };
 use dotnet_vm_data::StepResult;
 use dotnet_vm_ops::SupportSlotOps;
+use dotnet_vm_ops::effects::{
+    NativeFailure, NativeInvocation, NativeOperandView, NativeResult, NativeSelection, VmEffects,
+};
 use dotnet_vm_ops::ops::{LoaderOps, MemoryOps, TypedStackOps};
 use dotnetdll::prelude::Constant;
 
@@ -210,11 +213,127 @@ pub fn intrinsic_field_info_get_raw_constant_value<'gc, T: ReflectionIntrinsicHo
     }
 }
 
-/// `FieldInfo.GetValue(obj)` — supports literal constants and instance fields.
+pub fn field_access_select<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &T,
+    operands: NativeOperandView<'_, 'gc>,
+    method: &MethodDescription,
+    _generics: &GenericLookup,
+) -> NativeSelection {
+    let count = method.signature().parameters.len();
+    let StackValue::ObjectRef(this) = operands.peek_at(count) else {
+        return NativeSelection::Fallback;
+    };
+    match crate::common::resolve_runtime_field(ctx, this) {
+        Ok((field, _)) if field.field().static_member && !field.field().literal => {
+            NativeSelection::Async(NativeInvocation {
+                start: 0,
+                length: 0,
+                parameter_count: count,
+            })
+        }
+        _ => NativeSelection::Fallback,
+    }
+}
+
+#[dotnet_intrinsic("object DotnetRs.FieldInfo::GetValue(object)", select = field_access_select, fallback = intrinsic_field_info_get_value)]
+pub async fn static_field_get(fx: VmEffects) -> NativeResult {
+    static_field_access(fx).await
+}
+
+#[dotnet_intrinsic("void DotnetRs.FieldInfo::SetValue(object, object, System.Reflection.BindingFlags, System.Reflection.Binder, System.Globalization.CultureInfo)", select = field_access_select, fallback = intrinsic_field_info_set_value)]
+pub async fn static_field_set(fx: VmEffects) -> NativeResult {
+    static_field_access(fx).await
+}
+
+async fn static_field_access(mut fx: VmEffects) -> NativeResult {
+    let (field, lookup, value) = fx
+        .vm()
+        .await?
+        .with(|region| region.reflection_static_target())??;
+    match fx
+        .ensure_initialized(field.parent.clone(), lookup.clone())
+        .await
+    {
+        Ok(()) => {}
+        Err(NativeFailure::Managed(inner)) => {
+            let wrapper = fx
+                .vm()
+                .await?
+                .with(|region| region.wrap_reflection_failure(&inner))??;
+            return Err(NativeFailure::Managed(wrapper));
+        }
+        Err(error) => return Err(error),
+    }
+    fx.vm()
+        .await?
+        .reflection_static_complete(&field, &lookup, value.as_ref())
+}
+
+/// Complete a static access only after the initializer effect has returned.
+pub fn complete_static_field<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    field: &FieldDescription,
+    lookup: &GenericLookup,
+    value: Option<StackValue<'gc>>,
+) -> StepResult {
+    let field_type: dotnetdll::prelude::MethodType = field.field().return_type.clone().into();
+    let concrete = dotnet_vm_ops::vm_try!(lookup.make_concrete(
+        field.resolution(),
+        field_type,
+        ctx.loader().as_ref()
+    ));
+    if let Some(value) = value {
+        if field.field().init_only && ctx.reflection_static_initialized(field, lookup) {
+            return ctx.throw_by_name_with_message(
+                "System.FieldAccessException",
+                "Cannot set a static init-only field after initialization.",
+            );
+        }
+        let value_type = concrete.is_value_type(ctx.loader().as_ref());
+        let is_pointer = matches!(
+            concrete.get(),
+            dotnetdll::prelude::BaseType::ValuePointer(..)
+        );
+        let value = if (value_type || is_pointer)
+            && matches!(value, StackValue::ObjectRef(ObjectRef(None)))
+        {
+            None
+        } else if is_pointer {
+            Some(dotnet_vm_ops::vm_try!(unbox_reflection_pointer(value)))
+        } else if value_type {
+            Some(dotnet_vm_ops::vm_try!(coerce_field_set_value_argument(
+                ctx, value, &concrete
+            )))
+        } else {
+            Some(value)
+        };
+        dotnet_vm_ops::vm_try!(ctx.reflection_static_write(field, lookup, value));
+    } else {
+        let value = dotnet_vm_ops::vm_try!(ctx.reflection_static_read(field, lookup));
+        if matches!(
+            concrete.get(),
+            dotnetdll::prelude::BaseType::ValuePointer(..)
+        ) {
+            let StackValue::NativeInt(word) = value else {
+                return StepResult::internal_error("invalid static pointer value");
+            };
+            let boxed =
+                dotnet_vm_ops::vm_try!(box_reflection_pointer(ctx, &concrete, &word.to_ne_bytes()));
+            ctx.push_obj(boxed);
+        } else if let StackValue::ObjectRef(obj) = value {
+            ctx.push_obj(obj);
+        } else {
+            let boxed = dotnet_vm_ops::vm_try!(ctx.box_value(&concrete, value));
+            ctx.push_obj(boxed);
+        }
+    }
+    StepResult::Continue
+}
+
+/// `FieldInfo.GetValue(obj)` boxes literal constants and instance fields.
 /// Unlike `GetRawConstantValue`, which returns the boxed underlying primitive,
 /// `GetValue` boxes constants as the field's declared type, so an enum member
 /// yields a boxed value of the enum type.
-#[dotnet_intrinsic("object DotnetRs.FieldInfo::GetValue(object)")]
 pub fn intrinsic_field_info_get_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
@@ -228,12 +347,10 @@ pub fn intrinsic_field_info_get_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
 
     if !field_def.literal {
         if field_def.static_member {
-            // Static non-literal fields are accessible via normal field access at runtime;
-            // reflection-based reads are not yet fully implemented. Return null for now
-            // so attribute-default-lookup paths (e.g. AttributeCollection.GetDefaultAttribute)
-            // fall through to their null-check fallback rather than throwing.
-            ctx.push(StackValue::null());
-            return StepResult::Continue;
+            return ctx.throw_by_name_with_message(
+                "System.NotImplementedException",
+                "Static reflection requires native dispatch.",
+            );
         }
         let StackValue::ObjectRef(target_obj) = obj else {
             return ctx.throw_by_name_with_message(
@@ -308,9 +425,6 @@ pub fn intrinsic_field_info_get_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
     }
 }
 
-#[dotnet_intrinsic(
-    "void DotnetRs.FieldInfo::SetValue(object, object, System.Reflection.BindingFlags, System.Reflection.Binder, System.Globalization.CultureInfo)"
-)]
 pub fn intrinsic_field_info_set_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
@@ -338,7 +452,7 @@ pub fn intrinsic_field_info_set_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
     if field_def.static_member {
         return ctx.throw_by_name_with_message(
             "System.NotImplementedException",
-            "DotnetRs.FieldInfo.SetValue does not yet support static field writes.",
+            "Static reflection requires native dispatch.",
         );
     }
 

@@ -335,6 +335,9 @@ pub fn intrinsic_span_helpers_fill<'gc, T: UnsafeIntrinsicHost<'gc>>(
 #[dotnet_intrinsic(
     "static T& System.Runtime.InteropServices.MemoryMarshal::GetArrayDataReference<T>(T[])"
 )]
+#[dotnet_intrinsic(
+    "static byte& System.Runtime.InteropServices.MemoryMarshal::GetArrayDataReference(System.Array)"
+)]
 #[allow(unused_variables)]
 pub fn intrinsic_memory_marshal_get_array_data_reference<
     'gc,
@@ -349,8 +352,8 @@ pub fn intrinsic_memory_marshal_get_array_data_reference<
         return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     };
 
-    let (data_ptr, fallback_element_type) = match &array_handle.borrow().storage {
-        HeapStorage::Vec(v) => (v.get().as_ptr() as *mut u8, v.element.clone()),
+    let data_ptr = match &array_handle.borrow().storage {
+        HeapStorage::Vec(v) => v.get().as_ptr() as *mut u8,
         _ => {
             return ctx.throw_by_name_with_message(
                 "System.ArgumentException",
@@ -359,12 +362,13 @@ pub fn intrinsic_memory_marshal_get_array_data_reference<
         }
     };
 
-    let element_concrete = generics
-        .method_generics
-        .first()
-        .cloned()
-        .unwrap_or(fallback_element_type);
-    let element_type = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(element_concrete));
+    let element_type = if method.method().generic_parameters.is_empty() {
+        // The non-generic overload returns ref byte regardless of the caller's generic context.
+        dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Byte"))
+    } else {
+        let element = dotnet_vm_ops::vm_try!(method.cloned_own_method_arg(generics, 0));
+        dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(element))
+    };
     ctx.push_ptr(
         data_ptr,
         element_type,

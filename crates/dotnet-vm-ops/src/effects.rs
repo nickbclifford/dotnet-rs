@@ -401,6 +401,25 @@ pub trait NativeBackend<'gc> {
     ) -> Result<Option<NativeTarget<'gc>>, VmError> {
         Err(internal("native multicast unavailable"))
     }
+    fn reflection_static_target(
+        &mut self,
+    ) -> Result<
+        (
+            dotnet_types::members::FieldDescription,
+            dotnet_types::generics::GenericLookup,
+        ),
+        VmError,
+    > {
+        Err(internal("native static reflection unavailable"))
+    }
+    fn reflection_static_complete(
+        &mut self,
+        _field: &dotnet_types::members::FieldDescription,
+        _lookup: &dotnet_types::generics::GenericLookup,
+        _value: Option<StackValue<'gc>>,
+    ) -> Result<Option<StackValue<'gc>>, NativePrepareError<'gc>> {
+        Err(internal("native static reflection unavailable").into())
+    }
     fn reflection_call(&mut self) -> Result<NativeReflectionPlan<'gc>, NativePrepareError<'gc>> {
         Err(NativePrepareError::Host(internal(
             "native reflection unavailable",
@@ -619,6 +638,51 @@ impl<'gc, 'a> NativeRegion<'gc, 'a> {
             .collect::<Result<Vec<_>, _>>()?;
         self.backend.operands().clear();
         Ok((receiver, arguments))
+    }
+    pub fn reflection_static_target(
+        &mut self,
+    ) -> Result<
+        (
+            dotnet_types::members::FieldDescription,
+            dotnet_types::generics::GenericLookup,
+            Option<RootedValue>,
+        ),
+        VmError,
+    > {
+        let (field, lookup) = self.backend.reflection_static_target()?;
+        let operands = self.backend.operands();
+        let value = if operands.len() == 6 {
+            Some(operands[2].clone())
+        } else {
+            None
+        };
+        // INVARIANT: F6.NativeRootTransfer — the stored value stays rooted while the initializer runs.
+        let value = value.map(|value| self.root(value)).transpose()?;
+        self.backend.operands().clear();
+        Ok((field, lookup, value))
+    }
+    fn reflection_static_complete(
+        &mut self,
+        field: &dotnet_types::members::FieldDescription,
+        lookup: &dotnet_types::generics::GenericLookup,
+        value: Option<&RootedValue>,
+    ) -> NativeResult {
+        let value = value.map(|value| self.fetch(value)).transpose()?;
+        match self
+            .backend
+            .reflection_static_complete(field, lookup, value)
+        {
+            Ok(value) => {
+                if let Some(value) = value {
+                    self.backend.push_output(value)?;
+                }
+                Ok(())
+            }
+            Err(NativePrepareError::Host(error)) => Err(error.into()),
+            Err(NativePrepareError::Managed(exception)) => Err(NativeFailure::Managed(
+                self.root(StackValue::ObjectRef(exception))?,
+            )),
+        }
     }
     fn prepare_reflection(&mut self) -> Result<NativeReflectionStep, NativeFailure> {
         let prepared = match self.backend.reflection_call() {
@@ -1677,6 +1741,14 @@ impl<'fx> VmAccess<'fx> {
     }
     pub fn prepare_multicast(&mut self) -> Result<(RootedValue, Vec<RootedValue>), NativeFailure> {
         Ok(self.with(|region| region.prepare_multicast())??)
+    }
+    pub fn reflection_static_complete(
+        &mut self,
+        field: &dotnet_types::members::FieldDescription,
+        lookup: &dotnet_types::generics::GenericLookup,
+        value: Option<&RootedValue>,
+    ) -> NativeResult {
+        self.with(|region| region.reflection_static_complete(field, lookup, value))?
     }
     pub fn prepare_reflection(&mut self) -> Result<NativeReflectionStep, NativeFailure> {
         self.with(|region| region.prepare_reflection())?

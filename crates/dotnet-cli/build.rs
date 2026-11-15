@@ -335,6 +335,8 @@ fn main() {
         let is_manually_registered = matches!(
             file_name,
             "cross_arena_resurrection_42"
+                | "reflection_static_fields_42"
+                | "reflection_thread_static_42"
                 | "finalizer_wait_producer_42"
                 | "cross_thread_dependent_handles_42"
                 | "cross_thread_handles_42"

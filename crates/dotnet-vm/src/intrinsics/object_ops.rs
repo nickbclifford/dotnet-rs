@@ -353,12 +353,7 @@ pub(super) fn enum_type_from_stack_value(value: &StackValue<'_>) -> Option<TypeD
     }
 }
 
-pub(super) fn generic_enum_type(generics: &GenericLookup) -> Option<TypeDescription> {
-    let concrete = generics
-        .method_generics
-        .first()
-        .or_else(|| generics.type_generics.first())?;
-
+pub(super) fn generic_enum_type(concrete: &ConcreteType) -> Option<TypeDescription> {
     let BaseType::Type {
         source: TypeSource::User(UserType::Definition(index)),
         ..

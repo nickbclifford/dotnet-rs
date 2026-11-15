@@ -1249,3 +1249,34 @@ diff_test!(
     unsafe_byref_negative_offset_42_matches_dotnet,
     "tests/fixtures/unsafe/byref_negative_offset_42.cs"
 );
+
+diff_test!(
+    generic_callee_context_matches_dotnet,
+    "tests/fixtures/generics/callee_gets_own_generic_context_42.cs"
+);
+
+diff_test!(
+    generic_intrinsic_context_matches_dotnet,
+    "tests/fixtures/generics/intrinsic_generic_context_42.cs"
+);
+
+diff_test!(
+    generic_constrained_context_matches_dotnet,
+    "tests/fixtures/generics/constrained_context_42.cs"
+);
+
+diff_test!(
+    generic_resumed_intrinsic_context_matches_dotnet,
+    "tests/fixtures/generics/resumed_intrinsic_context_42.cs"
+);
+
+diff_test!(
+    reflection_static_fields_match_dotnet,
+    "tests/fixtures/reflection/reflection_static_fields_42.cs"
+);
+
+#[cfg(feature = "multithreading")]
+diff_test!(
+    reflection_thread_static_match_dotnet,
+    "tests/fixtures/reflection/reflection_thread_static_42.cs"
+);

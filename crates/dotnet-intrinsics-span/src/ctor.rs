@@ -29,7 +29,7 @@ pub fn intrinsic_span_ctor_from_pointer<'gc, T: SpanIntrinsicHost<'gc>>(
         return ctx.throw_by_name_with_message("System.ArgumentOutOfRangeException", "length");
     }
 
-    let element_type = dotnet_vm_ops::vm_try!(generics.type_arg(0));
+    let element_type = dotnet_vm_ops::vm_try!(method.own_type_arg(generics, 0));
     let element_desc =
         dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(element_type.clone()));
 
@@ -113,13 +113,13 @@ pub fn intrinsic_span_ctor_from_pointer<'gc, T: SpanIntrinsicHost<'gc>>(
 #[dotnet_intrinsic("void System.ReadOnlySpan<T>::.ctor(T[])")]
 pub fn intrinsic_span_ctor_from_array<'gc, T: SpanIntrinsicHost<'gc>>(
     ctx: &mut T,
-    _method: MethodDescription,
+    method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
     let array = ctx.pop();
     let this_ptr = ctx.pop_managed_ptr();
 
-    let element_type = dotnet_vm_ops::vm_try!(generics.type_arg(0));
+    let element_type = dotnet_vm_ops::vm_try!(method.own_type_arg(generics, 0));
     let element_desc =
         dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(element_type.clone()));
 

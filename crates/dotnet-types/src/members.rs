@@ -34,6 +34,32 @@ impl MethodDescription {
         }
     }
 
+    /// Declaring-type generic argument of this callee, bounded by its declared arity.
+    /// Surplus call-site lookup entries do not belong to the callee.
+    pub fn own_type_arg<'a>(
+        &self,
+        generics: &'a GenericLookup,
+        index: usize,
+    ) -> Result<&'a crate::generics::ConcreteType, crate::error::TypeResolutionError> {
+        let arity = self.parent.definition().generic_parameters.len();
+        if index >= arity {
+            return Err(crate::error::TypeResolutionError::GenericIndexOutOfBounds {
+                index,
+                length: arity,
+            });
+        }
+        generics.type_arg(index)
+    }
+
+    /// Owned variant of [`Self::own_type_arg`].
+    pub fn cloned_own_type_arg(
+        &self,
+        generics: &GenericLookup,
+        index: usize,
+    ) -> Result<crate::generics::ConcreteType, crate::error::TypeResolutionError> {
+        self.own_type_arg(generics, index).cloned()
+    }
+
     /// Method generic argument `index` of this callee, read from the call-site `generics`.
     ///
     /// The index is validated against the callee's own declared generic arity, so a callee that
@@ -383,5 +409,106 @@ impl Hash for FieldDescription {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.index.hash(state);
         self.parent.hash(state);
+    }
+}
+
+#[cfg(test)]
+mod generic_slot_tests {
+    use super::*;
+    use crate::{error::TypeResolutionError, generics::ConcreteType, resolution::MetadataArena};
+    use dotnetdll::prelude::{
+        Accessibility, BaseType, CallingConvention, MethodSignature, Module, ReturnType,
+        TypeDefinition,
+    };
+    use dotnetdll::resolved::generic::Generic;
+    use std::sync::Arc;
+
+    fn method(type_arity: usize, method_arity: usize) -> MethodDescription {
+        let mut resolution = Resolution::new(Module::new("slots.dll"));
+        let mut ty = TypeDefinition::new(None, "Slots");
+        for _ in 0..type_arity {
+            ty.generic_parameters.push(Generic::new("T"));
+        }
+        let index = resolution.push_type_definition(ty);
+        let signature = MethodSignature {
+            instance: false,
+            explicit_this: false,
+            calling_convention: CallingConvention::Default,
+            parameters: vec![],
+            return_type: ReturnType(vec![], None),
+            varargs: None,
+        };
+        let mut method = Method::new(Accessibility::Public, signature, "Run", None);
+        for _ in 0..method_arity {
+            method.generic_parameters.push(Generic::new("M"));
+        }
+        resolution.push_method(index, method);
+        let ptr = Box::into_raw(Box::new(resolution));
+        let arena = Arc::new(MetadataArena::new());
+        // SAFETY: F10.RawAllocationOwnership — ptr was created by Box::into_raw and the arena owns it.
+        unsafe { arena.add_resolution(ptr) };
+        let res = ResolutionS::new(ptr, arena);
+        MethodDescription::new(
+            TypeDescription::new(res.clone(), index),
+            GenericLookup::default(),
+            res,
+            MethodMemberIndex::Method(0),
+        )
+    }
+
+    #[test]
+    fn generic_slots_reject_surplus_and_missing_arguments() {
+        let empty = method(0, 0);
+        let one = method(1, 1);
+        let int = ConcreteType::new(one.resolution(), BaseType::Int32);
+        let lookup = GenericLookup::from_arcs(
+            vec![int.clone(), int.clone()].into(),
+            vec![int.clone(), int.clone()].into(),
+        );
+        assert!(matches!(
+            empty.own_type_arg(&lookup, 0),
+            Err(TypeResolutionError::GenericIndexOutOfBounds {
+                index: 0,
+                length: 0
+            })
+        ));
+        assert!(matches!(
+            empty.own_method_arg(&lookup, 0),
+            Err(TypeResolutionError::GenericIndexOutOfBounds {
+                index: 0,
+                length: 0
+            })
+        ));
+        assert_eq!(one.cloned_own_type_arg(&lookup, 0).unwrap(), int);
+        assert_eq!(one.cloned_own_method_arg(&lookup, 0).unwrap(), int);
+        assert!(matches!(
+            one.own_type_arg(&lookup, 1),
+            Err(TypeResolutionError::GenericIndexOutOfBounds {
+                index: 1,
+                length: 1
+            })
+        ));
+        assert!(matches!(
+            one.own_method_arg(&lookup, 1),
+            Err(TypeResolutionError::GenericIndexOutOfBounds {
+                index: 1,
+                length: 1
+            })
+        ));
+        let missing = GenericLookup::default();
+        assert!(matches!(
+            one.own_type_arg(&missing, 0),
+            Err(TypeResolutionError::GenericIndexOutOfBounds {
+                index: 0,
+                length: 0
+            })
+        ));
+        assert!(matches!(
+            one.own_method_arg(&missing, 0),
+            Err(TypeResolutionError::GenericIndexOutOfBounds {
+                index: 0,
+                length: 0
+            })
+        ));
     }
 }

@@ -279,9 +279,7 @@ pub fn intrinsic_span_get_item<'gc, T: SpanIntrinsicHost<'gc>>(
     let index = ctx.pop_i32();
     let this = ctx.pop();
 
-    let Some(element_type) = generics.type_generics.first().cloned() else {
-        return StepResult::internal_error("Span.get_Item missing type generic parameter");
-    };
+    let element_type = dotnet_vm_ops::vm_try!(method.cloned_own_type_arg(generics, 0));
 
     let span_concrete: ConcreteType = method.parent.clone().into();
     let span_layout = dotnet_vm_ops::vm_try!(ctx.span_type_layout(span_concrete));

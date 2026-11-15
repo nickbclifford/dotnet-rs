@@ -34,6 +34,7 @@ use dotnet_types::{
     runtime::RuntimeType,
 };
 use dotnet_value::{
+    StackValue,
     layout::LayoutManager,
     object::{Object, ObjectRef},
 };
@@ -198,9 +199,30 @@ pub trait ReflectionRegistryHost<'gc> {
     ) -> ObjectRef<'gc>;
 }
 
+/// Access to the same static slots used by field instructions.
+pub trait ReflectionStaticFieldHost<'gc> {
+    fn reflection_static_initialized(
+        &self,
+        field: &FieldDescription,
+        lookup: &GenericLookup,
+    ) -> bool;
+    fn reflection_static_read(
+        &self,
+        field: &FieldDescription,
+        lookup: &GenericLookup,
+    ) -> Result<StackValue<'gc>, dotnet_types::error::VmError>;
+    fn reflection_static_write(
+        &self,
+        field: &FieldDescription,
+        lookup: &GenericLookup,
+        value: Option<StackValue<'gc>>,
+    ) -> Result<(), dotnet_types::error::VmError>;
+}
+
 dotnet_vm_ops::trait_alias! {
     pub trait ReflectionIntrinsicHost<'gc> =
         ReflectionBaseOps<'gc>
         + ResolutionContextHost<'gc>
-        + ReflectionRegistryHost<'gc>;
+        + ReflectionRegistryHost<'gc>
+        + ReflectionStaticFieldHost<'gc>;
 }

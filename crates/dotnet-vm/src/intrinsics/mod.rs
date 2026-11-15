@@ -552,3 +552,106 @@ mod async_registry_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod generic_slot_tests {
+    use crate::{
+        StepResult,
+        state::SharedGlobalState,
+        sync::Arc,
+        test_utils::{new_test_arena, parameterless_i32_signature, test_gc_handle},
+    };
+    use dotnet_assemblies::AssemblyLoader;
+    use dotnet_intrinsics_core::math::{
+        intrinsic_numeric_addition, intrinsic_numeric_greater_than, intrinsic_numeric_increment,
+        intrinsic_numeric_zero,
+    };
+    use dotnet_types::{
+        TypeDescription,
+        generics::{ConcreteType, GenericLookup},
+        members::MethodDescription,
+    };
+    use dotnet_value::StackValue;
+    use dotnet_vm_ops::ops::EvalStackOps;
+    use dotnetdll::{prelude::*, resolved::generic::Generic};
+
+    #[test]
+    #[allow(clippy::arc_with_non_send_sync)]
+    fn numeric_handlers_check_declared_type_slots() {
+        let loader = Arc::new(AssemblyLoader::new_bare("numeric-slots".into()).unwrap());
+        let mut res = Resolution::new(Module::new("NumericSlots.dll"));
+        let mut full = TypeDefinition::new(None, "Full");
+        for _ in 0..3 {
+            full.generic_parameters.push(Generic::new("T"));
+        }
+        let full = res.push_type_definition(full);
+        let mut short = TypeDefinition::new(None, "Short");
+        for _ in 0..2 {
+            short.generic_parameters.push(Generic::new("T"));
+        }
+        let short = res.push_type_definition(short);
+        for ty in [full, short] {
+            res.push_method(
+                ty,
+                Method::new(
+                    Accessibility::Public,
+                    parameterless_i32_signature(),
+                    "Run",
+                    None,
+                ),
+            );
+        }
+        let res = loader.register_owned_assembly(res);
+        let make = |ty| {
+            MethodDescription::new(
+                TypeDescription::new(res.clone(), ty),
+                GenericLookup::default(),
+                res.clone(),
+                MethodMemberIndex::Method(0),
+            )
+        };
+        let full = make(full);
+        let short = make(short);
+        let int = ConcreteType::new(res.clone(), BaseType::Int32);
+        let long = ConcreteType::new(res, BaseType::Int64);
+        let lookup = GenericLookup::new(vec![int.clone(), int, long]);
+        let shared = Arc::new(SharedGlobalState::new(loader));
+        let mut arena = new_test_arena(&shared);
+        arena.mutate_root(|gc, engine| {
+            // SAFETY: F1.GcHandleRooted — the arena root remains live for this mutation.
+            let gc = unsafe { test_gc_handle(gc, engine) };
+            let mut ctx = engine.ves_context(gc);
+            assert!(matches!(
+                intrinsic_numeric_zero(&mut ctx, full.clone(), &lookup),
+                StepResult::Continue
+            ));
+            assert!(matches!(ctx.pop(), StackValue::Int32(0)));
+            ctx.push(StackValue::Int32(2));
+            ctx.push(StackValue::Int32(3));
+            assert!(matches!(
+                intrinsic_numeric_addition(&mut ctx, full.clone(), &lookup),
+                StepResult::Continue
+            ));
+            assert!(matches!(ctx.pop(), StackValue::Int64(5)));
+            ctx.push(StackValue::Int32(4));
+            ctx.push(StackValue::Int32(3));
+            assert!(matches!(
+                intrinsic_numeric_greater_than(&mut ctx, full.clone(), &lookup),
+                StepResult::Continue
+            ));
+            assert!(matches!(ctx.pop(), StackValue::Int32(1)));
+            ctx.push(StackValue::Int32(4));
+            assert!(matches!(
+                intrinsic_numeric_increment(&mut ctx, full, &lookup),
+                StepResult::Continue
+            ));
+            assert!(matches!(ctx.pop(), StackValue::Int32(5)));
+            ctx.push(StackValue::Int32(2));
+            ctx.push(StackValue::Int32(3));
+            assert!(matches!(
+                intrinsic_numeric_addition(&mut ctx, short, &lookup),
+                StepResult::Error(_)
+            ));
+        });
+    }
+}

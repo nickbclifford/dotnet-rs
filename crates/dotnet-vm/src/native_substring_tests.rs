@@ -7919,3 +7919,97 @@ fn stack_slot_value_type_writes_charge_once() {
         })
         .unwrap();
 }
+
+fn native_surplus_lookup_after_child(
+    mut fx: dotnet_vm_ops::effects::VmEffects,
+) -> dotnet_vm_ops::effects::NativeFuture {
+    let method = CALL_TARGET.with(|slot| slot.borrow().as_ref().unwrap().clone());
+    Box::pin(async move {
+        fx.call(dotnet_vm_ops::effects::NativeCall {
+            method,
+            generics: GenericLookup::default(),
+            arguments: Vec::new(),
+        })
+        .await?;
+        fx.yield_now().await?;
+        let result = fx.vm().await?.prepare_reflection();
+        assert!(matches!(
+            result,
+            Err(dotnet_vm_ops::effects::NativeFailure::Host(
+                VmError::TypeResolution(
+                    dotnet_types::error::TypeResolutionError::GenericIndexOutOfBounds {
+                        index: 0,
+                        length: 0
+                    }
+                )
+            ))
+        ));
+        let mut vm = fx.vm().await?;
+        let value = vm.with(|region| region.root(StackValue::Int32(42)))??;
+        vm.push_value(dotnet_vm_ops::effects::NativeValue::Value(value))?;
+        Ok(())
+    })
+}
+
+#[test]
+fn resumed_native_reflection_rejects_surplus_lookup_after_child() {
+    use dotnet_types::{generics::ConcreteType, resolution::ResolutionS};
+    use dotnet_vm_ops::effects::{NativeDispatchMode, NativeIntrinsicHost};
+    let mut executor = executor();
+    let result = executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: F1.GcHandleRooted — the engine remains the live arena root during this mutation.
+                let gc = unsafe { test_gc_handle(gc, engine) };
+                let method = engine
+                    .stack
+                    .execution
+                    .frame_stack
+                    .current_frame()
+                    .state
+                    .info_handle
+                    .source
+                    .clone();
+                CALL_TARGET.with(|slot| *slot.borrow_mut() = Some(method.clone()));
+                let leaked = GenericLookup::from_arcs(
+                    vec![ConcreteType::new(ResolutionS::NULL, BaseType::Int32)].into(),
+                    vec![ConcreteType::new(ResolutionS::NULL, BaseType::Int64)].into(),
+                );
+                engine.ves_context(gc).start_native(
+                    method,
+                    NativeDispatchMode::InlineCall,
+                    &leaked,
+                    None,
+                    Some(native_test_fallback),
+                    native_surplus_lookup_after_child,
+                )
+            })
+        })
+        .unwrap();
+    assert!(matches!(result, StepResult::NativeSuspended(_)));
+    executor.perform_full_gc().unwrap();
+    for _ in 0..16 {
+        let result = resume(&mut executor);
+        assert!(!matches!(result, StepResult::Error(_)), "{result:?}");
+        if executor
+            .with_arena(|arena| {
+                arena.mutate(|_, engine| engine.stack.execution.call_state.native.is_empty())
+            })
+            .unwrap()
+        {
+            break;
+        }
+    }
+    executor
+        .with_arena(|arena| {
+            arena.mutate(|_, engine| {
+                assert!(engine.stack.execution.call_state.native.is_empty());
+                assert!(matches!(
+                    engine.stack.execution.evaluation_stack.stack.as_slice(),
+                    [StackValue::Int32(42)]
+                ));
+            })
+        })
+        .unwrap();
+    CALL_TARGET.with(|slot| *slot.borrow_mut() = None);
+}

@@ -681,14 +681,19 @@ where
         key: &StaticConstrainedCacheKey,
     ) -> Result<MethodDescription, TypeResolutionError> {
         let constraint = self.loader.find_concrete_type(key.constraint.clone())?;
+        let mut constraint_lookup = key.constraint.make_lookup();
+        constraint_lookup.set_method_generics(key.source_lookup.method_generics.clone());
+        let declaration = self.method_for_lookup(&key.base_method, &key.source_lookup, false);
 
+        // Resolve MethodImpl declarations against the implementing type, while comparing the
+        // requested signature in its own interface context. The two instantiations may differ.
         // Reuse the resolver's exact MethodImpl map first. Besides avoiding an instruction-side
         // metadata walk, this retains the established canonical facade/CoreLib identity bridge.
         // Variance is intentionally deferred until after the exact direct and DIM routes below.
         if let Some(method) = self.find_override_implementation(
             constraint.clone(),
             &key.base_method,
-            &key.source_lookup,
+            &constraint_lookup,
             false,
         )? {
             return Ok(method);
@@ -696,12 +701,13 @@ where
 
         // This is the existing static constrained direct-implementation lookup. Do it before
         // widening any match so established constrained calls retain their exact route.
-        if let Some(method) = self.loader.find_method_in_type_with_substitution(
+        if let Some(method) = self.loader.find_method_in_type_internal(
             constraint.clone(),
             &key.base_method.method().name,
             key.base_method.signature(),
             key.base_method.resolution(),
-            &key.source_lookup,
+            Some(&declaration.parent_generics),
+            Some(&constraint_lookup),
             false,
         ) {
             return Ok(method);
@@ -719,7 +725,7 @@ where
         if let Some(method) = self.find_override_implementation(
             constraint.clone(),
             &key.base_method,
-            &key.source_lookup,
+            &constraint_lookup,
             true,
         )? {
             return Ok(method);
@@ -733,7 +739,7 @@ where
             key.base_method.signature(),
             key.base_method.resolution(),
             Some(&signature_lookup),
-            Some(&key.source_lookup),
+            Some(&constraint_lookup),
             true,
         ) {
             return Ok(method);

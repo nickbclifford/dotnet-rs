@@ -450,9 +450,8 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
             let generic_args = (0..generic_arity)
                 .map(|index| {
                     let runtime_type = concrete_method_generics
-                        .and_then(|args| {
-                            runtime_type_from_concrete(ctx.loader().as_ref(), &args[index])
-                        })
+                        .and_then(|_| method.own_method_arg(&lookup, index).ok())
+                        .and_then(|arg| runtime_type_from_concrete(ctx.loader().as_ref(), arg))
                         .unwrap_or_else(|| RuntimeType::MethodParameter {
                             owner: method.clone(),
                             index: index as u16,

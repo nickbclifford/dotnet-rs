@@ -56,10 +56,10 @@ pub fn intrinsic_equality_comparer_get_default<
     T: LoaderOps + MemoryOps<'gc> + TypedStackOps<'gc>,
 >(
     ctx: &mut T,
-    _method: MethodDescription,
+    method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let target_type = dotnet_vm_ops::vm_try!(generics.cloned_type_arg(0));
+    let target_type = dotnet_vm_ops::vm_try!(method.cloned_own_type_arg(generics, 0));
     let instance = dotnet_vm_ops::vm_try!(instantiate_comparer(
         ctx,
         target_type,
@@ -74,10 +74,10 @@ pub fn intrinsic_equality_comparer_get_default<
 )]
 pub fn intrinsic_comparer_get_default<'gc, T: LoaderOps + MemoryOps<'gc> + TypedStackOps<'gc>>(
     ctx: &mut T,
-    _method: MethodDescription,
+    method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let target_type = dotnet_vm_ops::vm_try!(generics.cloned_type_arg(0));
+    let target_type = dotnet_vm_ops::vm_try!(method.cloned_own_type_arg(generics, 0));
     let instance = dotnet_vm_ops::vm_try!(instantiate_comparer(
         ctx,
         target_type,
@@ -189,14 +189,10 @@ pub fn intrinsic_int32_create_checked<'gc, T: TypedStackOps<'gc>>(
 #[dotnet_intrinsic("static M1 System.Numerics.IAdditiveIdentity<M0, M1>::get_AdditiveIdentity()")]
 pub fn intrinsic_numeric_zero<'gc, T: TypedStackOps<'gc>>(
     ctx: &mut T,
-    _method: MethodDescription,
+    method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let Some(target_type) = generics.type_generics.first() else {
-        return StepResult::not_implemented(
-            "numeric zero intrinsic called without type generic".to_string(),
-        );
-    };
+    let target_type = dotnet_vm_ops::vm_try!(method.own_type_arg(generics, 0));
 
     match target_type.get() {
         BaseType::Boolean
@@ -225,17 +221,13 @@ pub fn intrinsic_numeric_zero<'gc, T: TypedStackOps<'gc>>(
 #[dotnet_intrinsic("static M2 System.Numerics.IAdditionOperators<M0, M1, M2>::op_Addition(M0, M1)")]
 pub fn intrinsic_numeric_addition<'gc, T: TypedStackOps<'gc>>(
     ctx: &mut T,
-    _method: MethodDescription,
+    method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
     let rhs = ctx.pop();
     let lhs = ctx.pop();
 
-    let Some(result_type) = generics.type_generics.get(2) else {
-        return StepResult::not_implemented(
-            "numeric addition intrinsic called without result generic".to_string(),
-        );
-    };
+    let result_type = dotnet_vm_ops::vm_try!(method.own_type_arg(generics, 2));
 
     match result_type.get() {
         BaseType::Int32 | BaseType::UInt32 | BaseType::Int16 | BaseType::UInt16 => {
@@ -300,17 +292,13 @@ pub fn intrinsic_numeric_addition<'gc, T: TypedStackOps<'gc>>(
 )]
 pub fn intrinsic_numeric_greater_than<'gc, T: TypedStackOps<'gc>>(
     ctx: &mut T,
-    _method: MethodDescription,
+    method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
     let rhs = ctx.pop();
     let lhs = ctx.pop();
 
-    let Some(target_type) = generics.type_generics.first() else {
-        return StepResult::not_implemented(
-            "numeric greater-than intrinsic called without type generic".to_string(),
-        );
-    };
+    let target_type = dotnet_vm_ops::vm_try!(method.own_type_arg(generics, 0));
 
     let result = match target_type.get() {
         BaseType::Int8 | BaseType::Int16 | BaseType::Int32 => match (lhs, rhs) {
@@ -395,16 +383,12 @@ pub fn intrinsic_numeric_greater_than<'gc, T: TypedStackOps<'gc>>(
 #[dotnet_intrinsic("static M0 System.Numerics.IIncrementOperators<M0>::op_Increment(M0)")]
 pub fn intrinsic_numeric_increment<'gc, T: TypedStackOps<'gc>>(
     ctx: &mut T,
-    _method: MethodDescription,
+    method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
     let value = ctx.pop();
 
-    let Some(target_type) = generics.type_generics.first() else {
-        return StepResult::not_implemented(
-            "numeric increment intrinsic called without type generic".to_string(),
-        );
-    };
+    let target_type = dotnet_vm_ops::vm_try!(method.own_type_arg(generics, 0));
 
     match target_type.get() {
         BaseType::Int8

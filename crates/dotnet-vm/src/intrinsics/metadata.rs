@@ -313,6 +313,35 @@ mod tests {
 
     #[test]
     #[cfg(not(miri))]
+    fn array_data_reference_overloads_are_intercepted() {
+        use dotnet_types::generics::GenericLookup;
+        use dotnetdll::prelude::MethodMemberIndex;
+
+        let runtime = dotnet_assemblies::find_dotnet_app_path().unwrap();
+        let loader = AssemblyLoader::new(runtime.to_string_lossy().into_owned()).unwrap();
+        let registry = IntrinsicRegistry::initialize();
+        let ty = loader
+            .corlib_type("System.Runtime.InteropServices.MemoryMarshal")
+            .unwrap();
+        let methods: Vec<_> = (0..ty.definition().methods.len())
+            .map(|index| {
+                MethodDescription::new(
+                    ty.clone(),
+                    GenericLookup::default(),
+                    ty.resolution.clone(),
+                    MethodMemberIndex::Method(index),
+                )
+            })
+            .filter(|method| method.method().name == "GetArrayDataReference")
+            .collect();
+        assert_eq!(methods.len(), 2);
+        for method in methods {
+            assert!(registry.get_metadata(&method, &loader).is_some());
+        }
+    }
+
+    #[test]
+    #[cfg(not(miri))]
     fn math_and_mathf_bodiless_methods_have_intrinsic_handlers() {
         use dotnet_types::generics::GenericLookup;
         use dotnetdll::prelude::MethodMemberIndex;

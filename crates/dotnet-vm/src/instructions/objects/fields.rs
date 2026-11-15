@@ -27,7 +27,10 @@ use dotnet_value::{
 use dotnetdll::prelude::*;
 use std::ptr::{self, NonNull};
 
-fn canonical_static_lookup(field: &FieldDescription, lookup: &GenericLookup) -> GenericLookup {
+pub(crate) fn canonical_static_lookup(
+    field: &FieldDescription,
+    lookup: &GenericLookup,
+) -> GenericLookup {
     let type_arity = field.parent.definition().generic_parameters.len();
     GenericLookup::new(
         lookup
@@ -55,7 +58,7 @@ fn static_field_thread<'gc, T: VesOps<'gc>>(ctx: &T, field: &FieldDescription) -
         .then(|| ctx.thread_id().as_u64())
 }
 
-fn static_field_storage<'gc, T: VesOps<'gc>>(
+pub(crate) fn static_field_storage<'gc, T: VesOps<'gc>>(
     ctx: &T,
     field: &FieldDescription,
     generics: &GenericLookup,

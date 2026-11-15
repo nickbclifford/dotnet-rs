@@ -177,7 +177,7 @@ pub(super) fn enum_try_format_unconstrained<
         + dotnet_value::pointer::ManagedPtrResolver<'gc>,
 >(
     ctx: &mut T,
-    _method: MethodDescription,
+    method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
     let _format = ctx.pop();
@@ -193,7 +193,8 @@ pub(super) fn enum_try_format_unconstrained<
         return StepResult::Continue;
     };
 
-    let enum_type = enum_type_from_stack_value(&value).or_else(|| generic_enum_type(generics));
+    let enum_argument = dotnet_vm_ops::vm_try!(method.own_method_arg(generics, 0));
+    let enum_type = enum_type_from_stack_value(&value).or_else(|| generic_enum_type(enum_argument));
     let formatted = if let Some(enum_type) = enum_type {
         format_enum_value_from_type(&enum_type, raw_value, signed)
     } else if signed {

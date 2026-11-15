@@ -4,6 +4,7 @@ using System.Reflection;
 public unsafe class Fields
 {
     public int* Instance;
+    public static int* Static;
 }
 
 public unsafe struct Pair
@@ -27,6 +28,14 @@ public static unsafe class Program
         if (fields.Instance != p || Pointer.Unbox(instance.GetValue(fields)!) != p) return 1;
         instance.SetValue(fields, Pointer.Box(null, typeof(int*)));
         if (fields.Instance != null || Pointer.Unbox(instance.GetValue(fields)!) != null) return 2;
+        FieldInfo staticField = typeof(Fields).GetField("Static")!;
+        staticField.SetValue(null, boxed);
+        if (Fields.Static != p || Pointer.Unbox(staticField.GetValue(null)!) != p) return 6;
+        staticField.SetValue(null, Pointer.Box(null, typeof(int*)));
+        if (Fields.Static != null || Pointer.Unbox(staticField.GetValue(null)!) != null) return 7;
+        staticField.SetValue(null, boxed);
+        staticField.SetValue(null, null);
+        if (Fields.Static != null || Pointer.Unbox(staticField.GetValue(null)!) != null) return 8;
         int*[] array = new int*[1];
         array[0] = p;
         if (array[0] != p) return 3;

@@ -75,14 +75,10 @@ pub fn intrinsic_unsafe_as_pointer<
 #[dotnet_intrinsic("static M0& System.Runtime.CompilerServices.Unsafe::NullRef<M0>()")]
 pub fn intrinsic_unsafe_null_ref<'gc, T: TypedStackOps<'gc> + LoaderOps>(
     ctx: &mut T,
-    _method: MethodDescription,
+    method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let Some(target) = generics.method_generics.first().cloned() else {
-        return StepResult::not_implemented(
-            "Unsafe.NullRef<T> requires one generic argument".to_string(),
-        );
-    };
+    let target = dotnet_vm_ops::vm_try!(method.cloned_own_method_arg(generics, 0));
     let target_type = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(target));
     ctx.push_ptr(ptr::null_mut(), target_type, false, None, None);
     StepResult::Continue
@@ -138,10 +134,10 @@ pub fn intrinsic_unsafe_add<'gc, T: UnsafeIntrinsicHost<'gc>>(
 )]
 pub fn intrinsic_unsafe_add_byte_offset<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(
     ctx: &mut T,
-    _method: MethodDescription,
+    method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let _target = dotnet_vm_ops::vm_try!(generics.method_arg(0));
+    let _target = dotnet_vm_ops::vm_try!(method.own_method_arg(generics, 0));
 
     let offset_val = ctx.pop();
     let offset = match offset_val {
@@ -348,12 +344,6 @@ pub fn intrinsic_unsafe_bitcast<'gc, T: UnsafeIntrinsicHost<'gc>>(
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    if generics.method_generics.len() < 2 {
-        return StepResult::not_implemented(
-            "Unsafe.BitCast<TFrom, TTo> requires two generic arguments".to_string(),
-        );
-    }
-
     let src_type = dotnet_vm_ops::vm_try!(method.cloned_own_method_arg(generics, 0));
     let dst_type = dotnet_vm_ops::vm_try!(method.cloned_own_method_arg(generics, 1));
     // INVARIANT: F5.TracesEveryGcRef — the unchanged stack value retains its traced fields, including byrefs.

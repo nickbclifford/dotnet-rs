@@ -20,7 +20,12 @@ use dotnet_types::{
     runtime::RuntimeType,
 };
 use dotnet_utils::ArenaId;
-use dotnet_value::object::{Object, ObjectRef};
+use dotnet_value::{
+    StackValue,
+    layout::HasLayout,
+    object::{Object, ObjectRef},
+};
+use dotnet_vm_ops::ops::MemoryOps;
 use dotnetdll::prelude::{FieldSource, MethodType as DllMethodType, UserType};
 
 #[cfg(feature = "multithreading")]
@@ -784,5 +789,76 @@ impl<'a, 'gc> VmReflectionOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn reflection(&self) -> ReflectionRegistry<'_, 'gc> {
         ReflectionRegistry::new(&self.local.reflection)
+    }
+}
+
+impl<'gc> dotnet_intrinsics_reflection::ReflectionStaticFieldHost<'gc> for VesContext<'_, 'gc> {
+    fn reflection_static_initialized(
+        &self,
+        field: &FieldDescription,
+        lookup: &GenericLookup,
+    ) -> bool {
+        self.statics().get_init_state(field.parent.clone(), lookup)
+            == crate::statics::InitState::Initialized
+    }
+
+    fn reflection_static_read(
+        &self,
+        field: &FieldDescription,
+        lookup: &GenericLookup,
+    ) -> Result<StackValue<'gc>, dotnet_types::error::VmError> {
+        let (storage, _) =
+            crate::instructions::objects::fields::static_field_storage(self, field, lookup);
+        let bytes = storage.storage.get_field_atomic(
+            field.parent.clone(),
+            &field.field().name,
+            crate::sync::Ordering::Acquire,
+        );
+        let concrete = lookup.make_concrete(
+            field.resolution(),
+            field.field().return_type.clone(),
+            self.loader().as_ref(),
+        )?;
+        if matches!(
+            concrete.get(),
+            dotnetdll::prelude::BaseType::ValuePointer(..)
+        ) {
+            let word: [u8; size_of::<isize>()] = bytes.as_slice().try_into().map_err(|_| {
+                ExecutionError::InternalError("invalid static pointer field size".into())
+            })?;
+            Ok(StackValue::NativeInt(isize::from_ne_bytes(word)))
+        } else {
+            Ok(self.read_cts_value(&concrete, &bytes)?.into_stack())
+        }
+    }
+
+    fn reflection_static_write(
+        &self,
+        field: &FieldDescription,
+        lookup: &GenericLookup,
+        value: Option<StackValue<'gc>>,
+    ) -> Result<(), dotnet_types::error::VmError> {
+        let (storage, _) =
+            crate::instructions::objects::fields::static_field_storage(self, field, lookup);
+        let layout = storage.layout();
+        let field_layout = layout
+            .get_field(field.parent.clone(), &field.field().name)
+            .expect("resolved static field belongs to its storage layout");
+        let mut bytes = vec![0; field_layout.layout.size().as_usize()];
+        if let Some(value) = value {
+            let concrete = lookup.make_concrete(
+                field.resolution(),
+                field.field().return_type.clone(),
+                self.loader().as_ref(),
+            )?;
+            self.new_cts_value(&concrete, value)?.write(&mut bytes);
+        }
+        storage.storage.set_field_atomic(
+            field.parent.clone(),
+            &field.field().name,
+            &bytes,
+            crate::sync::Ordering::Release,
+        );
+        Ok(())
     }
 }

@@ -2160,15 +2160,16 @@ fn p24_unsafe_byte_offset_direction_and_deref() {
         "UnsafeAddressOrderAssembly".to_string(),
         "UnsafeAddressOrderType".to_string()
     );
-    let method_idx = method_res.push_method(
-        method_type_idx,
-        Method::new(
-            Accessibility::Public,
-            parameterless_i32_signature(),
-            "IsAddressLessThan",
-            None,
-        ),
+    let mut test_method = Method::new(
+        Accessibility::Public,
+        parameterless_i32_signature(),
+        "IsAddressLessThan",
+        None,
     );
+    test_method
+        .generic_parameters
+        .push(dotnetdll::resolved::generic::Generic::new("T"));
+    let method_idx = method_res.push_method(method_type_idx, test_method);
     let method_res = loader.register_owned_assembly(method_res);
     let method_def = &method_res.definition()[method_idx];
     let method_type = TypeDescription::new(method_res.clone(), method_type_idx);

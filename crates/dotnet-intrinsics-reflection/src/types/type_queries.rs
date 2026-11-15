@@ -197,11 +197,12 @@ pub fn intrinsic_json_converter_get_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
 ) -> StepResult {
     let this_obj = ctx.pop_obj();
 
-    let target_type = generics
-        .type_generics
-        .first()
-        .or_else(|| method.parent_generics.type_generics.first());
-    if let Some(target_type) = target_type {
+    if !method.parent.definition().generic_parameters.is_empty() {
+        let target_type = dotnet_vm_ops::vm_try!(
+            method
+                .own_type_arg(generics, 0)
+                .or_else(|_| method.own_type_arg(&method.parent_generics, 0))
+        );
         let runtime_type = runtime_type_from_concrete(ctx.loader().as_ref(), target_type);
         if let Some(runtime_type) = runtime_type {
             let runtime_type_obj = crate::common::get_runtime_type(ctx, runtime_type);
