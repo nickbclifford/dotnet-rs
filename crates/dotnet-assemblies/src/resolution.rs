@@ -608,9 +608,15 @@ impl AssemblyLoader {
                 // Use the ptr-scan helper to recover the correct `MethodMemberIndex` variant.
                 let member_index = Self::method_member_index_from_index(resolution.definition(), d);
 
-                // Prefer support-stub `System.Array.Copy` implementations for definition-bound
-                // CoreLib calls (e.g., HashSet.Resize), but keep other definition dispatches
-                // on their original declaring type to avoid broad behavior changes.
+                // Prefer support-stub implementations for two kinds of definition-bound CoreLib
+                // call, and keep every other definition dispatch on its original declaring type
+                // to avoid broad behavior changes:
+                // - `System.Array.Copy` (e.g., HashSet.Resize).
+                // - `System.RuntimeType` methods the stub implements in IL. Every `RuntimeType`
+                //   object is a `DotnetRs.RuntimeType`, which lacks CoreLib's fields (`m_handle`,
+                //   `m_cache`), so a CoreLib body that reads them can't run. Virtual calls already
+                //   reach stub overrides; this covers CoreLib's direct calls to non-virtual
+                //   members such as `CreateInstanceImpl`.
                 let parent_type_name = parent_type.type_name();
                 let canonical_parent = self.canonical_type_name(&parent_type_name);
                 let method_sig = MethodDescription::new(
@@ -623,8 +629,9 @@ impl AssemblyLoader {
                 let should_redirect_array_copy = canonical_parent == "System.Array"
                     && method.name == "Copy"
                     && !method_sig.instance;
+                let should_redirect_runtime_type = canonical_parent == "System.RuntimeType";
 
-                if should_redirect_array_copy
+                if (should_redirect_array_copy || should_redirect_runtime_type)
                     && let Some(stub_type) = self.stubs.get(canonical_parent)
                     && let Some(stub_method) = self.find_method_in_type_with_substitution(
                         stub_type.clone(),
@@ -634,6 +641,11 @@ impl AssemblyLoader {
                         generic_inst,
                         false,
                     )
+                    && (should_redirect_array_copy || {
+                        // Has IL: method bodies may be decoded lazily, so `body` can't be used.
+                        let m = stub_method.method();
+                        !m.internal_call && !m.abstract_member && m.pinvoke.is_none()
+                    })
                 {
                     return Ok(stub_method);
                 }

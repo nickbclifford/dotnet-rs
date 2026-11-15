@@ -168,6 +168,8 @@ pub fn intrinsic_type_get_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
 #[dotnet_intrinsic("bool System.RuntimeType::get_IsGenericTypeDefinition()")]
 #[dotnet_intrinsic("bool System.RuntimeType::GetIsGenericTypeDefinition()")]
 #[dotnet_intrinsic("bool DotnetRs.RuntimeType::get_IsGenericTypeDefinition()")]
+#[dotnet_intrinsic("bool System.RuntimeType::get_IsGenericParameter()")]
+#[dotnet_intrinsic("bool DotnetRs.RuntimeType::get_IsGenericParameter()")]
 #[dotnet_intrinsic("System.Type[] System.RuntimeType::GetInterfaces()")]
 #[dotnet_intrinsic("System.Type System.RuntimeType::GetInterface(string, bool)")]
 #[dotnet_intrinsic("System.Type System.RuntimeType::GetElementType()")]
@@ -199,6 +201,7 @@ pub fn runtime_type_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
         ("ToString", 0) => handle_type_to_string(ctx, generics),
         ("GetBaseType" | "get_BaseType", 0) => handle_get_base_type(ctx, generics),
         ("GetIsGenericType" | "get_IsGenericType", 0) => handle_get_is_generic_type(ctx, generics),
+        ("get_IsGenericParameter", 0) => handle_get_is_generic_parameter(ctx, generics),
         ("GetIsGenericTypeDefinition" | "get_IsGenericTypeDefinition", 0) => {
             handle_get_is_generic_type_definition(ctx, generics)
         }

@@ -17,6 +17,47 @@ use dotnet_value::{
 };
 
 const ACCESS_VIOLATION_MSG: &str = "Attempted to read or write protected memory.";
+
+/// Explains a failed instance-field access when CoreLib IL touched a field that the object's
+/// support stub doesn't declare.
+///
+/// A support type such as `DotnetRs.RuntimeType` replaces a CoreLib type (`System.RuntimeType`)
+/// but keeps only its own fields. CoreLib methods the stub doesn't replace still run their IL, and
+/// a field like `m_cache` then lies outside the stub object. That is a VM gap, not a managed
+/// access violation, so report it as one, naming the field and the stub to extend.
+#[cold]
+#[inline(never)]
+fn stub_field_gap<'gc, T: VesOps<'gc>>(
+    ctx: &T,
+    parent: &StackValue<'gc>,
+    field: &FieldDescription,
+) -> Option<StepResult> {
+    let StackValue::ObjectRef(ObjectRef(Some(handle))) = parent else {
+        return None;
+    };
+    let actual = match &handle.borrow().storage {
+        HeapStorage::Obj(object) => object.description.type_name(),
+        _ => return None,
+    };
+    let declared = field.parent.type_name();
+    if actual == declared || ctx.loader().canonical_type_name(&actual) != declared {
+        return None;
+    }
+    let method = ctx.current_frame().state.info_handle.source.clone();
+    Some(StepResult::Error(
+        crate::error::ExecutionError::NotImplemented(
+            format!(
+                "{declared}.{} is not modeled by support stub {actual} (accessed from {}.{}); \
+                 implement that method on the stub or as an intrinsic",
+                field.field().name,
+                method.parent.type_name(),
+                method.method().name,
+            )
+            .into(),
+        )
+        .into(),
+    ))
+}
 use dotnet_macros::dotnet_instruction;
 use dotnet_value::{
     StackValue,
@@ -186,6 +227,9 @@ pub fn ldfld<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource, volatile: b
                 return ctx
                     .throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
             }
+            if let Some(step) = stub_field_gap(ctx, &parent, &field) {
+                return step;
+            }
             return ctx.throw_by_name_with_message(
                 "System.AccessViolationException",
                 ACCESS_VIOLATION_MSG,
@@ -247,6 +291,9 @@ pub fn stfld<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource, volatile: b
             if offset.as_usize() == 0 {
                 return ctx
                     .throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
+            }
+            if let Some(step) = stub_field_gap(ctx, &parent, &field) {
+                return step;
             }
             return ctx.throw_by_name_with_message(
                 "System.AccessViolationException",

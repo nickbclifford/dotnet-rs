@@ -99,6 +99,8 @@ internal class RuntimeType : Type
 
     public override extern bool IsGenericTypeDefinition { [MethodImpl(MethodImplOptions.InternalCall)] get; }
 
+    public override extern bool IsGenericParameter { [MethodImpl(MethodImplOptions.InternalCall)] get; }
+
     [MethodImpl(MethodImplOptions.InternalCall)]
     public override extern Type GetGenericTypeDefinition();
 
@@ -107,6 +109,112 @@ internal class RuntimeType : Type
 
     [MethodImpl(MethodImplOptions.InternalCall)]
     internal extern object CreateInstanceDefaultCtor(bool publicOnly, bool skipCheck);
+
+    // Replaces CoreLib's `RuntimeType.IsActualInterface`, which reads the method table through
+    // `GetNativeTypeHandle` (`m_handle`). `DynamicMethod.Init` checks it for an owner type; that
+    // read raised AccessViolationException before this override existed (plan 24 slice 2).
+    internal bool IsActualInterface => IsInterface;
+
+    // Replaces CoreLib's `RuntimeType.CreateInstanceImpl`, the funnel for every
+    // `Activator.CreateInstance(Type, BindingFlags, Binder, object[], CultureInfo, ...)` overload.
+    // CoreLib's body enumerates constructors through `RuntimeType.Cache`, which reads `m_cache`, a
+    // field this stub doesn't have. This mirrors that body with `GetConstructors` and the same
+    // candidate filter (`RuntimeType.FilterApplyMethodBase`) instead.
+    internal object? CreateInstanceImpl(BindingFlags bindingAttr, Binder? binder, object?[]? args, CultureInfo? culture)
+    {
+        if (ContainsGenericParameters)
+            throw new ArgumentException(
+                $"Cannot create an instance of {this} because Type.ContainsGenericParameters is true.");
+        args ??= [];
+        binder ??= DefaultBinder;
+        var publicOnly = (bindingAttr & BindingFlags.NonPublic) == 0;
+        var wrapExceptions = (bindingAttr & BindingFlags.DoNotWrapExceptions) == 0;
+
+        if (args.Length == 0 && (bindingAttr & BindingFlags.Public) != 0 &&
+            (bindingAttr & BindingFlags.Instance) != 0 && IsValueType)
+            return CreateInstanceDefaultCtor(publicOnly, wrapExceptions);
+
+        var argumentTypes = args.Length == 0 ? EmptyTypes : new Type?[args.Length];
+        for (var i = 0; i < args.Length; i++)
+            argumentTypes[i] = args[i]?.GetType();
+
+        var all = GetConstructors(bindingAttr);
+        var candidates = new MethodBase[all.Length];
+        var count = 0;
+        foreach (var constructor in all)
+        {
+            if (ConstructorAcceptsArity(constructor, bindingAttr, argumentTypes))
+                candidates[count++] = constructor;
+        }
+        if (count == 0)
+            throw new MissingMethodException($"Constructor on type '{FullName}' not found.");
+        if (count != candidates.Length)
+            Array.Resize(ref candidates, count);
+
+        MethodBase? selected;
+        object? state;
+        try
+        {
+            selected = binder.BindToMethod(bindingAttr, candidates, ref args, null, culture, null, out state);
+        }
+        catch (MissingMethodException inner)
+        {
+            throw new MissingMethodException($"Constructor on type '{FullName}' not found.", inner);
+        }
+        if (selected is null)
+            throw new MissingMethodException($"Constructor on type '{FullName}' not found.");
+
+        if (selected.GetParameters().Length == 0)
+        {
+            if (args.Length != 0)
+                throw new NotSupportedException("Vararg calling convention not supported.");
+            return CreateInstanceDefaultCtor(publicOnly: false, wrapExceptions);
+        }
+
+        var result = ((ConstructorInfo)selected).Invoke(bindingAttr, binder, args, culture);
+        if (state != null)
+            binder.ReorderArgumentArray(ref args, state);
+        return result;
+    }
+
+    // The argument-count part of CoreLib's `RuntimeType.FilterApplyMethodBase`; `GetConstructors`
+    // has already applied the binding-flag part.
+    private static bool ConstructorAcceptsArity(ConstructorInfo constructor, BindingFlags bindingAttr, Type?[] argumentTypes)
+    {
+        var parameters = constructor.GetParameters();
+        if (argumentTypes.Length == parameters.Length)
+        {
+            if ((bindingAttr & BindingFlags.ExactBinding) == 0 || (bindingAttr & BindingFlags.InvokeMethod) != 0)
+                return true;
+            for (var i = 0; i < parameters.Length; i++)
+            {
+                var type = argumentTypes[i];
+                if (type is not null && type != parameters[i].ParameterType)
+                    return false;
+            }
+            return true;
+        }
+
+        const BindingFlags invokeFlags = BindingFlags.InvokeMethod | BindingFlags.CreateInstance |
+                                         BindingFlags.GetProperty | BindingFlags.SetProperty;
+        if ((bindingAttr & invokeFlags) == 0)
+            return false;
+
+        bool needsParamArray;
+        if (argumentTypes.Length > parameters.Length)
+            needsParamArray = (constructor.CallingConvention & CallingConventions.VarArgs) == 0;
+        else if ((bindingAttr & BindingFlags.OptionalParamBinding) == 0)
+            needsParamArray = true;
+        else
+            needsParamArray = !parameters[argumentTypes.Length].IsOptional;
+        if (!needsParamArray)
+            return true;
+
+        if (parameters.Length == 0 || argumentTypes.Length < parameters.Length - 1)
+            return false;
+        var last = parameters[^1];
+        return last.ParameterType.IsArray && last.IsDefined(typeof(ParamArrayAttribute), false);
+    }
 
     public override extern System.RuntimeTypeHandle TypeHandle { [MethodImpl(MethodImplOptions.InternalCall)] get; }
 

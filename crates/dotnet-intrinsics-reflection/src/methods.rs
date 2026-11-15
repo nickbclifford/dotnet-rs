@@ -352,6 +352,13 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
             ctx.push_obj(rt_obj);
             Some(StepResult::Continue)
         }
+        ("get_CallingConvention" | "GetCallingConvention", 0) => {
+            let obj = ctx.pop_obj();
+            let (method, _) =
+                dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_method(ctx, obj));
+            ctx.push_i32(calling_conventions_flags(&method));
+            Some(StepResult::Continue)
+        }
         ("GetAttributes" | "get_Attributes" | "GetMethodFlags", 0) => {
             let obj = ctx.pop_obj();
             let (method, _) =
@@ -765,6 +772,33 @@ fn resolve_base_method_definition<'gc, T: ReflectionIntrinsicHost<'gc>>(
     }
 
     Ok((base_method, base_lookup))
+}
+
+/// `MethodBase.CallingConvention` as the CLR reports it: `VarArgs` for vararg signatures and
+/// `Standard` otherwise, plus `HasThis` and `ExplicitThis` from the signature.
+fn calling_conventions_flags(method: &MethodDescription) -> i32 {
+    const STANDARD: i32 = 0x1;
+    const VAR_ARGS: i32 = 0x2;
+    const HAS_THIS: i32 = 0x20;
+    const EXPLICIT_THIS: i32 = 0x40;
+
+    let signature = method.signature();
+    let mut flags = if signature.varargs.is_some()
+        || matches!(
+            signature.calling_convention,
+            dotnetdll::prelude::CallingConvention::Vararg
+        ) {
+        VAR_ARGS
+    } else {
+        STANDARD
+    };
+    if signature.instance {
+        flags |= HAS_THIS;
+    }
+    if signature.explicit_this {
+        flags |= EXPLICIT_THIS;
+    }
+    flags
 }
 
 fn method_attributes_flags(method: &MethodDescription) -> i32 {

@@ -868,6 +868,22 @@ pub fn handle_get_is_generic_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
     StepResult::Continue
 }
 
+/// `Type.IsGenericParameter`: true for a type or method generic parameter, such as the `T` that
+/// `typeof(List<>).GetGenericArguments()` returns.
+pub fn handle_get_is_generic_parameter<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let obj = ctx.pop_obj();
+    let target_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
+    let is_parameter = matches!(
+        target_type,
+        RuntimeType::TypeParameter { .. } | RuntimeType::MethodParameter { .. }
+    );
+    ctx.push_i32(if is_parameter { 1 } else { 0 });
+    StepResult::Continue
+}
+
 pub fn handle_get_is_generic_type_definition<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     _generics: &GenericLookup,
