@@ -92,7 +92,7 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 name = "corpus-tools"
 version = "0.1.0"
 dependencies = [
- "dotnetdll",
+ "dotnetdll 0.4.0",
  "walkdir",
 ]
 
@@ -173,7 +173,7 @@ dependencies = [
  "dotnet-types",
  "dotnet-utils",
  "dotnet-value",
- "dotnetdll",
+ "dotnetdll 0.5.1",
  "gc-arena",
  "hashbrown 0.17.1",
  "serde",
@@ -195,7 +195,7 @@ dependencies = [
  "dotnet-value",
  "dotnet-vm-data",
  "dotnet-vm-ops",
- "dotnetdll",
+ "dotnetdll 0.5.1",
 ]
 
 [[package]]
@@ -208,7 +208,7 @@ dependencies = [
  "dotnet-value",
  "dotnet-vm-data",
  "dotnet-vm-ops",
- "dotnetdll",
+ "dotnetdll 0.5.1",
 ]
 
 [[package]]
@@ -220,13 +220,14 @@ dependencies = [
  "dotnet-value",
  "dotnet-vm-data",
  "dotnet-vm-ops",
- "dotnetdll",
+ "dotnetdll 0.5.1",
 ]
 
 [[package]]
 name = "dotnet-intrinsics-reflection"
 version = "0.1.0"
 dependencies = [
+ "dotnet-assemblies",
  "dotnet-intrinsics-delegates",
  "dotnet-macros",
  "dotnet-types",
@@ -234,7 +235,7 @@ dependencies = [
  "dotnet-value",
  "dotnet-vm-data",
  "dotnet-vm-ops",
- "dotnetdll",
+ "dotnetdll 0.5.1",
  "tracing",
 ]
 
@@ -249,7 +250,7 @@ dependencies = [
  "dotnet-value",
  "dotnet-vm-data",
  "dotnet-vm-ops",
- "dotnetdll",
+ "dotnetdll 0.5.1",
 ]
 
 [[package]]
@@ -263,7 +264,7 @@ dependencies = [
  "dotnet-value",
  "dotnet-vm-data",
  "dotnet-vm-ops",
- "dotnetdll",
+ "dotnetdll 0.5.1",
  "gc-arena",
 ]
 
@@ -277,7 +278,7 @@ dependencies = [
  "dotnet-value",
  "dotnet-vm-data",
  "dotnet-vm-ops",
- "dotnetdll",
+ "dotnetdll 0.5.1",
 ]
 
 [[package]]
@@ -291,7 +292,7 @@ dependencies = [
  "dotnet-value",
  "dotnet-vm-data",
  "dotnet-vm-ops",
- "dotnetdll",
+ "dotnetdll 0.5.1",
 ]
 
 [[package]]
@@ -332,7 +333,7 @@ dependencies = [
  "dotnet-value",
  "dotnet-vm-data",
  "dotnet-vm-ops",
- "dotnetdll",
+ "dotnetdll 0.5.1",
  "gc-arena",
  "libffi",
  "libloading",
@@ -359,7 +360,7 @@ dependencies = [
  "dotnet-types",
  "dotnet-utils",
  "dotnet-value",
- "dotnetdll",
+ "dotnetdll 0.5.1",
  "hashbrown 0.17.1",
  "tracing",
 ]
@@ -386,7 +387,7 @@ version = "0.1.0"
 dependencies = [
  "arbitrary",
  "dotnet-utils",
- "dotnetdll",
+ "dotnetdll 0.5.1",
  "gc-arena",
  "lru",
  "thiserror",
@@ -411,7 +412,7 @@ dependencies = [
  "dashmap",
  "dotnet-types",
  "dotnet-utils",
- "dotnetdll",
+ "dotnetdll 0.5.1",
  "gc-arena",
  "hashbrown 0.17.1",
  "smallvec",
@@ -447,7 +448,7 @@ dependencies = [
  "dotnet-value",
  "dotnet-vm-data",
  "dotnet-vm-ops",
- "dotnetdll",
+ "dotnetdll 0.5.1",
  "gc-arena",
  "hashbrown 0.17.1",
  "loom",
@@ -467,7 +468,7 @@ dependencies = [
  "dotnet-types",
  "dotnet-utils",
  "dotnet-value",
- "dotnetdll",
+ "dotnetdll 0.5.1",
  "gc-arena",
  "smallvec",
 ]
@@ -482,7 +483,7 @@ dependencies = [
  "dotnet-utils",
  "dotnet-value",
  "dotnet-vm",
- "dotnetdll",
+ "dotnetdll 0.4.0",
  "gc-arena",
  "libfuzzer-sys",
 ]
@@ -498,7 +499,7 @@ dependencies = [
  "dotnet-utils",
  "dotnet-value",
  "dotnet-vm-data",
- "dotnetdll",
+ "dotnetdll 0.5.1",
  "gc-arena",
 ]
 
@@ -524,10 +525,31 @@ dependencies = [
 ]
 
 [[package]]
-name = "dotnetdll-macros"
-version = "0.2.1"
+name = "dotnetdll"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6ca44de45cd1e005c15ff8445a6048b3d6bfa3e4d503b94187198a6ed621768"
+checksum = "11b85018dce4e1d8f8ea33714048c7d2aa6dc43e8a13a5a9ee313661d79a5030"
+dependencies = [
+ "bitfield",
+ "bitvec",
+ "dotnetdll-macros",
+ "num-derive",
+ "num-traits",
+ "object",
+ "paste",
+ "rayon",
+ "rustc-hash",
+ "scroll",
+ "scroll-buffer",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "dotnetdll-macros"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a16fcef7e86ef82cad586ce7a293d0044a526a3111d1d17341a753609781a732"
 dependencies = [
  "heck",
  "proc-macro2",
