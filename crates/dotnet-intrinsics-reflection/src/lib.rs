@@ -47,6 +47,7 @@ use dotnetdll::prelude::{MethodType, UserType};
 use std::sync::Arc;
 
 pub mod common;
+pub mod dynamic_method;
 pub mod fields;
 mod invoke_args;
 pub mod methods;
