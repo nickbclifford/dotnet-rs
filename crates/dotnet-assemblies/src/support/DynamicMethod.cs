@@ -116,6 +116,7 @@ internal sealed class RecordingILGenerator : ILGenerator
     // One entry per instruction. Reference operands include types, members, strings and targets.
     private readonly List<int> _ops = new();
     private readonly List<OpCode> _codes = new();
+    private readonly List<int> _offsets = new();
     private int _ilOffset;
     private readonly List<long> _imm = new();
     private readonly List<object?> _refs = new();
@@ -145,6 +146,7 @@ internal sealed class RecordingILGenerator : ILGenerator
 
     private void Record(OpCode op, long imm, object? reference)
     {
+        _offsets.Add(_ilOffset);
         _ops.Add(op.Value);
         _codes.Add(op);
         _imm.Add(imm);
@@ -447,7 +449,18 @@ internal sealed class RecordingILGenerator : ILGenerator
                 throw new ArgumentException("Unmarked label.");
             return _labels[id];
         }
-        foreach (var (site, label) in _branches) _imm[site] = Target(label);
+        foreach (var (site, label) in _branches)
+        {
+            int target = Target(label);
+            if (_codes[site].OperandType == OperandType.ShortInlineBrTarget)
+            {
+                int targetOffset = target == _ops.Count ? _ilOffset : _offsets[target];
+                int displacement = targetOffset - (_offsets[site] + _codes[site].Size + 1);
+                if (displacement < sbyte.MinValue || displacement > sbyte.MaxValue)
+                    throw new NotSupportedException("Short branch target is out of range.");
+            }
+            _imm[site] = target;
+        }
         foreach (var (site, labels) in _switches)
         {
             var targets = new int[labels.Length];

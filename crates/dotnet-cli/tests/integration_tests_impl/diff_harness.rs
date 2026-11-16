@@ -1194,6 +1194,11 @@ diff_test!(
 );
 
 diff_test!(
+    dynamic_method_short_branch_range_matches_dotnet,
+    "tests/fixtures/reflection/dynamic_method_short_branch_range_42.cs"
+);
+
+diff_test!(
     dynamic_method_calli_matches_dotnet,
     "tests/fixtures/reflection/dynamic_method_calli_42.cs"
 );
