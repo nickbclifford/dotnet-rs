@@ -592,6 +592,18 @@ impl AssemblyLoader {
         res_s
     }
 
+    /// Registers a synthetic dynamic-method assembly in its own metadata arena.
+    pub fn register_dynamic_assembly(&self, res: Resolution<'static>) -> ResolutionS {
+        let arena = Arc::new(MetadataArena::dynamic_method());
+        let res_ptr = Box::into_raw(Box::new(res));
+        // SAFETY: F9.MetadataArenaOutlivesDescriptors; F10.RawAllocationOwnership. The
+        // allocation belongs to this arena and every descriptor carries its owning Arc.
+        unsafe { arena.add_resolution(res_ptr) };
+        let resolution = ResolutionS::new(res_ptr, arena);
+        self.register_assembly(resolution.clone());
+        resolution
+    }
+
     pub fn comparer(&self) -> TypeComparer<'_, Self> {
         TypeComparer::new(self)
     }

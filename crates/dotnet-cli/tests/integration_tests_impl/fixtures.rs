@@ -61,6 +61,26 @@ fn delegate_dispatch_classification_is_cached_by_resolved_method() {
     assert!(cache.hits > 0, "repeated delegate invokes missed the cache");
 }
 
+#[cfg(feature = "multithreading")]
+#[test]
+fn dynamic_method_reflection_keeps_large_method_indexes() {
+    use dotnet_utils::sync::Ordering;
+
+    let harness = TestHarness::get();
+    let dll = harness.ensure_dll(Path::new(
+        "tests/fixtures/reflection/dynamic_method_gc_42.cs",
+    ));
+    let resolution = harness.loader.load_resolution_from_file(&dll).unwrap();
+    let shared = Arc::new(state::SharedGlobalState::new(Arc::clone(&harness.loader)));
+    shared
+        .reflection_registry
+        .next_method_index
+        .store(u16::MAX as usize + 1, Ordering::Relaxed);
+
+    let result = harness.run_with_shared(resolution, shared);
+    assert_eq!(result.exit_code, 42, "fixture failed: {:?}", result.stderr);
+}
+
 #[cfg(not(feature = "fuzzing"))]
 #[test]
 fn multicast_selection_precedes_operand_commitment() {

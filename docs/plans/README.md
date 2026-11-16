@@ -11,7 +11,7 @@ In priority order. Each plan's own `Status:` line is the only record of its stat
 | ID | Plan | Note |
 |---|---|---|
 | 23 | [Runtime behavior gaps: static field reflection, Math FCalls, Array.Fill, Span.CopyTo, signed byref offsets and generic arity](23-runtime-behavior-gaps.md) | Validated runtime surface and remaining limits are recorded in the plan |
-| 25 | [Implement `DynamicMethod`](25-dynamicmethod-implementation.md) | Slices 1–4 complete; lifetime, stack traces, GC and threads remain |
+| 25 | [Implement `DynamicMethod`](25-dynamicmethod-implementation.md) | Complete except eviction of unreachable dynamic methods (deferred, see Not yet planned) |
 | 24 | [Investigate Reflection.Emit and `DynamicMethod`](24-reflection-emit-investigation.md) | Complete; decision is a `DynamicMethod` implementation (plan 25), no `TypeBuilder`; the access violation is fixed |
 | 21 | [Correctness backlog: byte-read bounds, pointer slots, feature forwarding, thread IDs and the timer flake](21-correctness-backlog.md) | Complete |
 | 22 | [String interning](22-string-interning.md) | Complete; literal, empty and explicit interning identity across threads |
@@ -47,6 +47,12 @@ lists the entries it closes.
 Evidence and IDs (p01…, R01…) are defined in the
 [pointer-provenance inventory](../pointer-provenance/INVENTORY.md).
 
+- **Eviction of unreachable `DynamicMethod`s (plan 25 slice 5, deferred 2026-11-16):** compiled
+  dynamic methods and their metadata arenas are never reclaimed. Safe eviction needs GC-visible
+  owners for delegates, `ParameterInfo` and `ldftn` function pointers (today a bare method
+  index), cross-arena marking for the shared reflection table, pruning of loader registries and
+  descriptor caches, and a fix for `ResolutionS::definition`'s `'static` metadata references.
+  Plan 25's slice 5 section has the full analysis.
 - **Warm managed resource lookup cost:** after plan 15 removed the `SR` resource-string
   intrinsic, `exception_messages` went from about 3.4 ms to about 121 ms; accepted for
   CLR-matching messages (no VM-side decoder). Serving manifest resources as an

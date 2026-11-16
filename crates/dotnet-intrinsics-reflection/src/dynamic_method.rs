@@ -38,12 +38,20 @@ use dotnetdll::{
 };
 use std::{
     collections::HashMap,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
-static NEXT_DYNAMIC_ASSEMBLY: AtomicUsize = AtomicUsize::new(0);
+// IDs never recycle, even when a synthetic assembly is eventually evicted. Refuse exhaustion
+// rather than wrapping to a name that may still identify a different assembly.
+static DYNAMIC_ASSEMBLY_ID: AtomicU64 = AtomicU64::new(0);
 
 type R<T> = Result<T, String>;
+
+fn next_dynamic_assembly_id(counter: &AtomicU64) -> R<u64> {
+    counter
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+        .map_err(|_| "dynamic assembly identity space exhausted".into())
+}
 
 fn prim(b: BaseType<MethodType>) -> MethodType {
     MethodType::Base(Box::new(b))
@@ -1221,7 +1229,7 @@ fn build<'gc, T: ReflectionIntrinsicHost<'gc>>(
     }
 
     let loader = ctx.loader().clone();
-    let id = NEXT_DYNAMIC_ASSEMBLY.fetch_add(1, Ordering::Relaxed);
+    let id = next_dynamic_assembly_id(&DYNAMIC_ASSEMBLY_ID)?;
     let asm_name = format!("DynamicMethod${id}");
     let mut res = Resolution::new(Module::new(format!("{asm_name}.dll")));
     res.assembly = Some(Assembly::new(asm_name));
@@ -1363,11 +1371,24 @@ fn build<'gc, T: ReflectionIntrinsicHost<'gc>>(
         Method::new(Accessibility::Public, signature, name, Some(body)),
     );
 
-    let res = loader.register_owned_assembly(b.res);
+    let res = loader.register_dynamic_assembly(b.res);
     Ok(MethodDescription::new(
         TypeDescription::new(res.clone(), holder_idx),
         GenericLookup::default(),
         res,
         MethodMemberIndex::Method(0),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dynamic_assembly_ids_do_not_wrap() {
+        let counter = AtomicU64::new(u64::MAX - 1);
+        assert_eq!(next_dynamic_assembly_id(&counter).unwrap(), u64::MAX - 1);
+        assert!(next_dynamic_assembly_id(&counter).is_err());
+        assert!(next_dynamic_assembly_id(&counter).is_err());
+    }
 }

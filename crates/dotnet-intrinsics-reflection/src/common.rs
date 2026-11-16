@@ -392,8 +392,8 @@ pub fn get_runtime_method_index<'gc>(
     ctx: &mut impl ReflectionIntrinsicHost<'gc>,
     method: MethodDescription,
     lookup: GenericLookup,
-) -> u16 {
-    ctx.reflection_runtime_method_index_get_or_insert(method, lookup) as u16
+) -> usize {
+    ctx.reflection_runtime_method_index_get_or_insert(method, lookup)
 }
 
 pub fn get_runtime_field_index<'gc>(
@@ -413,7 +413,7 @@ pub fn get_runtime_method_obj<'gc>(
         return obj;
     }
 
-    let index = get_runtime_method_index(ctx, method.clone(), lookup.clone()) as usize;
+    let index = get_runtime_method_index(ctx, method.clone(), lookup.clone());
 
     let is_ctor = method.method().runtime_special_name
         && (method.method().name == ".ctor" || method.method().name == ".cctor");

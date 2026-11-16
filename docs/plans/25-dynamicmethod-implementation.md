@@ -1,6 +1,6 @@
 # Implement `DynamicMethod`
 
-**Status:** Slices 1–4 complete; slice 5 remains
+**Status:** Complete except eviction of unreachable dynamic methods, deferred to README "Not yet planned" (2026-11-16)
 **Outcome:** `System.Reflection.Emit.DynamicMethod` runs on the VM for every `ILGenerator`
 operation a real library uses: branches and labels, fields, `calli`, filters and faults, generic
 and nested types and callees, byref signatures, and the owner, module and `skipVisibility`
@@ -256,6 +256,44 @@ The host projects are `crates/dotnet-cli/tests/host_projects/newtonsoft_roundtri
 Slice 4 verification (2026-11-16): `./check.sh --fast` passed clippy and 1144, 1450 and
 1467 tests in its three configurations; `cargo fmt --all -- --check` passed. Newtonsoft and
 EF InMemory also matched .NET with the single-threaded debug CLI.
+
+### Slice 5: stack traces, concurrency, GC survival (eviction deferred)
+
+Each synthetic method now has its own metadata arena and a runtime marker, allowing delegate
+reflection to report a null `DeclaringType` and exception traces to show the method name without
+its synthetic holder. Differential fixtures cover those observations, a delegate kept alive
+across collections, and simultaneous compilation on separate threads. The GC fixture proves
+survival only; it does not prove reclamation.
+
+Collectibility remains unimplemented. The loader and reflection registries still retain strong
+references to generated assemblies and method objects, method indexes are used by delegates and
+function pointers, and method-info and descriptor caches retain metadata. Eviction must account
+for all of these owners, active frames, resurrection, and cross-arena GC before releasing an arena.
+Generated assembly IDs now use a checked, process-wide 64-bit counter, so eviction cannot cause
+name reuse and exhaustion cannot wrap. Runtime method indexes no longer narrow to 16 bits when
+constructing method objects, parameter objects or function pointers.
+
+The remaining ownership work is broader than removing the loader entry. Delegates and
+`DotnetRs.ParameterInfo` currently retain only a method index; `ldftn` and method-handle function
+pointers expose indexes as native integers. Reflection tables root method objects in each GC
+mode, and the shared table can root objects from another arena. A safe implementation needs to
+represent those owners in the reachability graph, decide how exposed function pointers retain
+their target, prune the registries and caches after cross-arena marking and finalizer promotion,
+and keep synthetic resolutions referenced by other synthetic methods alive. Active frames must
+also retain their descriptors. Removing table entries based only on a dead `DynamicMethod` or
+delegate would leave live indexes dangling. Additionally, `ResolutionS::definition` and
+descriptor accessors return `'static` metadata references: an escaped reference can outlive its
+descriptor's arena. Their lifetime contract must be repaired or otherwise made safe before an
+arena can be evicted while the VM is running.
+
+Work-in-progress verification (2026-11-16): the DynamicMethod fixture and differential tests
+passed with no default features (75 passed, one thread fixture ignored) and with `multithreading`
+(78 passed, including the large-index regression). Newtonsoft and EF InMemory matched .NET on
+stdout and exit code with the multithreaded debug CLI before the latest index and naming changes.
+Focused multithreaded clippy with `-D warnings` and `cargo fmt --all -- --check` passed. The
+latest fixture tests used existing built fixtures with `DOTNET_SKIP_BUILD=1`; a fresh
+`./check.sh --fast` was interrupted during fixture restoration after NuGet audit network timeouts;
+a retry with audit disabled also stalled during the fixture build.
 
 ## Done when
 

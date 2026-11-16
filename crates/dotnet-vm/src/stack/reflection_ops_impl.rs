@@ -698,7 +698,6 @@ impl<'a, 'gc> ReflectionLookupOps<'gc> for VesContext<'a, 'gc> {
         lookup: GenericLookup,
     ) -> usize {
         dotnet_intrinsics_reflection::common::get_runtime_method_index(self, method, lookup)
-            as usize
     }
 
     #[inline]

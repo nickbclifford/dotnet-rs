@@ -15,6 +15,7 @@ use arbitrary::Arbitrary;
 /// Metadata arena that owns leaked metadata and byte slices.
 /// Shared via Arc to keep metadata alive as long as any descriptor references it.
 pub struct MetadataArena {
+    dynamic_method: bool,
     resolutions: Mutex<Vec<*mut Resolution<'static>>>,
     u64_slices: Mutex<Vec<*mut [u64]>>,
 }
@@ -22,6 +23,16 @@ pub struct MetadataArena {
 impl MetadataArena {
     pub fn new() -> Self {
         Self {
+            dynamic_method: false,
+            resolutions: Mutex::new(Vec::new()),
+            u64_slices: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Creates an arena for a synthetic dynamic-method resolution.
+    pub fn dynamic_method() -> Self {
+        Self {
+            dynamic_method: true,
             resolutions: Mutex::new(Vec::new()),
             u64_slices: Mutex::new(Vec::new()),
         }
@@ -114,6 +125,13 @@ impl ResolutionS {
             Some((_, p)) => p.as_ptr() as *const _,
             None => ptr::null(),
         }
+    }
+
+    /// Whether this resolution contains a synthetic DynamicMethod body.
+    pub fn is_dynamic_method(&self) -> bool {
+        self.0
+            .as_ref()
+            .is_some_and(|(arena, _)| arena.dynamic_method)
     }
 
     pub const fn is_null(&self) -> bool {

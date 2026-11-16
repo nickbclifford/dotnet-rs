@@ -322,9 +322,13 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
             let obj = ctx.pop_obj();
             let (method, lookup) =
                 dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_method(ctx, obj));
-            let declaring_type = declaring_runtime_type(ctx, &method, &lookup);
-            let rt_obj = crate::common::get_runtime_type(ctx, declaring_type);
-            ctx.push_obj(rt_obj);
+            if method.resolution().is_dynamic_method() {
+                ctx.push_obj(ObjectRef(None));
+            } else {
+                let declaring_type = declaring_runtime_type(ctx, &method, &lookup);
+                let rt_obj = crate::common::get_runtime_type(ctx, declaring_type);
+                ctx.push_obj(rt_obj);
+            }
             Some(StepResult::Continue)
         }
         ("GetMethodHandle" | "get_MethodHandle", 0) => {
@@ -371,8 +375,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
             let (method, lookup) =
                 dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_method(ctx, obj));
             let method_index =
-                crate::common::get_runtime_method_index(ctx, method.clone(), lookup.clone())
-                    as usize;
+                crate::common::get_runtime_method_index(ctx, method.clone(), lookup.clone());
 
             let param_count = method.signature().parameters.len();
 

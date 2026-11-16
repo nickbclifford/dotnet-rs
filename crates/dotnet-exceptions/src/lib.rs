@@ -281,10 +281,14 @@ impl ExceptionHandlingSystem {
                 let method_name = method.method().name.to_string();
                 let params = format_params(method);
                 let ip = frame.state.ip;
-                trace.push_str(&format!(
-                    "   at {}.{}({}) in IP {}\n",
-                    type_name, method_name, params, ip
-                ));
+                if method.resolution().is_dynamic_method() {
+                    trace.push_str(&format!("   at {}({})\n", method_name, params));
+                } else {
+                    trace.push_str(&format!(
+                        "   at {}.{}({}) in IP {}\n",
+                        type_name, method_name, params, ip
+                    ));
+                }
                 for (_, id, method, ip) in boundaries
                     .iter()
                     .rev()

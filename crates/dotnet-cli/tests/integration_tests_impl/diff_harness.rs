@@ -1184,6 +1184,22 @@ diff_test!(
 );
 
 diff_test!(
+    dynamic_method_gc_matches_dotnet,
+    "tests/fixtures/reflection/dynamic_method_gc_42.cs"
+);
+
+diff_test!(
+    dynamic_method_stack_trace_matches_dotnet,
+    "tests/fixtures/reflection/dynamic_method_stack_trace_42.cs"
+);
+
+#[cfg(feature = "multithreading")]
+diff_test!(
+    dynamic_method_concurrent_matches_dotnet,
+    "tests/fixtures/threading/dynamic_method_concurrent_42.cs"
+);
+
+diff_test!(
     dynamic_method_reflection_matches_dotnet,
     "tests/fixtures/reflection/dynamic_method_reflection_42.cs"
 );
