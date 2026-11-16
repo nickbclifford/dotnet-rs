@@ -1,11 +1,11 @@
-//! Plan 24 slice 4 SPIKE: turn a recorded `DynamicMethod` body into a real method.
+//! Turn a recorded `DynamicMethod` body into a real method (plan 24; completed by plan 25).
 //!
 //! The managed shim (`DotnetRs.DynamicMethod` in the support assembly) records resolved
 //! operations instead of IL bytes. This module converts that record into a one-method in-memory
 //! assembly, registers it with the loader and returns the ordinary reflection `MethodInfo`, so
 //! `Invoke`, `CreateDelegate`, frames, exception regions and stack traces are the regular paths.
 //!
-//! Spike limits (each rejected with `NotSupportedException`, never silently wrong): non-generic
+//! Current limits (each rejected with `NotSupportedException`, never silently wrong): non-generic
 //! types and callees only, no nested types, no branches/labels, no fields, a fixed `maxstack`.
 
 use crate::ReflectionIntrinsicHost;
@@ -69,7 +69,12 @@ impl Builder<'_> {
             .assembly
             .as_ref()
             .ok_or_else(|| format!("type {} has no assembly", td.type_name()))?;
-        let asm_name = assembly.name.to_string();
+        // Name the exact loaded assembly; a plain name lookup may miss it (the entry assembly
+        // is not registered by name) or load a second copy from disk.
+        let asm_name = self
+            .loader
+            .reference_name_for(&td.resolution)
+            .ok_or_else(|| format!("type {} has no assembly", td.type_name()))?;
         let namespace = def.namespace.as_ref().map(|n| n.to_string());
         let key = (asm_name.clone(), namespace.clone(), def.name.to_string());
         if let Some(idx) = self.type_refs.get(&key) {
@@ -319,7 +324,7 @@ fn instruction(
         0xFE05 => I::CompareLess(NumberSign::Unsigned),
         other => {
             return Err(format!(
-                "opcode 0x{other:04X} is not supported by the spike"
+                "opcode 0x{other:04X} is not supported yet (plan 25)"
             ));
         }
     })
@@ -360,7 +365,7 @@ pub fn compile_recorded<'gc, T: ReflectionIntrinsicHost<'gc>>(
         }
         Err(msg) => ctx.throw_by_name_with_message(
             "System.NotSupportedException",
-            &format!("DynamicMethod spike: {msg}"),
+            &format!("DynamicMethod: {msg}"),
         ),
     }
 }
@@ -499,7 +504,7 @@ fn build<'gc, T: ReflectionIntrinsicHost<'gc>>(
     }
 
     let mut body = body::Method::with_locals(local_variables, instructions);
-    // Spike shortcut: the CLR computes maxstack from the IL; the recorder does not.
+    // Shortcut until plan 25: the CLR computes maxstack from the IL; the recorder does not.
     body.header.maximum_stack_size = 32;
     if !clauses.is_empty() {
         body.data_sections

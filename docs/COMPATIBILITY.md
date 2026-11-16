@@ -68,9 +68,8 @@ paths:
 - **System.Text.Json** reflection serialization uses its reflection member accessor through a VM
   seam (`DefaultJsonTypeInfoResolver.MemberAccessor`) instead of its Emit accessor.
 - **`System.Reflection.Emit.DynamicMethod`** is replaced by a recording stub in the support
-  assembly. This is a spike, on a branch only
-  ([plan 24](plans/24-reflection-emit-investigation.md), landing recommendation pending the
-  maintainer's decision). Where it is present, it runs `Invoke` and `CreateDelegate` on methods
+  assembly ([plan 24](plans/24-reflection-emit-investigation.md); [plan 25](plans/25-dynamicmethod-implementation.md)
+  completes it). It runs `Invoke` and `CreateDelegate` on methods
   that use straight-line code, calls to non-generic methods, `newobj`, `throw` and typed
   `try`/`catch`/`finally`. It rejects with `NotSupportedException`: labels and branches, field
   operands, `calli`, filters and faults, generic or nested types and callees, byref signatures,

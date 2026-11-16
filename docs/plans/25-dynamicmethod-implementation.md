@@ -106,14 +106,13 @@ crates flat, so it needs no change.
 Ordered by demand (STJ and the Linq thunk are the enabled paths that reach `DynamicMethod`), then
 dependency. Each slice keeps the spike fixtures and both host rungs green.
 
-1. **Land the spike as production code and complete the instruction set.** Promote the
-   `dynamic_method_*_42` debug fixtures to `fixtures/reflection/` (if the maintainer landed the
-   spike with plan 24, this is already done). Implement labels and all branch opcodes (short and
+1. **Complete the instruction set.** The spike landed with plan 24 and its fixtures are in
+   `fixtures/reflection/`. Implement labels and all branch opcodes (short and
    long), `ldfld`/`stfld`/`ldsfld`/`stsfld`/`ldflda` with `FieldInfo` operands, `calli` with a
    signature operand, filter and fault blocks (first check that dotnetdll's `ExceptionKind` covers
    both), the full opcode table, and computed `maxstack`. Differential fixtures: a loop with a
-   branch, a field read and write, a `calli`, a filter. Replace the spike header comments with
-   the real limits.
+   branch, a field read and write, a `calli`, a filter. Update the limits in the
+   header comments as they shrink.
 2. **Generic and nested types and callees, byref signatures.** Extend the signature translator in
    `dynamic_method.rs` to generic instantiations, nested types, generic method callees and byref
    parameters and returns. STJ's accessors and the Linq byref thunk need all four. Fixtures: a call

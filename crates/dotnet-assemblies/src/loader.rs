@@ -541,6 +541,37 @@ impl AssemblyLoader {
         }
     }
 
+    /// Returns a name that `get_assembly` resolves to exactly `resolution`, for assembly references
+    /// in metadata the VM builds itself. An assembly the loader has not registered under its own
+    /// name (the entry assembly, which is loaded from a file) or one whose name is taken by another
+    /// copy gets a private alias, so the reference never loads a second copy from disk.
+    pub fn reference_name_for(&self, resolution: &ResolutionS) -> Option<String> {
+        let name = resolution.assembly.as_ref()?.name.to_string();
+        let mut external = self.external.write();
+        if let Some(Some(registered)) = external.get(&name)
+            && registered == resolution
+        {
+            return Some(name);
+        }
+        let alias_prefix = format!("{name}#");
+        if let Some(alias) = external.iter().find_map(|(key, value)| {
+            (key.starts_with(&alias_prefix) && value.as_ref() == Some(resolution))
+                .then(|| key.clone())
+        }) {
+            return Some(alias);
+        }
+        let mut index = 0usize;
+        let alias = loop {
+            let candidate = format!("{alias_prefix}{index}");
+            if !external.contains_key(&candidate) {
+                break candidate;
+            }
+            index += 1;
+        };
+        external.insert(alias.clone(), Some(resolution.clone()));
+        Some(alias)
+    }
+
     /// Takes ownership of a manually constructed `Resolution` and registers it.
     /// The memory will be reclaimed when this `AssemblyLoader` is dropped.
     pub fn register_owned_assembly(&self, res: Resolution<'static>) -> ResolutionS {

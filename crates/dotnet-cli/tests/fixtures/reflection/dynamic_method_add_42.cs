@@ -1,7 +1,7 @@
 using System;
 using System.Reflection.Emit;
 
-// Plan 24 slice 4: keep out of the automatic suite until DynamicMethod is implemented.
+// Emit ldarg.0; ldarg.1; add; ret and run it through both Invoke and CreateDelegate.
 public static class Program
 {
     public static int Main()

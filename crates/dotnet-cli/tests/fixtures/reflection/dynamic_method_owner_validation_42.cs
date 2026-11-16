@@ -5,8 +5,7 @@ using System.Reflection.Emit;
 // DynamicMethod's owner-type constructor rejects interface, element and open generic owners before
 // it looks up the owner's module. The interface check (RuntimeType.IsActualInterface) used to read
 // RuntimeType.m_handle through GetNativeTypeHandle and raised AccessViolationException on the VM
-// (plan 24 slice 2). Valid owners still need module support; see
-// tests/debug_fixtures/dynamic_method_ctor_42.cs.
+// (plan 24 slice 2). See also reflection/dynamic_method_ctor_42.cs.
 public static class Program
 {
     static int failures;

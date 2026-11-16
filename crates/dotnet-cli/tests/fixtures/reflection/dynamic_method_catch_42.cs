@@ -1,7 +1,7 @@
 using System;
 using System.Reflection.Emit;
 
-// Plan 24 slice 4: exercise the dynamic resolver's exception regions and catch type token.
+// DynamicMethod: exercise the dynamic resolver's exception regions and catch type token.
 public static class Program
 {
     public static int Main()

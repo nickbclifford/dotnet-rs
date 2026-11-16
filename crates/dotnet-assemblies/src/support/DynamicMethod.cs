@@ -5,10 +5,10 @@ using System.Runtime.CompilerServices;
 
 namespace DotnetRs;
 
-// Plan 24 slice 4 SPIKE. Replaces CoreLib's DynamicMethod with a recording shim: the IL generator
-// records resolved operations (opcode id, immediate, reference operand) instead of raw IL bytes
-// and DynamicScope tokens, and the VM turns the record into a one-method in-memory assembly on
-// first use. CoreLib's DynamicILGenerator/DynamicScope/DynamicResolver are bypassed entirely.
+// Plan 24, completed by plan 25. Replaces CoreLib's DynamicMethod with a recording shim: the IL
+// generator records resolved operations (opcode id, immediate, reference operand) instead of raw
+// IL bytes and DynamicScope tokens, and the VM turns the record into a one-method in-memory
+// assembly on first use. CoreLib's DynamicILGenerator/DynamicScope/DynamicResolver are bypassed.
 [Stub(InPlaceOf = "System.Reflection.Emit.DynamicMethod")]
 public sealed class DynamicMethod : System.Reflection.MethodInfo
 {
@@ -150,16 +150,16 @@ internal sealed class RecordingILGenerator : ILGenerator
     public override void Emit(OpCode opcode, System.Reflection.MethodInfo meth) => Record(opcode, 0, meth);
     public override void Emit(OpCode opcode, System.Reflection.ConstructorInfo con) => Record(opcode, 0, con);
     public override void Emit(OpCode opcode, LocalBuilder local) => Record(opcode, local.LocalIndex, null);
-    public override void Emit(OpCode opcode, System.Reflection.FieldInfo field) => throw new NotSupportedException("spike: field operands");
-    public override void Emit(OpCode opcode, Label label) => throw new NotSupportedException("spike: labels");
-    public override void Emit(OpCode opcode, Label[] labels) => throw new NotSupportedException("spike: labels");
-    public override void Emit(OpCode opcode, SignatureHelper signature) => throw new NotSupportedException("spike: signatures");
+    public override void Emit(OpCode opcode, System.Reflection.FieldInfo field) => throw new NotSupportedException("DynamicMethod does not support field operands yet (plan 25)");
+    public override void Emit(OpCode opcode, Label label) => throw new NotSupportedException("DynamicMethod does not support labels yet (plan 25)");
+    public override void Emit(OpCode opcode, Label[] labels) => throw new NotSupportedException("DynamicMethod does not support labels yet (plan 25)");
+    public override void Emit(OpCode opcode, SignatureHelper signature) => throw new NotSupportedException("DynamicMethod does not support signatures yet (plan 25)");
     public override void EmitCall(OpCode opcode, System.Reflection.MethodInfo methodInfo, Type[]? optionalParameterTypes) =>
         Record(opcode, 0, methodInfo);
     public override void EmitCalli(OpCode opcode, CallingConventions callingConvention, Type? returnType,
-        Type[]? parameterTypes, Type[]? optionalParameterTypes) => throw new NotSupportedException("spike: calli");
+        Type[]? parameterTypes, Type[]? optionalParameterTypes) => throw new NotSupportedException("DynamicMethod does not support calli yet (plan 25)");
     public override void EmitCalli(OpCode opcode, System.Runtime.InteropServices.CallingConvention unmanagedCallConv,
-        Type? returnType, Type[]? parameterTypes) => throw new NotSupportedException("spike: calli");
+        Type? returnType, Type[]? parameterTypes) => throw new NotSupportedException("DynamicMethod does not support calli yet (plan 25)");
 
     public override LocalBuilder DeclareLocal(Type localType, bool pinned)
     {
@@ -167,8 +167,8 @@ internal sealed class RecordingILGenerator : ILGenerator
         return new RecordingLocal(_locals.Count - 1, localType);
     }
 
-    public override Label DefineLabel() => throw new NotSupportedException("spike: labels");
-    public override void MarkLabel(Label loc) => throw new NotSupportedException("spike: labels");
+    public override Label DefineLabel() => throw new NotSupportedException("DynamicMethod does not support labels yet (plan 25)");
+    public override void MarkLabel(Label loc) => throw new NotSupportedException("DynamicMethod does not support labels yet (plan 25)");
 
     public override Label BeginExceptionBlock()
     {
@@ -230,8 +230,8 @@ internal sealed class RecordingILGenerator : ILGenerator
         foreach (var site in b.LeaveSites) _imm[site] = end;
     }
 
-    public override void BeginExceptFilterBlock() => throw new NotSupportedException("spike: filters");
-    public override void BeginFaultBlock() => throw new NotSupportedException("spike: fault");
+    public override void BeginExceptFilterBlock() => throw new NotSupportedException("DynamicMethod does not support filters yet (plan 25)");
+    public override void BeginFaultBlock() => throw new NotSupportedException("DynamicMethod does not support fault yet (plan 25)");
     public override void BeginScope() { }
     public override void EndScope() { }
     public override void UsingNamespace(string usingNamespace) { }

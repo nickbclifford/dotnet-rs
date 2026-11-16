@@ -2,10 +2,12 @@ using System;
 using System.Reflection;
 using System.Reflection.Emit;
 
-// Plan 24 slice 4: the call operand is a DynamicScope token, not a metadata token.
+// DynamicMethod: the call operand is a DynamicScope token, not a metadata token. The callee must
+// be the loaded Program, not a second copy of this assembly: its static counter is shared.
 public static class Program
 {
-    public static int Twice(int value) => value * 2;
+    static int s_calls;
+    public static int Twice(int value) { s_calls++; return value * 2; }
 
     public static int Main()
     {
@@ -17,7 +19,7 @@ public static class Program
 
         var call = (Func<int, int>)method.CreateDelegate(typeof(Func<int, int>));
         int result = call(21);
-        Console.WriteLine($"Call: {result}");
-        return result == 42 ? 42 : 1;
+        Console.WriteLine($"Call: {result}; calls: {s_calls}");
+        return result == 42 && s_calls == 1 ? 42 : 1;
     }
 }

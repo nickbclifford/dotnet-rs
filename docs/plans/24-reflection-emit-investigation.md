@@ -1,6 +1,6 @@
 # Investigate Reflection.Emit and `DynamicMethod`
 
-**Status:** Complete. Slices 1-5 done; the decision is a follow-up `DynamicMethod` implementation via a synthetic module, [plan 25](25-dynamicmethod-implementation.md). The spike stays on `worktree-agent-ae6f4cca00cbb9a7a`; the landing recommendation is in the Conclusion
+**Status:** Complete. Slices 1-5 done; the decision is a follow-up `DynamicMethod` implementation via a synthetic module, [plan 25](25-dynamicmethod-implementation.md). The spike landed with this plan (see [Landing](#landing)).
 **Outcome:** This plan records a decision, backed by a working spike or a measured blocker:
 either a follow-up plan to implement `DynamicMethod` (and, separately, whether to do
 `AssemblyBuilder`/`TypeBuilder`), or a single switch-level answer that replaces the per-call-site
@@ -158,7 +158,8 @@ of this kind:
 `reflection/dynamic_method_owner_validation_42` (interface, array and open generic owners are
 rejected with `ArgumentException`; the interface cases raised the AV before the fix) and
 `reflection/is_generic_parameter_42` pass against `dotnet`.
-`debug_fixtures/dynamic_method_ctor_42` stays out of the suite until `DynamicMethod` works.
+`debug_fixtures/dynamic_method_ctor_42` stayed out of the suite until `DynamicMethod` worked; it
+moved to `fixtures/reflection/` when the spike landed (see [Landing](#landing)).
 
 **Next walls, all Emit-side** (for slices 3–4):
 
@@ -432,8 +433,9 @@ for a layering rule against it). Extending to branches and labels, fields, gener
 `MaxStack` is more of the same translation work. Real `DynamicILGenerator` fidelity (so
 `DynamicILInfo` and IL-byte consumers work) is a separate, much larger job that this approach
 sidesteps rather than solves: it would need the raw-IL decoder (an upstream dotnetdll change or
-our own), which is the blocker the baseline investigation measured. The spike is on
-`worktree-agent-ae6f4cca00cbb9a7a`; nothing here is production quality.
+our own), which is the blocker the baseline investigation measured. The spike was written as an
+experiment, not production code; it landed with this plan (see [Landing](#landing)) and plan 25
+completes it.
 
 ## Conclusion (slice 5)
 
@@ -493,8 +495,9 @@ place (release CLI); `./check.sh --fast`, clippy `-D warnings` and fmt were clea
 
 ### Landing
 
-Recommendation: land the spike code with plan 24 rather than redo it under plan 25. The maintainer
-decides.
+**Decided 2026-11-15: the spike landed with plan 24.** The four `dynamic_method_*_42` fixtures
+moved to `fixtures/reflection/`, and the spike labels in the stub, the intrinsic and its
+`NotSupportedException` messages now name plan 25 instead. The reasons for the recommendation:
 
 - Redoing it would repeat the same recording shim and the same one-method `Resolution` build for
   no gain; plan 25's slices extend both files in place.
@@ -518,8 +521,8 @@ decides.
 In: answering the five questions, one spike, the AV repro, and the decision.
 
 Out: a production `DynamicMethod` implementation (now [plan 25](25-dynamicmethod-implementation.md)).
-The spike may stay on a branch, and only the fixtures, the AV fix and the decision record land on
-main; see "Landing" in the Conclusion. Changing either feature value without
+The spike was allowed to stay on a branch; the maintainer chose to land it
+(see "Landing" in the Conclusion). Changing either feature value without
 rerunning the host rungs is also out, because the values were chosen on rung evidence.
 
 ## Slices
