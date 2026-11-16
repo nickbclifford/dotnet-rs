@@ -1,6 +1,6 @@
 # Investigate Reflection.Emit and `DynamicMethod`
 
-**Status:** Slices 1 (demand survey), 2 (AV) and 3 (switch-level experiment, on `plan24/slice3-switch`) done; slices 4–5 not started
+**Status:** Slices 1 (demand survey), 2 (AV) and 3 (switch-level experiment, on `plan24/slice3-switch`) done; slice 4 investigated but incomplete; slice 5 not started
 **Outcome:** This plan records a decision, backed by a working spike or a measured blocker:
 either a follow-up plan to implement `DynamicMethod` (and, separately, whether to do
 `AssemblyBuilder`/`TypeBuilder`), or a single switch-level answer that replaces the per-call-site
@@ -278,6 +278,67 @@ planned" list):
 - Expression trees built from C# that capture a local or set a field through an object initializer
   stop in `FieldInfo.GetFieldFromHandle` (`ldtoken` of a field).
 - `Type.GetType(string)` and `Assembly.GetType(string)` hit the `QCall` DLL error.
+
+## Slice 4 investigation: dynamic method entry points
+
+In progress, 2026-11-15. The requested execution spike **does not yet work**. Three independent
+fixtures are in `crates/dotnet-cli/tests/debug_fixtures`: `dynamic_method_add_42` checks both
+`Invoke` and `CreateDelegate`, `dynamic_method_call_42` emits a call to an existing method, and
+`dynamic_method_catch_42` emits a constructor call, throw and typed catch. On .NET 10.0.14 all
+three print 42 and exit 42. On the unmodified VM all three fail in the constructor at the
+`DefaultAssemblyLoadContext` initialization QCall, before emitting any IL.
+
+A diagnostic experiment replaced `GetDynamicMethodsModule` with a freshly allocated, uninitialized
+CoreLib `RuntimeModule` (14 lines), and then replaced `RuntimeType.GetCorElementType` with the
+constant for `Int32` (11 lines). These substitutions are deliberately invalid for general use and
+were removed after the experiment. With only the first substitution, the add fixture constructs the
+method but `GetILGenerator` reaches `SignatureHelper.AddOneArgTypeHelperWorker` →
+`RuntimeType.GetCorElementType` → `GetNativeTypeHandle`, which tries to read `m_handle` from the
+`DotnetRs.RuntimeType` stub. With both substitutions, the add fixture emits all four instructions
+and reaches `ModuleHandle.GetDynamicMethod`'s QCall through `Invoke`; it fails there with
+`DllNotFoundException`. The other two fixtures reach their `Emit` calls, but CoreLib's
+`DynamicILGenerator.Emit` requires a `RuntimeMethodInfo` or `RuntimeConstructorInfo`. The VM
+returns `DotnetRs.MethodInfo` / `DotnetRs.ConstructorInfo` objects instead, so both throw
+`ArgumentException` before adding a token. The command and diagnostic patch are preserved in
+[evidence](evidence/24-slice4-probe.patch).
+
+The next boundary is thus not just a module object: the VM needs a real module identity and
+signature/type-handle operations; a way for Emit to accept VM reflection objects and populate
+`DynamicScope`; and a `GetDynamicMethod` bridge that converts the resolver's code, locals, tokens
+and exception regions into executable VM state. No emitted body, token resolution, exception
+handling, `Invoke`, or dynamic delegate has been validated on the VM yet.
+
+**Implementation comparison (estimates, not measured implementations).** Both options need the
+module and reflection/Emit bridge above. In either, `DynamicResolver.GetCodeInfo` supplies raw IL,
+max stack, init-locals and exception count; its locals signature and EH data need decoding, and
+`DynamicScope` tokens resolve to managed handles or other objects, not module metadata rows.
+
+- **(a) Resolver-backed method.** `MethodDescription` and `build_method_info` currently assume a
+  metadata parent, `MethodIndex`, signature and body. A dynamic representation or side table would
+  have to cover intrinsic classification, method-info and resolution caches, reflection registry,
+  call/delegate dispatch and stack traces. The instruction and exception consumers expect
+  dotnetdll's resolved instructions and instruction-indexed regions. Resolving managed tokens may
+  require managed calls/effects and a traced lifetime for the resolver; it cannot be assumed that
+  existing effect handling is unchanged. Once correctly materialized, ordinary frame homes and
+  exception dispatch may be reusable, but this has not been tested. The metadata arena and cache
+  currently retain descriptors; collectible methods need an explicit lifetime/eviction design.
+- **(b) Synthetic module.** A generated type and method could retain the existing descriptor,
+  method-info, intrinsic dispatch, stack trace, frame-home and EH paths after conversion. Building
+  a `Resolution` with a resolved `body::Method` is supported; the existing fault fixture shows
+  dotnetdll can write a method with calls and exception clauses. That does **not** establish that
+  it can translate a dynamic body. dotnetdll 0.4.0 exposes binary IL but its binary-to-resolved
+  conversion module is private and expects a metadata context. Its writer accepts resolved
+  instructions, not `DynamicResolver` raw bytes. The spike must either implement the conversion
+  and token rewriting, construct a valid PE with rewritten metadata and let dotnetdll parse it, or
+  obtain a suitable upstream API. Method/type/field references, generic contexts, signatures,
+  strings, locals and EH catch tokens all need translation; dynamically emitted methods calling
+  one another and collectible methods need identities and lifetime handling. The existing loader
+  only has a public file-based loading entry point; an in-memory registration path is also needed.
+
+Neither option has yet established that an upstream dotnetdll change is necessary, or that option
+(a) requires changing every resolver cache. Those are decision points in the plan, not conclusions
+from this experiment. Slice 4 remains open until the three fixtures execute or a further experiment
+establishes a measured blocker for the body bridge.
 
 ## Scope
 
