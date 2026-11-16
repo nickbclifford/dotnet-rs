@@ -5,8 +5,7 @@
 //! assembly, registers it with the loader and returns the ordinary reflection `MethodInfo`, so
 //! `Invoke`, `CreateDelegate`, frames, exception regions and stack traces are the regular paths.
 //!
-//! Current limits: signatures and callees are limited to non-generic, non-nested types and do
-//! not yet support byrefs. Managed vararg calls follow the runtime's unsupported-call behavior;
+//! Managed vararg calls follow the runtime's unsupported-call behavior;
 //! uncommon prefix combinations and raw SignatureHelper encodings are also limited.
 
 use crate::ReflectionIntrinsicHost;
@@ -17,7 +16,7 @@ use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
     resolution::ResolutionS,
-    runtime::RuntimeType,
+    runtime::{RuntimeType, runtime_type_from_concrete},
 };
 use dotnet_value::object::ObjectRef;
 use dotnet_vm_data::StepResult;
@@ -28,7 +27,7 @@ use dotnetdll::{
         body::{DataSection, Exception, ExceptionKind},
         members::{
             ExternalFieldReference, ExternalMethodReference, FieldReferenceParent, FieldSource,
-            Method, MethodReferenceParent, MethodSource, UserMethod,
+            GenericMethodInstantiation, Method, MethodReferenceParent, MethodSource, UserMethod,
         },
         signature::{Parameter, ParameterType, ReturnType, StandAloneCallingConvention},
         types::{
@@ -64,18 +63,12 @@ struct Builder<'a> {
     loader: &'a AssemblyLoader,
     res: Resolution<'static>,
     assembly_refs: HashMap<String, AssemblyRefIndex>,
-    type_refs: HashMap<(String, Option<String>, String), TypeRefIndex>,
+    type_refs: HashMap<TypeDescription, TypeRefIndex>,
 }
 
 impl Builder<'_> {
     fn type_ref(&mut self, td: &TypeDescription) -> R<TypeRefIndex> {
         let def = td.definition();
-        if def.encloser.is_some() {
-            return Err(format!("nested type {}", td.type_name()));
-        }
-        if !def.generic_parameters.is_empty() {
-            return Err(format!("generic type {}", td.type_name()));
-        }
         let assembly = td
             .resolution
             .assembly
@@ -88,8 +81,7 @@ impl Builder<'_> {
             .reference_name_for(&td.resolution)
             .ok_or_else(|| format!("type {} has no assembly", td.type_name()))?;
         let namespace = def.namespace.as_ref().map(|n| n.to_string());
-        let key = (asm_name.clone(), namespace.clone(), def.name.to_string());
-        if let Some(idx) = self.type_refs.get(&key) {
+        if let Some(idx) = self.type_refs.get(td) {
             return Ok(*idx);
         }
         let asm_idx = match self.assembly_refs.get(&asm_name) {
@@ -102,12 +94,19 @@ impl Builder<'_> {
                 i
             }
         };
+        let scope = if let Some(encloser) = def.encloser {
+            ResolutionScope::Nested(
+                self.type_ref(&TypeDescription::new(td.resolution.clone(), encloser))?,
+            )
+        } else {
+            ResolutionScope::Assembly(asm_idx)
+        };
         let idx = self.res.push_type_reference(ExternalTypeReference::new(
             namespace.map(Into::into),
             def.name.to_string(),
-            ResolutionScope::Assembly(asm_idx),
+            scope,
         ));
-        self.type_refs.insert(key, idx);
+        self.type_refs.insert(td.clone(), idx);
         Ok(idx)
     }
 
@@ -127,7 +126,7 @@ impl Builder<'_> {
     /// Translate a callee signature type, which indexes the callee's own resolution.
     fn translate_signature(&mut self, owner: &ResolutionS, t: &MethodType) -> R<MethodType> {
         let MethodType::Base(b) = t else {
-            return Err("generic parameter in a callee signature".into());
+            return Ok(t.clone());
         };
         Ok(match &**b {
             BaseType::Boolean => prim(BaseType::Boolean),
@@ -156,6 +155,35 @@ impl Builder<'_> {
                     .map_err(|e| e.to_string())?;
                 self.type_node(&td)?
             }
+            BaseType::Type {
+                source: TypeSource::Generic { base, parameters },
+                value_kind,
+            } => {
+                let td = self
+                    .loader
+                    .locate_type(owner.clone(), *base)
+                    .map_err(|e| e.to_string())?;
+                let base = UserType::Reference(self.type_ref(&td)?);
+                let parameters = parameters
+                    .iter()
+                    .map(|p| self.translate_signature(owner, p))
+                    .collect::<R<Vec<_>>>()?;
+                prim(BaseType::Type {
+                    source: TypeSource::Generic { base, parameters },
+                    value_kind: *value_kind,
+                })
+            }
+            BaseType::Array(inner, shape) => prim(BaseType::Array(
+                self.translate_signature(owner, inner)?,
+                shape.clone(),
+            )),
+            BaseType::ValuePointer(m, inner) if m.is_empty() => prim(BaseType::ValuePointer(
+                vec![],
+                inner
+                    .as_ref()
+                    .map(|t| self.translate_signature(owner, t))
+                    .transpose()?,
+            )),
             BaseType::Vector(m, inner) if m.is_empty() => {
                 let inner = self.translate_signature(owner, inner)?;
                 prim(BaseType::Vector(vec![], inner))
@@ -184,6 +212,25 @@ impl Builder<'_> {
             RuntimeType::Object => prim(BaseType::Object),
             RuntimeType::String => prim(BaseType::String),
             RuntimeType::Type(td) => self.type_node(td)?,
+            RuntimeType::Generic(td, args) => self.generic_type(td, args)?,
+            RuntimeType::Array(inner, rank) => prim(BaseType::Array(
+                self.translate_runtime(inner)?,
+                dotnetdll::binary::signature::encoded::ArrayShape {
+                    rank: *rank as usize,
+                    sizes: vec![],
+                    lower_bounds: vec![],
+                },
+            )),
+            RuntimeType::Pointer(inner) | RuntimeType::ValuePointer(inner, _) => {
+                prim(BaseType::ValuePointer(
+                    vec![],
+                    if matches!(**inner, RuntimeType::Void) {
+                        None
+                    } else {
+                        Some(self.translate_runtime(inner)?)
+                    },
+                ))
+            }
             RuntimeType::Vector(inner) => {
                 let inner = self.translate_runtime(inner)?;
                 prim(BaseType::Vector(vec![], inner))
@@ -192,50 +239,92 @@ impl Builder<'_> {
         })
     }
 
-    fn method_ref(&mut self, md: &MethodDescription) -> R<UserMethod> {
-        self.method_ref_with_optional(md, None)
+    fn generic_type(&mut self, td: &TypeDescription, args: &[RuntimeType]) -> R<MethodType> {
+        let base = UserType::Reference(self.type_ref(td)?);
+        let parameters = args
+            .iter()
+            .map(|arg| self.translate_runtime(arg))
+            .collect::<R<Vec<_>>>()?;
+        let value_kind = if ConcreteType::from(td.clone()).is_value_type(self.loader) {
+            ValueKind::ValueType
+        } else {
+            ValueKind::Class
+        };
+        Ok(prim(BaseType::Type {
+            source: TypeSource::Generic { base, parameters },
+            value_kind: Some(value_kind),
+        }))
+    }
+
+    fn parent_type(&mut self, td: &TypeDescription, lookup: &GenericLookup) -> R<MethodType> {
+        let arity = td.definition().generic_parameters.len();
+        if arity == 0 {
+            return self.type_node(td);
+        }
+        let args = lookup
+            .type_generics
+            .get(..arity)
+            .ok_or("missing declaring type arguments")?
+            .iter()
+            .map(|c| {
+                runtime_type_from_concrete(self.loader, c)
+                    .ok_or_else(|| format!("unsupported generic argument {c:?}"))
+            })
+            .collect::<R<Vec<_>>>()?;
+        self.generic_type(td, &args)
+    }
+
+    fn runtime_parameter(&mut self, rt: &RuntimeType) -> R<ParameterType<MethodType>> {
+        Ok(match rt {
+            RuntimeType::ByRef(inner) => ParameterType::Ref(self.translate_runtime(inner)?),
+            RuntimeType::TypedReference => ParameterType::TypedReference,
+            _ => ParameterType::Value(self.translate_runtime(rt)?),
+        })
+    }
+
+    fn signature_parameter(
+        &mut self,
+        owner: &ResolutionS,
+        p: &ParameterType<MethodType>,
+    ) -> R<ParameterType<MethodType>> {
+        Ok(match p {
+            ParameterType::Value(t) => ParameterType::Value(self.translate_signature(owner, t)?),
+            ParameterType::Ref(t) => ParameterType::Ref(self.translate_signature(owner, t)?),
+            ParameterType::TypedReference => ParameterType::TypedReference,
+        })
+    }
+
+    fn method_ref(&mut self, method: &(MethodDescription, GenericLookup)) -> R<MethodSource> {
+        self.method_ref_with_optional(method, None)
     }
 
     fn method_ref_with_optional(
         &mut self,
-        md: &MethodDescription,
+        (md, lookup): &(MethodDescription, GenericLookup),
         optional: Option<&[RuntimeType]>,
-    ) -> R<UserMethod> {
+    ) -> R<MethodSource> {
         let method = md.method();
-        if !method.generic_parameters.is_empty() || !md.parent_generics.type_generics.is_empty() {
-            return Err(format!("generic callee {}", method.name));
-        }
-        let parent = self.type_node(&md.parent)?;
+        let parent = self.parent_type(&md.parent, lookup)?;
         let owner = md.resolution();
         let sig = md.signature();
-        let mut parameters = Vec::with_capacity(sig.parameters.len());
-        for Parameter(_, p) in &sig.parameters {
-            let ParameterType::Value(t) = p else {
-                return Err(format!("by-ref parameter on callee {}", method.name));
-            };
-            parameters.push(Parameter(
-                vec![],
-                ParameterType::Value(self.translate_signature(&owner, t)?),
-            ));
-        }
-        let return_type = match &sig.return_type {
-            ReturnType(_, None) => ReturnType(vec![], None),
-            ReturnType(_, Some(ParameterType::Value(t))) => ReturnType(
-                vec![],
-                Some(ParameterType::Value(self.translate_signature(&owner, t)?)),
-            ),
-            _ => return Err(format!("by-ref return on callee {}", method.name)),
-        };
+        let parameters = sig
+            .parameters
+            .iter()
+            .map(|Parameter(_, p)| Ok(Parameter(vec![], self.signature_parameter(&owner, p)?)))
+            .collect::<R<Vec<_>>>()?;
+        let return_type = ReturnType(
+            vec![],
+            sig.return_type
+                .1
+                .as_ref()
+                .map(|p| self.signature_parameter(&owner, p))
+                .transpose()?,
+        );
         let varargs = optional
             .map(|types| {
                 types
                     .iter()
-                    .map(|t| {
-                        Ok(Parameter(
-                            vec![],
-                            ParameterType::Value(self.translate_runtime(t)?),
-                        ))
-                    })
+                    .map(|t| Ok(Parameter(vec![], self.runtime_parameter(t)?)))
                     .collect::<R<Vec<_>>>()
             })
             .transpose()?;
@@ -252,12 +341,33 @@ impl Builder<'_> {
             method.name.to_string(),
             signature,
         ));
-        Ok(UserMethod::Reference(idx))
+        let base = UserMethod::Reference(idx);
+        let arity = method.generic_parameters.len();
+        if arity == 0 {
+            return Ok(MethodSource::User(base));
+        }
+        let args = lookup
+            .method_generics
+            .get(..arity)
+            .ok_or("missing method generic arguments")?
+            .iter()
+            .map(|c| {
+                runtime_type_from_concrete(self.loader, c)
+                    .ok_or_else(|| format!("unsupported generic argument {c:?}"))
+            })
+            .collect::<R<Vec<_>>>()?;
+        let args = args
+            .iter()
+            .map(|a| self.translate_runtime(a))
+            .collect::<R<Vec<_>>>()?;
+        Ok(MethodSource::Generic(GenericMethodInstantiation::new(
+            base, args,
+        )))
     }
 
-    fn field_ref(&mut self, fd: &FieldDescription) -> R<FieldSource> {
+    fn field_ref(&mut self, (fd, lookup): &(FieldDescription, GenericLookup)) -> R<FieldSource> {
         let field = fd.field();
-        let parent = self.type_node(&fd.parent)?;
+        let parent = self.parent_type(&fd.parent, lookup)?;
         let field_type =
             self.translate_signature(&fd.resolution(), &field.return_type.clone().into())?;
         let field_type = member_type(field_type);
@@ -341,7 +451,7 @@ fn instruction(
         0x23 => I::LoadConstantFloat64(f64::from_bits(imm as u64)),
         0x25 => I::Duplicate,
         0x26 => I::Pop,
-        0x27 => I::Jump(MethodSource::User(b.method_ref(&need_method()?)?)),
+        0x27 => I::Jump(b.method_ref(&need_method()?)?),
         0x2A => I::Return,
         0x2B | 0x38 => I::Branch(imm as usize),
         0x2C | 0x39 => I::BranchFalsy(imm as usize),
@@ -514,13 +624,13 @@ fn instruction(
         0xC6 => I::MakeTypedReference(b.translate_runtime(&need_type()?)?),
         0xD0 => match reference {
             Some(Operand::Type(t)) => I::LoadTokenType(b.translate_runtime(t)?),
-            Some(Operand::Method(m)) => I::LoadTokenMethod(MethodSource::User(b.method_ref(m)?)),
+            Some(Operand::Method(m)) => I::LoadTokenMethod(b.method_ref(m)?),
             Some(Operand::Field(f)) => I::LoadTokenField(b.field_ref(f)?),
             _ => return Err("ldtoken needs a type, method or field".into()),
         },
         0x28 => I::Call {
             tail_call: false,
-            param0: MethodSource::User(call_ref(b)?),
+            param0: call_ref(b)?,
         },
         0x29 => {
             let Some(Operand::Signature(types)) = reference else {
@@ -551,15 +661,12 @@ fn instruction(
             let return_type = if matches!(ret, RuntimeType::Void) {
                 ReturnType(vec![], None)
             } else {
-                ReturnType(
-                    vec![],
-                    Some(ParameterType::Value(b.translate_runtime(ret)?)),
-                )
+                ReturnType(vec![], Some(b.runtime_parameter(ret)?))
             };
             let mut parameters = Vec::with_capacity(fixed_count);
             let mut varargs = Vec::with_capacity(args.len() - fixed_count);
             for (index, t) in args.iter().enumerate() {
-                let parameter = Parameter(vec![], ParameterType::Value(b.translate_runtime(t)?));
+                let parameter = Parameter(vec![], b.runtime_parameter(t)?);
                 if index < fixed_count {
                     parameters.push(parameter);
                 } else {
@@ -580,7 +687,7 @@ fn instruction(
         }
         0x6F => I::CallVirtual {
             skip_null_check: false,
-            param0: MethodSource::User(call_ref(b)?),
+            param0: call_ref(b)?,
         },
         0x70 => I::CopyObject(b.translate_runtime(&need_type()?)?),
         0x71 => I::LoadObject {
@@ -588,7 +695,10 @@ fn instruction(
             volatile: false,
             param0: b.translate_runtime(&need_type()?)?,
         },
-        0x73 => I::NewObject(call_ref(b)?),
+        0x73 => match call_ref(b)? {
+            MethodSource::User(method) => I::NewObject(method),
+            MethodSource::Generic(_) => return Err("generic constructor".into()),
+        },
         0x72 => match reference {
             Some(Operand::Str(s)) => I::load_string(s),
             _ => return Err("ldstr needs a string operand".into()),
@@ -760,10 +870,10 @@ fn instruction(
         0xFE03 => I::CompareGreater(NumberSign::Unsigned),
         0xFE04 => I::CompareLess(NumberSign::Signed),
         0xFE05 => I::CompareLess(NumberSign::Unsigned),
-        0xFE06 => I::LoadMethodPointer(MethodSource::User(b.method_ref(&need_method()?)?)),
+        0xFE06 => I::LoadMethodPointer(b.method_ref(&need_method()?)?),
         0xFE07 => I::LoadVirtualMethodPointer {
             skip_null_check: false,
-            param0: MethodSource::User(b.method_ref(&need_method()?)?),
+            param0: b.method_ref(&need_method()?)?,
         },
         0xFE0F => I::LocalMemoryAllocate,
         0xFE11 => I::EndFilter,
@@ -789,9 +899,9 @@ fn instruction(
 
 enum Operand {
     Type(RuntimeType),
-    Method(MethodDescription),
-    MethodWithOptional(MethodDescription, Vec<RuntimeType>),
-    Field(FieldDescription),
+    Method((MethodDescription, GenericLookup)),
+    MethodWithOptional((MethodDescription, GenericLookup), Vec<RuntimeType>),
+    Field((FieldDescription, GenericLookup)),
     Str(String),
     Targets(Vec<usize>),
     Signature(Vec<RuntimeType>),
@@ -1074,9 +1184,8 @@ fn build<'gc, T: ReflectionIntrinsicHost<'gc>>(
             if call.len() != 2 {
                 return Err("invalid optional argument recording".into());
             }
-            let method = crate::common::resolve_runtime_method(ctx, call[0])
-                .map_err(|e| e.to_string())?
-                .0;
+            let method =
+                crate::common::resolve_runtime_method(ctx, call[0]).map_err(|e| e.to_string())?;
             let optional = types_of(call[1])?
                 .into_iter()
                 .collect::<Option<Vec<_>>>()
@@ -1086,9 +1195,7 @@ fn build<'gc, T: ReflectionIntrinsicHost<'gc>>(
             || (ops.get(i).map(|op| op & 0xFFFF) == Some(0xD0) && imm.get(i) == Some(&3))
         {
             Some(Operand::Field(
-                crate::common::resolve_runtime_field(ctx, r)
-                    .map_err(|e| e.to_string())?
-                    .0,
+                crate::common::resolve_runtime_field(ctx, r).map_err(|e| e.to_string())?,
             ))
         } else if ops.get(i).map(|op| op & 0xFFFF) == Some(0x72) {
             Some(Operand::Str(
@@ -1101,9 +1208,7 @@ fn build<'gc, T: ReflectionIntrinsicHost<'gc>>(
             )
         {
             Some(Operand::Method(
-                crate::common::resolve_runtime_method(ctx, r)
-                    .map_err(|e| e.to_string())?
-                    .0,
+                crate::common::resolve_runtime_method(ctx, r).map_err(|e| e.to_string())?,
             ))
         } else {
             Some(Operand::Type(
@@ -1138,28 +1243,26 @@ fn build<'gc, T: ReflectionIntrinsicHost<'gc>>(
     let mut parameters = Vec::new();
     for p in &param_rts {
         let p = p.as_ref().ok_or("null parameter type")?;
-        parameters.push(Parameter(
-            vec![],
-            ParameterType::Value(b.translate_runtime(p)?),
-        ));
+        parameters.push(Parameter(vec![], b.runtime_parameter(p)?));
     }
     let return_type = if matches!(ret_rt, RuntimeType::Void) {
         ReturnType(vec![], None)
     } else {
-        ReturnType(
-            vec![],
-            Some(ParameterType::Value(b.translate_runtime(&ret_rt)?)),
-        )
+        ReturnType(vec![], Some(b.runtime_parameter(&ret_rt)?))
     };
 
     let mut local_variables = Vec::new();
     for (l, &pinned) in local_rts.iter().zip(&local_pins) {
         let l = l.as_ref().ok_or("null local type")?;
+        let (by_ref, local_type) = match l {
+            RuntimeType::ByRef(inner) => (true, inner.as_ref()),
+            _ => (false, l),
+        };
         local_variables.push(LocalVariable::Variable {
             custom_modifiers: vec![],
             pinned: pinned != 0,
-            by_ref: false,
-            var_type: b.translate_runtime(l)?,
+            by_ref,
+            var_type: b.translate_runtime(local_type)?,
         });
     }
 

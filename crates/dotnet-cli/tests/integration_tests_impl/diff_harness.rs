@@ -1184,6 +1184,36 @@ diff_test!(
 );
 
 diff_test!(
+    dynamic_method_generic_type_matches_dotnet,
+    "tests/fixtures/reflection/dynamic_method_generic_type_42.cs"
+);
+
+diff_test!(
+    dynamic_method_generic_method_matches_dotnet,
+    "tests/fixtures/reflection/dynamic_method_generic_method_42.cs"
+);
+
+diff_test!(
+    dynamic_method_nested_type_matches_dotnet,
+    "tests/fixtures/reflection/dynamic_method_nested_type_42.cs"
+);
+
+diff_test!(
+    dynamic_method_byref_matches_dotnet,
+    "tests/fixtures/reflection/dynamic_method_byref_42.cs"
+);
+
+diff_test!(
+    dynamic_method_generic_members_matches_dotnet,
+    "tests/fixtures/reflection/dynamic_method_generic_members_42.cs"
+);
+
+diff_test!(
+    dynamic_method_byref_return_matches_dotnet,
+    "tests/fixtures/reflection/dynamic_method_byref_return_42.cs"
+);
+
+diff_test!(
     dynamic_method_array_matches_dotnet,
     "tests/fixtures/reflection/dynamic_method_array_42.cs"
 );

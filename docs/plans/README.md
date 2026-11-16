@@ -11,7 +11,7 @@ In priority order. Each plan's own `Status:` line is the only record of its stat
 | ID | Plan | Note |
 |---|---|---|
 | 23 | [Runtime behavior gaps: static field reflection, Math FCalls, Array.Fill, Span.CopyTo, signed byref offsets and generic arity](23-runtime-behavior-gaps.md) | Validated runtime surface and remaining limits are recorded in the plan |
-| 25 | [Implement `DynamicMethod`](25-dynamicmethod-implementation.md) | Slice 1 complete; generics, `Module`, seam retirement and lifetime remain |
+| 25 | [Implement `DynamicMethod`](25-dynamicmethod-implementation.md) | Slices 1–2 complete; `Module`, seam retirement and lifetime remain |
 | 24 | [Investigate Reflection.Emit and `DynamicMethod`](24-reflection-emit-investigation.md) | Complete; decision is a `DynamicMethod` implementation (plan 25), no `TypeBuilder`; the access violation is fixed |
 | 21 | [Correctness backlog: byte-read bounds, pointer slots, feature forwarding, thread IDs and the timer flake](21-correctness-backlog.md) | Complete |
 | 22 | [String interning](22-string-interning.md) | Complete; literal, empty and explicit interning identity across threads |

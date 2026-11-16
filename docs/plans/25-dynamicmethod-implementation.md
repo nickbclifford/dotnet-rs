@@ -1,6 +1,6 @@
 # Implement `DynamicMethod`
 
-**Status:** Slice 1 complete; slices 2–5 remain
+**Status:** Slices 1–2 complete; slices 3–5 remain
 **Outcome:** `System.Reflection.Emit.DynamicMethod` runs on the VM for every `ILGenerator`
 operation a real library uses: branches and labels, fields, `calli`, filters and faults, generic
 and nested types and callees, byref signatures, and the owner, module and `skipVisibility`
@@ -178,8 +178,7 @@ The recorder now covers branches, fields, filters, faults, computed stack depth,
 unmanaged indirect calls, basic `SignatureHelper` operands, and the standard opcode table. The
 differential fixtures compare stdout and exit codes with .NET. Newtonsoft and EF InMemory host
 rungs also match. Short branch targets are checked against the CLR's signed-byte displacement
-limits before the recorded instructions are translated. Remaining limits include generic, nested
-and byref signatures (slice 2), raw signature encoding for nonprimitive types, and uncommon `no.`
+limits before the recorded instructions are translated. Remaining limits include raw signature encoding for nonprimitive types and uncommon `no.`
 prefix combinations. On the tested
 Linux CLR, invoking a managed vararg call throws
 `InvalidProgramException`; the VM does the same. Managed vararg behavior on platforms where the
@@ -190,6 +189,19 @@ both without features and with `multithreading`. The Newtonsoft and EF InMemory 
 matched .NET on stdout and exit code with the multithreaded debug and release CLI.
 `./check.sh --fast` passed clippy and 1123, 1429 and 1446 tests in its three configurations;
 `cargo fmt --all -- --check` passed.
+
+### Slice 2: generic, nested and byref signatures
+
+The synthetic assembly now references nested types through their enclosing types, preserves
+constructed declaring-type and method arguments for member references, and translates generic
+signature types and byref parameters and returns. Differential fixtures cover `List<int>.Add`,
+`MakeGenericMethod`, nested constructors, generic fields and methods on a nested constructed
+type, byref `Invoke` copy-back and a byref-returning delegate. The DynamicMethod fixture and
+differential tests match .NET with and without `multithreading`. The Newtonsoft and EF InMemory
+host projects also match .NET on stdout and exit code with the debug and release CLI.
+
+Slice 2 verification (2026-11-16): `./check.sh --fast` passed clippy and 1135, 1441 and
+1458 tests in its three configurations; `cargo fmt --all -- --check` passed.
 
 ## Done when
 
