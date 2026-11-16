@@ -1,6 +1,6 @@
 # Investigate Reflection.Emit and `DynamicMethod`
 
-**Status:** Slices 1 (demand survey), 2 (AV) and 3 (switch-level experiment, on `plan24/slice3-switch`) done; slice 4 (spike on `worktree-agent-ae6f4cca00cbb9a7a`) done: all three `DynamicMethod` fixtures exit 42 on the VM via a recording shim; slice 5 not started
+**Status:** Complete. Slices 1-5 done; the decision is a follow-up `DynamicMethod` implementation via a synthetic module, [plan 25](25-dynamicmethod-implementation.md). The spike stays on `worktree-agent-ae6f4cca00cbb9a7a`; the landing recommendation is in the Conclusion
 **Outcome:** This plan records a decision, backed by a working spike or a measured blocker:
 either a follow-up plan to implement `DynamicMethod` (and, separately, whether to do
 `AssemblyBuilder`/`TypeBuilder`), or a single switch-level answer that replaces the per-call-site
@@ -435,12 +435,91 @@ sidesteps rather than solves: it would need the raw-IL decoder (an upstream dotn
 our own), which is the blocker the baseline investigation measured. The spike is on
 `worktree-agent-ae6f4cca00cbb9a7a`; nothing here is production quality.
 
+## Conclusion (slice 5)
+
+Decided 2026-11-15. Implement `DynamicMethod` for real, using the synthetic-module approach the
+spike proved, as [plan 25](25-dynamicmethod-implementation.md). Do not implement
+`AssemblyBuilder`/`TypeBuilder`.
+
+### Answers
+
+| Question | Answer | Where the evidence is |
+|---|---|---|
+| 1. Demand | Real. Newtonsoft and Microsoft.Extensions.DependencyInjection select Emit on `IsDynamicCodeCompiled` and so avoid it. System.Text.Json (on `IsDynamicCodeSupported`) and the Linq interpreter's object-array delegate for more than 2 parameters or byref types reach `new DynamicMethod`. EF Relational/SQLite reaches it through the Linq path on every query | Slice 1 findings |
+| 2. Switch-level alternative | Partly. Two NativeAOT-style substitutions (`CanCompileToIL`, `CanEmitObjectArrayDelegate` false, plus a support-library thunk table) cover every Linq path up to 16 non-byref parameters and let both call-site patches go. STJ needs a per-library seam, and `DynamicMethod` throwing `PlatformNotSupportedException` is rejected because no caller catches it | Slice 3 findings |
+| 3. Feasibility | Option (b), a synthetic module, with a recording front end instead of a raw-IL decoder. About 720 lines of new code, no dotnetdll change, no `MethodDescription` change. Option (a) was not attempted: it needs a new `MethodDescription` representation under every resolver cache | Slice 4 spike result |
+| 4. `AssemblyBuilder`/`TypeBuilder` | Not needed; see below | This section |
+| 5. Access violation | Reproduced and fixed. It was a stub-object field read (`m_handle`, `m_cache`) from CoreLib IL reached through definition-bound calls, not an invalid handle. `ldfld`/`stfld` now report a VM error naming the field and the stub | Slice 2 findings |
+
+### Question 4: type emission
+
+No rung in the slice 1 survey needs `TypeBuilder`. Every Emit consumer found constructs a
+`DynamicMethod` and drives its `ILGenerator`: Newtonsoft's `DynamicReflectionDelegateFactory`,
+DI's `ILEmitResolverBuilder`, System.Text.Json's `ReflectionEmit*MemberAccessor`, and the Linq
+object-array thunk (`CreateObjectArrayDelegateRefEmit`). EF Core has no direct Emit, and the
+trace of both host rungs showed 0 `DynamicMethod` constructions, 0 `LambdaCompiler.Compile`
+calls and no `TypeBuilder`/`AssemblyBuilder` construction.
+
+The one `TypeBuilder` reach in the survey is `DelegateHelpers.MakeNewCustomDelegate`
+(`Expression.GetDelegateType` for byref or pointer delegate types, through `AssemblyGen`). No rung
+reaches it. It fails for the same reason on the VM and on any runtime without Emit, and it is
+avoidable without type emission: byref object-array thunks can be a `DynamicMethod`, and a custom
+delegate type for a signature has no caller among the rungs. Type emission would also need
+what `DynamicMethod` does not: a writable type table, generic type definitions, interface
+implementations and method overrides in one synthetic module, and `CreateType` semantics. That is a
+separate job. It is out of scope for plan 25 and restarts only if a chosen application rung reaches
+`TypeBuilder` or `AssemblyBuilder.DefineDynamicAssembly` on an enabled path.
+
+### Why `DynamicMethod`, and why now
+
+- The demand is real and has no switch. STJ's emit-vs-reflection choice, byref Linq delegates and
+  every library that emits on `IsDynamicCodeSupported` can only be served per library, and the seam
+  approach stops being cheap once a fallback is not a drop-in object (slice 3).
+- The spike answered the open risk. Three fixtures (`Invoke` and `CreateDelegate`, a call to an
+  existing method, a throw and a typed catch) pass against `dotnet`. The existing intrinsic
+  dispatch, frames, delegates, exception regions and `MemberRef` resolution worked
+  unchanged on a method the loader had never seen.
+- Neither blocker the baseline investigation measured (no raw-IL decoder in dotnetdll, no module
+  identity) applies, because the shim records resolved operations and none of CoreLib's Emit code
+  runs. The cost of the remaining work is the translation table, not a new VM concept.
+- The alternative is worse. Reverting to per-library seams leaves the byref gap and every new
+  library needing a patch. Option (a) hits the "Ask the maintainer" condition (a new
+  `MethodDescription` representation touching every cache), and the spike showed it is unnecessary.
+
+Verified on commit 47b30872 (maintainer session): `dynamic_method_add_42`,
+`dynamic_method_call_42` and `dynamic_method_catch_42` pass `scripts/diff_run.sh`; the Newtonsoft
+roundtrip and EF InMemory rungs still match `dotnet` on stdout and exit code with the stub in
+place (release CLI); `./check.sh --fast`, clippy `-D warnings` and fmt were clean.
+
+### Landing
+
+Recommendation: land the spike code with plan 24 rather than redo it under plan 25. The maintainer
+decides.
+
+- Redoing it would repeat the same recording shim and the same one-method `Resolution` build for
+  no gain; plan 25's slices extend both files in place.
+- It is strictly better than main today. Any `DynamicMethod` construction on main stops at a missing
+  QCall; with the stub it either runs or stops with a `NotSupportedException` naming the missing
+  feature (the spike's shortcuts all reject, none is silently wrong).
+- The risk is bounded and checked: the stub replaces `DynamicMethod` for every caller, and the
+  maintainer session confirmed both host rungs and the existing suite stay green.
+- Landing needs three things in the same change: move the three `dynamic_method_*_42` fixtures
+  (and `dynamic_method_ctor_42`) from `debug_fixtures` to `fixtures/reflection/`, replace the
+  `Plan 24 slice 4 SPIKE` header comments with an accurate description of the current limits, and
+  keep `docs/COMPATIBILITY.md` as updated in this slice. The `dotnet-intrinsics-reflection` to
+  `dotnet-assemblies` edge is acceptable (plan 25, "Layering").
+- Reason to hold back instead: the spike was written in one pass and has the shortcuts listed in
+  slice 4. If the maintainer prefers main to contain no code with a known gap, land only the
+  fixtures, the AV fix and this decision, and let plan 25 slice 1 bring the code in already
+  complete for its first scope. The cost is a second review of the same 720 lines.
+
 ## Scope
 
 In: answering the five questions, one spike, the AV repro, and the decision.
 
-Out: a production `DynamicMethod` implementation. The spike may stay on a branch, and only the
-fixtures, the AV fix and the decision record land on main. Changing either feature value without
+Out: a production `DynamicMethod` implementation (now [plan 25](25-dynamicmethod-implementation.md)).
+The spike may stay on a branch, and only the fixtures, the AV fix and the decision record land on
+main; see "Landing" in the Conclusion. Changing either feature value without
 rerunning the host rungs is also out, because the values were chosen on rung evidence.
 
 ## Slices

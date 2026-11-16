@@ -11,7 +11,8 @@ In priority order. Each plan's own `Status:` line is the only record of its stat
 | ID | Plan | Note |
 |---|---|---|
 | 23 | [Runtime behavior gaps: static field reflection, Math FCalls, Array.Fill, Span.CopyTo, signed byref offsets and generic arity](23-runtime-behavior-gaps.md) | Validated runtime surface and remaining limits are recorded in the plan |
-| 24 | [Investigate Reflection.Emit and `DynamicMethod`](24-reflection-emit-investigation.md) | Slices 1–2 done (demand survey, AV fixed); ends in a decision and a follow-up plan or a switch-level answer |
+| 25 | [Implement `DynamicMethod`](25-dynamicmethod-implementation.md) | Not started; turns the plan 24 spike into production support (labels and branches, fields, generics, `Module`, seam retirement, lifetime) |
+| 24 | [Investigate Reflection.Emit and `DynamicMethod`](24-reflection-emit-investigation.md) | Complete; decision is a `DynamicMethod` implementation (plan 25), no `TypeBuilder`; the access violation is fixed |
 | 21 | [Correctness backlog: byte-read bounds, pointer slots, feature forwarding, thread IDs and the timer flake](21-correctness-backlog.md) | Complete |
 | 22 | [String interning](22-string-interning.md) | Complete; literal, empty and explicit interning identity across threads |
 | 18 | [Managed API gaps against the CLR](18-managed-api-clr-gaps.md) | Complete; Newtonsoft and EF host rungs match `dotnet` |
@@ -56,18 +57,9 @@ Evidence and IDs (p01…, R01…) are defined in the
   rebuilding `MethodDescription`, `ResolutionContext` and `VmResolverService` and by virtual
   resolution on every call. Caching resolved targets per call site would help the whole VM.
   Plan 15 has the older numbers and commands.
-- **Dynamic code without Reflection.Emit:** the VM reports `IsDynamicCodeSupported` true (EF Core
-  treats false as NativeAOT) and `IsDynamicCodeCompiled` false (plan 18 slice 7). Plan 24 slice 3
-  replaced the two call-site patches with `LambdaExpression.CanCompileToIL` and
-  `DelegateHelpers.CanEmitObjectArrayDelegate` set false (the NativeAOT values), a support-library
-  object-array delegate thunk for up to 16 parameters, and one System.Text.Json seam
-  (`DefaultJsonTypeInfoResolver.MemberAccessor`) in
-  `crates/dotnet-vm/src/intrinsics/linq_expressions.rs`. Still failing: delegates with byref or
-  pointer parameters, `Expression.GetDelegateType` on byref types (`TypeBuilder`), and any library
-  that picks Emit from `IsDynamicCodeSupported` without a switch. Plan 24 slices 4–5 decide
-  whether to implement `DynamicMethod`.
 - **Gaps behind the System.Text.Json fixture** (none involve Emit,
-  [plan 24](24-reflection-emit-investigation.md) slice 3):
+  [plan 24](24-reflection-emit-investigation.md) slice 3; the Emit-dependent failures are
+  [plan 25](25-dynamicmethod-implementation.md)):
   - `JsonSerializer.Deserialize<double[]>` throws `NotSupportedException: Derived classes must
     provide an implementation` while STJ creates the array's type info: a `Type` member the
     `DotnetRs.RuntimeType` stub doesn't override.
