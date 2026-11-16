@@ -20,7 +20,7 @@ mod loader;
 mod marshal;
 mod sandbox;
 
-pub use call::external_call;
+pub use call::{external_call, indirect_call};
 pub use loader::NativeLibraries;
 #[cfg(feature = "fuzzing")]
 pub use sandbox::DenySandbox;

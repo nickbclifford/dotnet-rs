@@ -62,6 +62,153 @@ pub fn external_call<'gc>(
     res
 }
 
+/// Invoke an unmanaged function pointer using its standalone call-site signature.
+///
+/// # Safety
+/// `target` must identify a live native function with the specified ABI and signature.
+pub unsafe fn indirect_call<'gc>(
+    ctx: &mut dyn PInvokeContext<'gc>,
+    signature: &dotnetdll::resolved::signature::MaybeUnmanagedMethod<MethodType>,
+    target: NonNull<u8>,
+    libraries: &NativeLibraries,
+) -> StepResult {
+    use dotnetdll::resolved::signature::StandAloneCallingConvention as C;
+
+    if !libraries.allows_indirect_calls() {
+        return StepResult::Error(
+            ExecutionError::InvalidCil("native indirect calls are disabled".into()).into(),
+        );
+    }
+    if signature.instance || signature.explicit_this {
+        return StepResult::Error(
+            ExecutionError::NotImplemented("instance unmanaged calli".into()).into(),
+        );
+    }
+    let abi = match signature.calling_convention {
+        C::Cdecl => libffi::raw::ffi_abi_FFI_DEFAULT_ABI,
+        C::DefaultUnmanaged => {
+            #[cfg(all(target_arch = "x86", target_os = "windows"))]
+            {
+                libffi::raw::ffi_abi_FFI_STDCALL
+            }
+            #[cfg(not(all(target_arch = "x86", target_os = "windows")))]
+            {
+                libffi::raw::ffi_abi_FFI_DEFAULT_ABI
+            }
+        }
+        C::Stdcall => {
+            #[cfg(target_arch = "x86")]
+            {
+                libffi::raw::ffi_abi_FFI_STDCALL
+            }
+            #[cfg(not(target_arch = "x86"))]
+            {
+                libffi::raw::ffi_abi_FFI_DEFAULT_ABI
+            }
+        }
+        C::Thiscall => {
+            #[cfg(target_arch = "x86")]
+            {
+                libffi::raw::ffi_abi_FFI_THISCALL
+            }
+            #[cfg(not(target_arch = "x86"))]
+            {
+                libffi::raw::ffi_abi_FFI_DEFAULT_ABI
+            }
+        }
+        C::Fastcall => {
+            #[cfg(target_arch = "x86")]
+            {
+                libffi::raw::ffi_abi_FFI_FASTCALL
+            }
+            #[cfg(not(target_arch = "x86"))]
+            {
+                libffi::raw::ffi_abi_FFI_DEFAULT_ABI
+            }
+        }
+        _ => {
+            return StepResult::Error(
+                ExecutionError::InvalidCil("managed calli passed to native dispatcher".into())
+                    .into(),
+            );
+        }
+    };
+    let mut parameters = signature.parameters.clone();
+    let fixed = parameters.len();
+    if let Some(varargs) = &signature.varargs {
+        if !varargs.is_empty() && signature.calling_convention != C::Cdecl {
+            return StepResult::Error(
+                ExecutionError::InvalidCil("unmanaged varargs require cdecl".into()).into(),
+            );
+        }
+        if !varargs.is_empty() && fixed == 0 {
+            return StepResult::Error(
+                ExecutionError::NotImplemented("native varargs without a fixed parameter".into())
+                    .into(),
+            );
+        }
+        for Parameter(_, parameter) in varargs {
+            if let ParameterType::Value(t) = parameter {
+                let concrete = dotnet_vm_ops::vm_try!(ctx.make_concrete(t));
+                if matches!(
+                    concrete.get(),
+                    BaseType::Boolean
+                        | BaseType::Char
+                        | BaseType::Int8
+                        | BaseType::UInt8
+                        | BaseType::Int16
+                        | BaseType::UInt16
+                        | BaseType::Float32
+                ) {
+                    return StepResult::Error(
+                        ExecutionError::InvalidCil(
+                            "native varargs require default C argument promotions".into(),
+                        )
+                        .into(),
+                    );
+                }
+            }
+        }
+        parameters.extend(varargs.iter().cloned());
+    }
+    if matches!(signature.return_type.1, Some(ParameterType::TypedReference)) {
+        return reject_typed_reference_pinvoke_return();
+    }
+    if let Err(e) = preflight_byref_like_native_aggregates(&parameters, &signature.return_type, ctx)
+    {
+        return e;
+    }
+    if ctx.top_of_stack().as_usize() < parameters.len() {
+        return StepResult::Error(
+            ExecutionError::InvalidCil("calli stack underflow".into()).into(),
+        );
+    }
+    #[cfg(feature = "multithreading")]
+    for (i, Parameter(_, p_type)) in parameters.iter().enumerate() {
+        let value = ctx.peek_stack_at(parameters.len() - 1 - i);
+        if rejects_cross_arena_native_escape(&value, matches!(p_type, ParameterType::Ref(_))) {
+            return StepResult::Error(
+                ExecutionError::InvalidCil(
+                    "cross-arena native pointer escape is unsupported".into(),
+                )
+                .into(),
+            );
+        }
+    }
+    // SAFETY: F11.PInvokeAbiAgreement — the caller guarantees that this address is a live
+    // function with the ABI described by `signature`; it remains live for the call.
+    let target_fn: unsafe extern "C" fn() = unsafe { std::mem::transmute(target.as_ptr()) };
+    let variadic = (fixed < parameters.len()).then_some(fixed);
+    marshal_and_call(
+        ctx,
+        &parameters,
+        &signature.return_type,
+        target_fn,
+        abi,
+        variadic,
+    )
+}
+
 /// The address of a frame-home byref passed to native code, once its frame is confirmed live.
 /// Native code receives a raw address, unchecked like any native address from then on.
 fn live_frame_home_address<'gc>(
@@ -393,11 +540,11 @@ fn narrow_and_push<'gc, T>(
 
 fn handle_pinvoke_return<'gc>(
     ctx: &mut dyn PInvokeContext<'gc>,
-    method: &MethodDescription,
+    return_type: &ReturnType<MethodType>,
     arg_count: usize,
     call_data: &mut PInvokeCallData<'_, 'gc>,
 ) -> StepResult {
-    match &method.signature().return_type.1 {
+    match &return_type.1 {
         None => {
             if let Err(e) = invoke_ffi_call_with_write_backs(ctx, call_data, std::ptr::null_mut()) {
                 return e;
@@ -644,16 +791,16 @@ fn reject_byref_like_native_aggregate(what: &str) -> StepResult {
 /// Reject byref-like aggregates in the signature before any argument is
 /// marshaled, pinned or copied, and before native code runs.
 fn preflight_byref_like_native_aggregates(
-    method: &MethodDescription,
+    parameters: &[Parameter<MethodType>],
+    return_type: &ReturnType<MethodType>,
     ctx: &dyn PInvokeContext<'_>,
 ) -> Result<(), StepResult> {
-    let signature = method.signature();
-    for (i, Parameter(_, p_type)) in signature.parameters.iter().enumerate() {
+    for (i, Parameter(_, p_type)) in parameters.iter().enumerate() {
         if is_byref_like_native_aggregate(p_type, ctx).map_err(|e| StepResult::Error(e.into()))? {
             return Err(reject_byref_like_native_aggregate(&format!("argument {i}")));
         }
     }
-    if let Some(ret) = &signature.return_type.1
+    if let Some(ret) = &return_type.1
         && is_byref_like_native_aggregate(ret, ctx).map_err(|e| StepResult::Error(e.into()))?
     {
         return Err(reject_byref_like_native_aggregate("return type"));
@@ -693,12 +840,13 @@ fn external_call_impl<'gc>(
         return reject_typed_reference_pinvoke_return();
     }
 
-    if let Err(e) = preflight_byref_like_native_aggregates(&method, ctx) {
+    if let Err(e) = preflight_byref_like_native_aggregates(
+        &method.signature().parameters,
+        &method.signature().return_type,
+        ctx,
+    ) {
         return e;
     }
-
-    let mut pinned_objects: Vec<ObjectRef<'gc>> = Vec::new();
-    let mut local_guards: Vec<PinnedGuard<'gc>> = Vec::new();
 
     let arg_count = method.signature().parameters.len();
     // The former `peek_multiple(arg_count)` validated the complete range here,
@@ -778,9 +926,37 @@ fn external_call_impl<'gc>(
         }
     };
 
+    let target_fn = *target.as_fun();
+    let _ = ctx.tracer().enabled_emit(ctx.indent(), |trace| {
+        trace.interop(
+            "CALLING",
+            &format!("{}::{} with {} args", module, function, arg_count),
+        );
+    });
+    marshal_and_call(
+        ctx,
+        &method.signature().parameters,
+        &method.signature().return_type,
+        target_fn,
+        libffi::raw::ffi_abi_FFI_DEFAULT_ABI,
+        None,
+    )
+}
+
+fn marshal_and_call<'gc>(
+    ctx: &mut dyn PInvokeContext<'gc>,
+    parameters: &[Parameter<MethodType>],
+    return_signature: &ReturnType<MethodType>,
+    target_fn: unsafe extern "C" fn(),
+    abi: libffi::middle::FfiAbi,
+    fixed_arg_count: Option<usize>,
+) -> StepResult {
+    let arg_count = parameters.len();
+    let mut pinned_objects: Vec<ObjectRef<'gc>> = Vec::new();
+    let mut local_guards: Vec<PinnedGuard<'gc>> = Vec::new();
     let mut args: Vec<Type> = vec![];
     {
-        for Parameter(_, p) in &method.signature().parameters {
+        for Parameter(_, p) in parameters {
             args.push(match param_to_type(p, ctx) {
                 Ok(v) => v,
                 Err(e) => return StepResult::Error(e.into()),
@@ -788,7 +964,7 @@ fn external_call_impl<'gc>(
         }
     }
 
-    let return_type = match &method.signature().return_type.1 {
+    let return_type = match &return_signature.1 {
         None => Type::void(),
         Some(s) => match param_to_type(s, ctx) {
             Ok(v) => v,
@@ -801,7 +977,7 @@ fn external_call_impl<'gc>(
     let mut arg_ptrs: Vec<*mut c_void> = vec![std::ptr::null_mut(); arg_count];
 
     // Pass 1: Prepare buffers
-    for (i, Parameter(_, p_type)) in method.signature().parameters.iter().enumerate() {
+    for (i, Parameter(_, p_type)) in parameters.iter().enumerate() {
         let v = ctx.peek_stack_at(arg_count - 1 - i);
 
         // SAFETY: F10.RawMemoryAccessValid — `args` contains libffi Type values constructed for every signature parameter;
@@ -1147,16 +1323,10 @@ fn external_call_impl<'gc>(
         }
     }
 
-    let cif = Cif::new(args, return_type.clone());
-
-    let target_fn = *target.as_fun();
-
-    let _ = ctx.tracer().enabled_emit(ctx.indent(), |trace| {
-        trace.interop(
-            "CALLING",
-            &format!("{}::{} with {} args", module, function, arg_ptrs.len()),
-        );
-    });
+    let cif = match fixed_arg_count {
+        Some(fixed) => Cif::new_variadic_with_abi(args, fixed, return_type, abi),
+        None => Cif::new_with_abi(args, return_type, abi),
+    };
 
     let mut call_data = PInvokeCallData {
         cif: &cif,
@@ -1166,7 +1336,7 @@ fn external_call_impl<'gc>(
         temp_buffers: &temp_buffers,
     };
 
-    let call_result = handle_pinvoke_return(ctx, &method, arg_count, &mut call_data);
+    let call_result = handle_pinvoke_return(ctx, return_signature, arg_count, &mut call_data);
 
     for obj in pinned_objects {
         ctx.unpin_object(obj);

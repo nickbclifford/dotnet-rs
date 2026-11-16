@@ -24,7 +24,9 @@ use dotnet_value::{
 };
 use dotnet_vm_data::frame_homes::FrameHomes;
 use dotnet_vm_ops::NULL_REF_MSG;
-use dotnetdll::prelude::{BaseType, Instruction, Kind, MethodSource, TypeSource, UserType};
+use dotnetdll::prelude::{
+    BaseType, CallingConvention, Instruction, Kind, MethodSource, TypeSource, UserType,
+};
 use std::{fmt::Write as _, sync::OnceLock};
 
 // invariant: VM internal state is inconsistent; continuing would be unsafe.
@@ -870,6 +872,13 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             }
             UnifiedDispatchTarget::Resolved(method, lookup) => (method, lookup),
         };
+
+        if resolved.signature().calling_convention == CallingConvention::Vararg {
+            return self.throw_by_name_with_message(
+                "System.InvalidProgramException",
+                "Vararg calling convention not supported.",
+            );
+        }
 
         if this_type.is_some() {
             self.merge_receiver_lookup_for_virtual_dispatch(&resolved, &mut lookup);

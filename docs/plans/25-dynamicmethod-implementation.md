@@ -1,6 +1,6 @@
 # Implement `DynamicMethod`
 
-**Status:** Not started
+**Status:** Slice 1 in progress
 **Outcome:** `System.Reflection.Emit.DynamicMethod` runs on the VM for every `ILGenerator`
 operation a real library uses: branches and labels, fields, `calli`, filters and faults, generic
 and nested types and callees, byref signatures, and the owner, module and `skipVisibility`
@@ -150,6 +150,38 @@ dependency. Each slice keeps the spike fixtures and both host rungs green.
 Slices 1-3 do not depend on the seam decision and are each useful alone. If slice 1 finds that
 dotnetdll cannot express a required construct, stop and ask the maintainer rather than building a
 decoder.
+
+### Slice 1: upstream prefix and writer fixes
+
+dotnetdll 0.5.0 added `CallVirtualConstrainedTail`, resolving the earlier `constrained.` + `tail.` +
+`callvirt` gap. The promoted `reflection/dynamic_method_constrained_tail_42` fixture now matches
+.NET 10.0.14.
+
+A second valid combination, `constrained.` + `tail.` + `call` to a static abstract interface
+method, returns 42 on .NET in `reflection/dynamic_method_static_constrained_tail_42`.
+dotnetdll 0.5.1 added `CallConstrainedTail`, and the fixture now matches .NET.
+
+A broader [0.5.0 audit](evidence/25-dotnetdll-050-audit.md) records reproducible branch,
+signature, exception-section, and prefix-flag issues for the same upstream release. Several affect
+serialized assemblies rather than this plan's in-memory `Resolution` path. The audit reproductions
+were rerun against 0.5.1: the affected cases now round-trip, and the signature reader no longer
+panics on the formerly truncated output.
+
+The CLR accepts local-only `pinned` markers and superfluous sentinels in method signatures.
+dotnetdll 0.5.1 cannot retain these nonstandard bytes in a resolved parameter. The recorder
+preserves them in `SignatureHelper.GetSignature()` and normalizes them for standard managed calls.
+Differential fixtures cover pinned arguments and sentinels; a CLR compacting-GC probe observed no
+pinning effect for a reference argument in its tested cases. Exact metadata inspection is outside
+this plan. See the [0.5.1 signature-edge probes](evidence/25-dotnetdll-051-signature-edges.md).
+
+The recorder now covers branches, fields, filters, faults, computed stack depth, managed and
+unmanaged indirect calls, basic `SignatureHelper` operands, and the standard opcode table. The
+differential fixtures compare stdout and exit codes with .NET. Newtonsoft and EF InMemory host
+rungs also match. Remaining limits include generic, nested and byref signatures (slice 2), raw
+signature encoding for nonprimitive types, and uncommon `no.` prefix combinations. On the tested
+Linux CLR, invoking a managed vararg call throws
+`InvalidProgramException`; the VM does the same. Managed vararg behavior on platforms where the
+CLR supports it has not been implemented or tested.
 
 ## Done when
 

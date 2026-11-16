@@ -104,39 +104,63 @@ internal sealed class RecordingLocal : LocalBuilder
 {
     private readonly int _index;
     private readonly Type _type;
-    public RecordingLocal(int index, Type type) { _index = index; _type = type; }
+    private readonly bool _pinned;
+    public RecordingLocal(int index, Type type, bool pinned) { _index = index; _type = type; _pinned = pinned; }
     public override int LocalIndex => _index;
     public override Type LocalType => _type;
-    public override bool IsPinned => false;
+    public override bool IsPinned => _pinned;
 }
 
 internal sealed class RecordingILGenerator : ILGenerator
 {
-    // One entry per instruction. Reference operands are Type/MethodBase/string.
+    // One entry per instruction. Reference operands include types, members, strings and targets.
     private readonly List<int> _ops = new();
+    private readonly List<OpCode> _codes = new();
+    private int _ilOffset;
     private readonly List<long> _imm = new();
     private readonly List<object?> _refs = new();
     private readonly List<Type> _locals = new();
-    // Five ints per clause: kind (0 catch, 2 finally), try start, try end, handler start, handler end.
+    private readonly List<int> _localPins = new();
+    // Six ints per clause: kind, try start/end, handler start/end, filter start.
     private readonly List<int> _eh = new();
     private readonly List<Type?> _ehTypes = new();
+    private readonly List<int> _labels = new();
+    private readonly List<(int Site, int Label)> _branches = new();
+    private readonly List<(int Site, int[] Labels)> _switches = new();
 
     private sealed class Block
     {
-        public int TryStart, TryEnd, HandlerStart, Kind = -1;
+        public int TryStart, TryEnd, HandlerStart, FilterStart, Kind = -1;
+        public Label EndLabel;
         public Type? CatchType;
         public readonly List<int> LeaveSites = new();
     }
     private readonly Stack<Block> _blocks = new();
 
+    private Block CurrentBlock()
+    {
+        if (_blocks.Count == 0) throw new NotSupportedException("Not in an exception block.");
+        return _blocks.Peek();
+    }
+
     private void Record(OpCode op, long imm, object? reference)
     {
         _ops.Add(op.Value);
+        _codes.Add(op);
         _imm.Add(imm);
         _refs.Add(reference);
+        _ilOffset += op.Size + (op.OperandType switch
+        {
+            OperandType.InlineNone => 0,
+            OperandType.ShortInlineBrTarget or OperandType.ShortInlineI or OperandType.ShortInlineVar => 1,
+            OperandType.InlineVar => 2,
+            OperandType.InlineI8 or OperandType.InlineR => 8,
+            OperandType.InlineSwitch => 4 + 4 * (((int[]?)reference)?.Length ?? 0),
+            _ => 4,
+        });
     }
 
-    public override int ILOffset => _ops.Count;
+    public override int ILOffset => _ilOffset;
 
     public override void Emit(OpCode opcode) => Record(opcode, 0, null);
     public override void Emit(OpCode opcode, byte arg) => Record(opcode, arg, null);
@@ -146,34 +170,92 @@ internal sealed class RecordingILGenerator : ILGenerator
     public override void Emit(OpCode opcode, float arg) => Record(opcode, BitConverter.SingleToInt32Bits(arg), null);
     public override void Emit(OpCode opcode, double arg) => Record(opcode, BitConverter.DoubleToInt64Bits(arg), null);
     public override void Emit(OpCode opcode, string str) => Record(opcode, 0, str);
-    public override void Emit(OpCode opcode, Type? cls) => Record(opcode, 0, cls);
-    public override void Emit(OpCode opcode, System.Reflection.MethodInfo meth) => Record(opcode, 0, meth);
-    public override void Emit(OpCode opcode, System.Reflection.ConstructorInfo con) => Record(opcode, 0, con);
+    public override void Emit(OpCode opcode, Type? cls) => Record(opcode, opcode.Value == OpCodes.Ldtoken.Value ? 1 : 0, cls);
+    public override void Emit(OpCode opcode, System.Reflection.MethodInfo meth) => Record(opcode, opcode.Value == OpCodes.Ldtoken.Value ? 2 : 0, meth);
+    public override void Emit(OpCode opcode, System.Reflection.ConstructorInfo con) => Record(opcode, opcode.Value == OpCodes.Ldtoken.Value ? 2 : 0, con);
     public override void Emit(OpCode opcode, LocalBuilder local) => Record(opcode, local.LocalIndex, null);
-    public override void Emit(OpCode opcode, System.Reflection.FieldInfo field) => throw new NotSupportedException("DynamicMethod does not support field operands yet (plan 25)");
-    public override void Emit(OpCode opcode, Label label) => throw new NotSupportedException("DynamicMethod does not support labels yet (plan 25)");
-    public override void Emit(OpCode opcode, Label[] labels) => throw new NotSupportedException("DynamicMethod does not support labels yet (plan 25)");
-    public override void Emit(OpCode opcode, SignatureHelper signature) => throw new NotSupportedException("DynamicMethod does not support signatures yet (plan 25)");
-    public override void EmitCall(OpCode opcode, System.Reflection.MethodInfo methodInfo, Type[]? optionalParameterTypes) =>
-        Record(opcode, 0, methodInfo);
+    public override void Emit(OpCode opcode, System.Reflection.FieldInfo field) => Record(opcode, opcode.Value == OpCodes.Ldtoken.Value ? 3 : 0, field);
+    public override void Emit(OpCode opcode, Label label)
+    {
+        _branches.Add((_ops.Count, Unsafe.As<Label, int>(ref label)));
+        Record(opcode, 0, null);
+    }
+    public override void Emit(OpCode opcode, Label[] labels)
+    {
+        ArgumentNullException.ThrowIfNull(labels);
+        var ids = new int[labels.Length];
+        for (int i = 0; i < ids.Length; i++) ids[i] = Unsafe.As<Label, int>(ref labels[i]);
+        _switches.Add((_ops.Count, ids));
+        Record(opcode, 0, ids);
+    }
+    public override void Emit(OpCode opcode, SignatureHelper signature)
+    {
+        ArgumentNullException.ThrowIfNull(signature);
+        ((RecordedSignatureHelper)(object)signature).EmitTo(this, opcode);
+    }
+    public override void EmitCall(OpCode opcode, System.Reflection.MethodInfo methodInfo, Type[]? optionalParameterTypes)
+    {
+        ArgumentNullException.ThrowIfNull(methodInfo);
+        if (optionalParameterTypes != null && (methodInfo.CallingConvention & CallingConventions.VarArgs) == 0)
+            throw new InvalidOperationException("Calling convention must be VarArgs.");
+        if (optionalParameterTypes == null)
+            Record(opcode, 0, methodInfo);
+        else
+            Record(opcode, 1, new object[] { methodInfo, optionalParameterTypes });
+    }
     public override void EmitCalli(OpCode opcode, CallingConventions callingConvention, Type? returnType,
-        Type[]? parameterTypes, Type[]? optionalParameterTypes) => throw new NotSupportedException("DynamicMethod does not support calli yet (plan 25)");
+        Type[]? parameterTypes, Type[]? optionalParameterTypes)
+    {
+        if (optionalParameterTypes != null && (callingConvention & CallingConventions.VarArgs) == 0)
+            throw new InvalidOperationException("Calling convention must be VarArgs.");
+        parameterTypes ??= Type.EmptyTypes;
+        optionalParameterTypes ??= Type.EmptyTypes;
+        var args = new Type[parameterTypes.Length + optionalParameterTypes.Length];
+        System.Array.Copy(parameterTypes, 0, args, 0, parameterTypes.Length);
+        System.Array.Copy(optionalParameterTypes, 0, args, parameterTypes.Length, optionalParameterTypes.Length);
+        RecordCalli(opcode, (int)callingConvention, returnType, args, parameterTypes.Length);
+    }
     public override void EmitCalli(OpCode opcode, System.Runtime.InteropServices.CallingConvention unmanagedCallConv,
-        Type? returnType, Type[]? parameterTypes) => throw new NotSupportedException("DynamicMethod does not support calli yet (plan 25)");
+        Type? returnType, Type[]? parameterTypes)
+    {
+        parameterTypes ??= Type.EmptyTypes;
+        RecordCalli(opcode, 0x100 | (int)unmanagedCallConv, returnType, parameterTypes, parameterTypes.Length);
+    }
+
+    internal void RecordCalli(OpCode opcode, int callingConvention, Type? returnType, Type[] arguments, int fixedCount)
+    {
+        var types = new Type[arguments.Length + 1];
+        types[0] = returnType ?? typeof(void);
+        System.Array.Copy(arguments, 0, types, 1, arguments.Length);
+        Record(opcode, (long)callingConvention | ((long)fixedCount << 32), types);
+    }
 
     public override LocalBuilder DeclareLocal(Type localType, bool pinned)
     {
         _locals.Add(localType);
-        return new RecordingLocal(_locals.Count - 1, localType);
+        _localPins.Add(pinned ? 1 : 0);
+        return new RecordingLocal(_locals.Count - 1, localType, pinned);
     }
 
-    public override Label DefineLabel() => throw new NotSupportedException("DynamicMethod does not support labels yet (plan 25)");
-    public override void MarkLabel(Label loc) => throw new NotSupportedException("DynamicMethod does not support labels yet (plan 25)");
+    public override Label DefineLabel()
+    {
+        int id = _labels.Count;
+        _labels.Add(-1);
+        return Unsafe.As<int, Label>(ref id);
+    }
+    public override void MarkLabel(Label loc)
+    {
+        int id = Unsafe.As<Label, int>(ref loc);
+        if ((uint)id >= (uint)_labels.Count || _labels[id] != -1)
+            throw new ArgumentException("Invalid or already marked label.");
+        _labels[id] = _ops.Count;
+    }
 
     public override Label BeginExceptionBlock()
     {
-        _blocks.Push(new Block { TryStart = _ops.Count });
-        return default;
+        var end = DefineLabel();
+        _blocks.Push(new Block { TryStart = _ops.Count, EndLabel = end });
+        return end;
     }
 
     private void CloseHandler(Block b, int kind)
@@ -187,7 +269,11 @@ internal sealed class RecordingILGenerator : ILGenerator
         }
         else
         {
+            if (b.Kind == 1 && b.HandlerStart < 0)
+                throw new InvalidOperationException("Filter has no handler.");
             CloseCurrentHandler(b);
+            // A finally after catches protects the complete try/catch construct.
+            if (kind == 2) b.TryEnd = _ops.Count;
         }
         b.Kind = kind;
         b.HandlerStart = _ops.Count;
@@ -195,7 +281,7 @@ internal sealed class RecordingILGenerator : ILGenerator
 
     private void CloseCurrentHandler(Block b)
     {
-        if (b.Kind == 2)
+        if (b.Kind == 2 || b.Kind == 4)
         {
             Record(OpCodes.Endfinally, 0, null);
         }
@@ -205,46 +291,170 @@ internal sealed class RecordingILGenerator : ILGenerator
             Record(OpCodes.Leave, 0, null);
         }
         _eh.Add(b.Kind); _eh.Add(b.TryStart); _eh.Add(b.TryEnd); _eh.Add(b.HandlerStart); _eh.Add(_ops.Count);
+        _eh.Add(b.FilterStart);
         _ehTypes.Add(b.CatchType);
     }
 
     public override void BeginCatchBlock(Type? exceptionType)
     {
-        var b = _blocks.Peek();
+        var b = CurrentBlock();
+        if (b.Kind == 1 && b.HandlerStart < 0)
+        {
+            if (exceptionType != null) throw new ArgumentException("A filter handler requires a null exception type.");
+            Record(OpCodes.Endfilter, 0, null);
+            b.HandlerStart = _ops.Count;
+            return;
+        }
+        ArgumentNullException.ThrowIfNull(exceptionType);
         CloseHandler(b, 0);
-        b.CatchType = exceptionType ?? typeof(object);
+        b.CatchType = exceptionType;
     }
 
     public override void BeginFinallyBlock()
     {
-        var b = _blocks.Peek();
+        var b = CurrentBlock();
         CloseHandler(b, 2);
         b.CatchType = null;
     }
 
     public override void EndExceptionBlock()
     {
-        var b = _blocks.Pop();
+        var b = CurrentBlock();
+        if (b.Kind < 0 || (b.Kind == 1 && b.HandlerStart < 0))
+            throw new InvalidOperationException("Exception block has no handler.");
+        _blocks.Pop();
         CloseCurrentHandler(b);
         int end = _ops.Count;
         foreach (var site in b.LeaveSites) _imm[site] = end;
+        MarkLabel(b.EndLabel);
     }
 
-    public override void BeginExceptFilterBlock() => throw new NotSupportedException("DynamicMethod does not support filters yet (plan 25)");
-    public override void BeginFaultBlock() => throw new NotSupportedException("DynamicMethod does not support fault yet (plan 25)");
+    public override void BeginExceptFilterBlock()
+    {
+        var b = CurrentBlock();
+        CloseHandler(b, 1);
+        b.FilterStart = _ops.Count;
+        b.HandlerStart = -1;
+        b.CatchType = null;
+    }
+    public override void BeginFaultBlock()
+    {
+        var b = CurrentBlock();
+        CloseHandler(b, 4);
+        b.CatchType = null;
+    }
     public override void BeginScope() { }
     public override void EndScope() { }
     public override void UsingNamespace(string usingNamespace) { }
 
     [MethodImpl(MethodImplOptions.InternalCall)]
     private static extern System.Reflection.MethodInfo CompileRecorded(string name, Type returnType,
-        Type[] parameterTypes, int[] ops, long[] imm, object?[] refs, Type[] locals, int[] eh, Type?[] ehTypes);
+        Type[] parameterTypes, int[] ops, long[] imm, object?[] refs, Type[] locals, int[] localPins, int[] eh, Type?[] ehTypes,
+        int maxStack);
+
+    private int ComputeMaxStack(Type returnType)
+    {
+        var depths = new int[_ops.Count];
+        System.Array.Fill(depths, -1);
+        var pending = new Stack<int>();
+        int maximum = 0;
+        void Visit(int index, int depth)
+        {
+            if ((uint)index >= (uint)depths.Length) return;
+            if (depths[index] == depth) return;
+            if (depths[index] >= 0) throw new InvalidOperationException("Inconsistent evaluation stack depth.");
+            depths[index] = depth;
+            maximum = Math.Max(maximum, depth);
+            pending.Push(index);
+        }
+        Visit(0, 0);
+        for (int i = 0; i < _eh.Count; i += 6)
+        {
+            int kind = _eh[i];
+            Visit(_eh[i + 3], kind == 0 || kind == 1 ? 1 : 0);
+            if (kind == 1) Visit(_eh[i + 5], 1);
+        }
+        while (pending.Count != 0)
+        {
+            int i = pending.Pop();
+            OpCode op = _codes[i];
+            int pop = op.StackBehaviourPop switch
+            {
+                StackBehaviour.Pop0 => 0,
+                StackBehaviour.Pop1 or StackBehaviour.Popi or StackBehaviour.Popref => 1,
+                StackBehaviour.Pop1_pop1 or StackBehaviour.Popi_pop1 or StackBehaviour.Popi_popi or
+                StackBehaviour.Popi_popi8 or StackBehaviour.Popi_popr4 or StackBehaviour.Popi_popr8 or
+                StackBehaviour.Popref_pop1 or StackBehaviour.Popref_popi => 2,
+                StackBehaviour.Popi_popi_popi or StackBehaviour.Popref_popi_pop1 or
+                StackBehaviour.Popref_popi_popi or StackBehaviour.Popref_popi_popi8 or
+                StackBehaviour.Popref_popi_popr4 or StackBehaviour.Popref_popi_popr8 or
+                StackBehaviour.Popref_popi_popref => 3,
+                StackBehaviour.Varpop when op.Value == OpCodes.Ret.Value => returnType == typeof(void) ? 0 : 1,
+                StackBehaviour.Varpop when op.Value == OpCodes.Calli.Value && _refs[i] is Type[] signature =>
+                    signature.Length + (((int)_imm[i] & (int)(CallingConventions.HasThis | CallingConventions.ExplicitThis)) ==
+                        (int)CallingConventions.HasThis ? 1 : 0),
+                StackBehaviour.Varpop when _refs[i] is System.Reflection.MethodBase method =>
+                    method.GetParameters().Length + (op.Value != OpCodes.Newobj.Value && !method.IsStatic ? 1 : 0),
+                StackBehaviour.Varpop when _refs[i] is object[] { Length: 2 } call =>
+                    ((System.Reflection.MethodBase)call[0]).GetParameters().Length + ((Type[])call[1]).Length +
+                    (op.Value != OpCodes.Newobj.Value && !((System.Reflection.MethodBase)call[0]).IsStatic ? 1 : 0),
+                _ => throw new NotSupportedException("Cannot compute stack effect for " + op.Name),
+            };
+            int push = op.StackBehaviourPush switch
+            {
+                StackBehaviour.Push0 => 0,
+                StackBehaviour.Push1 or StackBehaviour.Pushi or StackBehaviour.Pushi8 or
+                StackBehaviour.Pushr4 or StackBehaviour.Pushr8 or StackBehaviour.Pushref => 1,
+                StackBehaviour.Push1_push1 => 2,
+                StackBehaviour.Varpush when op.Value == OpCodes.Newobj.Value => 1,
+                StackBehaviour.Varpush when op.Value == OpCodes.Calli.Value && _refs[i] is Type[] signature =>
+                    signature[0] == typeof(void) ? 0 : 1,
+                StackBehaviour.Varpush when _refs[i] is System.Reflection.MethodInfo method =>
+                    method.ReturnType == typeof(void) ? 0 : 1,
+                StackBehaviour.Varpush when _refs[i] is object[] { Length: 2 } call =>
+                    ((System.Reflection.MethodInfo)call[0]).ReturnType == typeof(void) ? 0 : 1,
+                StackBehaviour.Varpush => 0,
+                _ => throw new NotSupportedException("Cannot compute stack effect for " + op.Name),
+            };
+            int depth = depths[i] - pop + push;
+            if (depth < 0) throw new InvalidOperationException("Evaluation stack underflow.");
+            maximum = Math.Max(maximum, depth);
+            if (op.Value == OpCodes.Leave.Value || op.Value == OpCodes.Leave_S.Value) depth = 0;
+            if (op.Value != OpCodes.Jmp.Value &&
+                (op.FlowControl == FlowControl.Branch || op.FlowControl == FlowControl.Cond_Branch))
+            {
+                if (op.Value == OpCodes.Switch.Value)
+                {
+                    foreach (int target in (int[])_refs[i]!) Visit(target, depth);
+                }
+                else Visit((int)_imm[i], depth);
+            }
+            if (op.FlowControl != FlowControl.Branch && op.FlowControl != FlowControl.Return &&
+                op.FlowControl != FlowControl.Throw && op.Value != OpCodes.Endfinally.Value &&
+                op.Value != OpCodes.Endfilter.Value && op.Value != OpCodes.Jmp.Value)
+                Visit(i + 1, depth);
+        }
+        return maximum;
+    }
 
     public System.Reflection.MethodInfo Compile(string name, Type returnType, Type[] parameterTypes)
     {
         if (_blocks.Count != 0)
-            throw new InvalidOperationException("Unclosed exception block.");
+            throw new NotSupportedException("Unclosed exception block.");
+        int Target(int id)
+        {
+            if ((uint)id >= (uint)_labels.Count || _labels[id] < 0)
+                throw new ArgumentException("Unmarked label.");
+            return _labels[id];
+        }
+        foreach (var (site, label) in _branches) _imm[site] = Target(label);
+        foreach (var (site, labels) in _switches)
+        {
+            var targets = new int[labels.Length];
+            for (int i = 0; i < labels.Length; i++) targets[i] = Target(labels[i]);
+            _refs[site] = targets;
+        }
         return CompileRecorded(name, returnType, parameterTypes, _ops.ToArray(), _imm.ToArray(),
-            _refs.ToArray(), _locals.ToArray(), _eh.ToArray(), _ehTypes.ToArray());
+            _refs.ToArray(), _locals.ToArray(), _localPins.ToArray(), _eh.ToArray(), _ehTypes.ToArray(), ComputeMaxStack(returnType));
     }
 }

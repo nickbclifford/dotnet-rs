@@ -56,6 +56,10 @@ pub struct NativeLibraries {
 }
 static_collect!(NativeLibraries);
 impl NativeLibraries {
+    pub fn allows_indirect_calls(&self) -> bool {
+        self.sandbox.allow_indirect_call()
+    }
+
     pub fn new(root: impl AsRef<str>) -> Self {
         Self {
             root: PathBuf::from(root.as_ref()),

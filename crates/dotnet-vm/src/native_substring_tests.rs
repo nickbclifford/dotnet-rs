@@ -783,10 +783,9 @@ fn substring_dispatch_admits_only_inline_calls() {
     }
 }
 
-/// `calli` currently has no registered opcode handler. Keep its rejection explicit:
-/// the generic dispatch control above must not be mistaken for indirect-call support.
+/// An invalid `calli` target must be rejected without consuming any operands.
 #[test]
-fn indirect_opcode_refuses_without_consuming_operands() {
+fn indirect_opcode_refuses_invalid_target_without_consuming_operands() {
     use dotnetdll::binary::signature::kinds::StandAloneCallingConvention;
     for tail_call in [false, true] {
         let mut executor = executor();

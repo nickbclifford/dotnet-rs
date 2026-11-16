@@ -41,6 +41,14 @@ pub fn jmp<'gc, T: VmCallOps<'gc>>(ctx: &mut T, param0: &MethodSource) -> StepRe
     ctx.unified_dispatch_jmp(param0, None)
 }
 
+#[dotnet_instruction(ArgumentList)]
+pub fn arglist<'gc, T: dotnet_vm_ops::ops::ExceptionOps<'gc>>(ctx: &mut T) -> StepResult {
+    ctx.throw_by_name_with_message(
+        "System.InvalidProgramException",
+        "Vararg calling convention not supported.",
+    )
+}
+
 #[dotnet_instruction(Call { param0, tail_call })]
 pub fn call<'gc, T: VmCallOps<'gc>>(
     ctx: &mut T,
@@ -55,6 +63,125 @@ pub fn call<'gc, T: VmCallOps<'gc>>(
     }
 }
 
+#[dotnet_instruction(CallIndirect { param0, tail_call })]
+pub fn calli<'gc, T: VesOps<'gc>>(
+    ctx: &mut T,
+    param0: &dotnetdll::resolved::signature::MaybeUnmanagedMethod<MethodType>,
+    tail_call: bool,
+) -> StepResult {
+    use dotnetdll::resolved::signature::StandAloneCallingConvention;
+    let unsupported = || {
+        StepResult::Error(
+            crate::error::ExecutionError::NotImplemented(
+                "unsupported indirect call target or signature".into(),
+            )
+            .into(),
+        )
+    };
+    if !matches!(
+        param0.calling_convention,
+        StandAloneCallingConvention::DefaultManaged | StandAloneCallingConvention::Vararg
+    ) {
+        let target = match ctx.peek() {
+            Some(StackValue::UnmanagedPtr(p)) => Some(p.0),
+            Some(StackValue::NativeInt(p)) => {
+                // SAFETY: F11.PInvokeAbiAgreement — `calli`'s unmanaged pointer is supplied by
+                // the IL caller, which must ensure it denotes a live function with this ABI.
+                std::ptr::NonNull::new(unsafe {
+                    dotnet_value::pointer::unmanaged_ptr_from_addr(p as usize)
+                })
+            }
+            _ => return unsupported(),
+        };
+        let Some(target) = target else {
+            return ctx.throw_by_name_with_message(
+                "System.AccessViolationException",
+                ACCESS_VIOLATION_MSG,
+            );
+        };
+        let shared = ctx.shared().clone();
+        if !shared.pinvoke.allows_indirect_calls() {
+            return unsupported();
+        }
+        ctx.pop();
+        // SAFETY: F11.PInvokeAbiAgreement — unmanaged `calli` requires the IL caller to supply
+        // a live native function pointer with the ABI and signature in `param0`. The P/Invoke
+        // sandbox explicitly permits indirect calls before the pointer can be invoked.
+        return unsafe { dotnet_pinvoke::indirect_call(ctx, param0, target, &shared.pinvoke) };
+    }
+    if param0.calling_convention == StandAloneCallingConvention::Vararg {
+        return ctx.throw_by_name_with_message(
+            "System.InvalidProgramException",
+            "Vararg calling convention not supported.",
+        );
+    }
+    if param0.varargs.is_some() {
+        return unsupported();
+    }
+    if param0.explicit_this && (!param0.instance || param0.parameters.is_empty()) {
+        return ctx.throw_by_name_with_message(
+            "System.InvalidProgramException",
+            "An explicit receiver is required for this call signature.",
+        );
+    }
+    let Some(StackValue::NativeInt(index)) = ctx.peek() else {
+        return unsupported();
+    };
+    let Ok(index) = usize::try_from(index) else {
+        return unsupported();
+    };
+    #[cfg(feature = "multithreading")]
+    let target = ctx
+        .shared()
+        .reflection_registry
+        .runtime_methods_rev
+        .get(&index)
+        .map(|entry| entry.value().clone());
+    #[cfg(not(feature = "multithreading"))]
+    let target = ctx.reflection().methods_read().get(index).cloned();
+    let Some((method, lookup)) = target else {
+        return unsupported();
+    };
+    if method.signature().calling_convention != CallingConvention::Default
+        || method.signature().explicit_this
+        || method.signature().varargs.is_some()
+    {
+        return unsupported();
+    }
+    let signature = MethodSignature {
+        instance: param0.instance,
+        explicit_this: false,
+        calling_convention: CallingConvention::Default,
+        // An explicit-this call site encodes its receiver as its first parameter, while an
+        // instance method's definition encodes the receiver separately from its parameters.
+        parameters: if param0.explicit_this {
+            param0.parameters[1..].to_vec()
+        } else {
+            param0.parameters.clone()
+        },
+        return_type: param0.return_type.clone(),
+        varargs: None,
+    };
+    let current = ctx.current_context();
+    if !ctx.loader().comparer().signatures_equal(
+        &current.resolution,
+        &signature,
+        Some(current.generics),
+        &method.resolution(),
+        method.signature(),
+        Some(&lookup),
+    ) {
+        return unsupported();
+    }
+    ctx.pop();
+    let target = UnifiedDispatchTarget::Resolved(method, lookup);
+    if tail_call {
+        ctx.unified_dispatch_tail(target, None, None)
+    } else {
+        ctx.unified_dispatch(target, None, None)
+    }
+}
+
 fn dispatch_callvirt<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     param0: &MethodSource,
@@ -65,6 +192,12 @@ fn dispatch_callvirt<'gc, T: VesOps<'gc>>(
         ctx.resolver()
             .find_generic_method(param0, &ctx.current_context())
     );
+    if base_method.signature().calling_convention == CallingConvention::Vararg {
+        return ctx.throw_by_name_with_message(
+            "System.InvalidProgramException",
+            "Vararg calling convention not supported.",
+        );
+    }
     let num_args = 1 + base_method.signature().parameters.len();
     let this_value = ctx.peek_stack_at(num_args - 1);
 
@@ -120,6 +253,24 @@ pub fn call_constrained<'gc, T: VmCallOps<'gc> + VmResolutionOps<'gc> + VmLoader
     constraint: &MethodType,
     source: &MethodSource,
 ) -> StepResult {
+    dispatch_constrained_static(ctx, constraint, source, false)
+}
+
+#[dotnet_instruction(CallConstrainedTail(constraint, source))]
+pub fn call_constrained_tail<'gc, T: VmCallOps<'gc> + VmResolutionOps<'gc> + VmLoaderOps>(
+    ctx: &mut T,
+    constraint: &MethodType,
+    source: &MethodSource,
+) -> StepResult {
+    dispatch_constrained_static(ctx, constraint, source, true)
+}
+
+fn dispatch_constrained_static<'gc, T: VmCallOps<'gc> + VmResolutionOps<'gc> + VmLoaderOps>(
+    ctx: &mut T,
+    constraint: &MethodType,
+    source: &MethodSource,
+    tail_call: bool,
+) -> StepResult {
     let constraint_type = dotnet_vm_ops::vm_try!(ctx.current_context().make_concrete(constraint));
     let (method, lookup) = dotnet_vm_ops::vm_try!(
         ctx.resolver()
@@ -142,7 +293,15 @@ pub fn call_constrained<'gc, T: VmCallOps<'gc> + VmResolutionOps<'gc> + VmLoader
         &constraint_type,
         &lookup,
     );
-    ctx.dispatch_method_inline(target, dispatch_lookup)
+    if tail_call {
+        ctx.unified_dispatch_tail(
+            UnifiedDispatchTarget::Resolved(target, dispatch_lookup),
+            None,
+            None,
+        )
+    } else {
+        ctx.dispatch_method_inline(target, dispatch_lookup)
+    }
 }
 
 fn static_constraint_dispatch_lookup(
@@ -165,6 +324,24 @@ pub fn callvirt_constrained<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     constraint: &MethodType,
     source: &MethodSource,
+) -> StepResult {
+    dispatch_constrained_virtual(ctx, constraint, source, false)
+}
+
+#[dotnet_instruction(CallVirtualConstrainedTail(constraint, source))]
+pub fn callvirt_constrained_tail<'gc, T: VesOps<'gc>>(
+    ctx: &mut T,
+    constraint: &MethodType,
+    source: &MethodSource,
+) -> StepResult {
+    dispatch_constrained_virtual(ctx, constraint, source, true)
+}
+
+fn dispatch_constrained_virtual<'gc, T: VesOps<'gc>>(
+    ctx: &mut T,
+    constraint: &MethodType,
+    source: &MethodSource,
+    tail_call: bool,
 ) -> StepResult {
     let (base_method, lookup) = dotnet_vm_ops::vm_try!(
         ctx.resolver()
@@ -376,11 +553,15 @@ pub fn callvirt_constrained<'gc, T: VesOps<'gc>>(
     }
     *ctx.call_args_buffer_mut() = args;
 
-    // CallVirtualConstrained uses resolved inline dispatch directly
-    // instead of unified_dispatch because it performs custom method resolution
-    // (boxing value types, constraint-specific lookup) that doesn't fit the
-    // standard virtual dispatch pattern. The method is already fully resolved here.
-    ctx.dispatch_method_inline(method, dispatch_lookup)
+    if tail_call {
+        ctx.unified_dispatch_tail(
+            UnifiedDispatchTarget::Resolved(method, dispatch_lookup),
+            None,
+            None,
+        )
+    } else {
+        ctx.dispatch_method_inline(method, dispatch_lookup)
+    }
 }
 
 #[cfg(test)]

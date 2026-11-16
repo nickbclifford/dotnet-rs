@@ -256,6 +256,7 @@ fn main() {
                     "memory_nullable_boxing_42"
                         | "reflection_json_serializer_numbers_42"
                         | "reflection_json_serializer_poco_42"
+                        | "reflection_dynamic_method_unmanaged_calli_42"
                 ))
         {
             // Fuzzing mode hardens native interop paths by denying P/Invoke, so
@@ -263,7 +264,9 @@ fn main() {
             // that transitively use them, e.g. Console.WriteLine -> SystemNative_SetErrNo)
             // are expected to fail. JsonSerializer's options cache hashes through
             // System.HashCode, whose static constructor seeds itself via
-            // SystemNative_GetNonCryptographicallySecureRandomBytes.
+            // SystemNative_GetNonCryptographicallySecureRandomBytes. The unmanaged calli
+            // fixture resolves its target through libc dlsym, and the sandbox also denies
+            // indirect native calls.
             ignore_prefix = "#[ignore] ".to_string();
         } else if (file_name == "monitor_try_enter_timeout_42"
             || file_name == "monitor_is_entered_42"

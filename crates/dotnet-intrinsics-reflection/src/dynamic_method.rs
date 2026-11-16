@@ -5,8 +5,9 @@
 //! assembly, registers it with the loader and returns the ordinary reflection `MethodInfo`, so
 //! `Invoke`, `CreateDelegate`, frames, exception regions and stack traces are the regular paths.
 //!
-//! Current limits (each rejected with `NotSupportedException`, never silently wrong): non-generic
-//! types and callees only, no nested types, no branches/labels, no fields, a fixed `maxstack`.
+//! Current limits: signatures and callees are limited to non-generic, non-nested types and do
+//! not yet support byrefs. Managed vararg calls follow the runtime's unsupported-call behavior;
+//! uncommon prefix combinations and raw SignatureHelper encodings are also limited.
 
 use crate::ReflectionIntrinsicHost;
 use dotnet_assemblies::AssemblyLoader;
@@ -14,7 +15,7 @@ use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
     TypeDescription,
     generics::{ConcreteType, GenericLookup},
-    members::MethodDescription,
+    members::{FieldDescription, MethodDescription},
     resolution::ResolutionS,
     runtime::RuntimeType,
 };
@@ -26,9 +27,10 @@ use dotnetdll::{
     resolved::{
         body::{DataSection, Exception, ExceptionKind},
         members::{
-            ExternalMethodReference, Method, MethodReferenceParent, MethodSource, UserMethod,
+            ExternalFieldReference, ExternalMethodReference, FieldReferenceParent, FieldSource,
+            Method, MethodReferenceParent, MethodSource, UserMethod,
         },
-        signature::{Parameter, ParameterType, ReturnType},
+        signature::{Parameter, ParameterType, ReturnType, StandAloneCallingConvention},
         types::{
             ExternalTypeReference, LocalVariable, ResolutionScope, TypeDefinition, TypeSource,
             UserType, ValueKind,
@@ -46,6 +48,16 @@ type R<T> = Result<T, String>;
 
 fn prim(b: BaseType<MethodType>) -> MethodType {
     MethodType::Base(Box::new(b))
+}
+
+fn member_type(t: MethodType) -> MemberType {
+    match t {
+        MethodType::Base(b) => MemberType::Base(Box::new(b.map(member_type))),
+        MethodType::TypeGeneric(i) => MemberType::TypeGeneric(i),
+        MethodType::MethodGeneric(_) => {
+            unreachable!("translated field types have no method generics")
+        }
+    }
 }
 
 struct Builder<'a> {
@@ -181,6 +193,14 @@ impl Builder<'_> {
     }
 
     fn method_ref(&mut self, md: &MethodDescription) -> R<UserMethod> {
+        self.method_ref_with_optional(md, None)
+    }
+
+    fn method_ref_with_optional(
+        &mut self,
+        md: &MethodDescription,
+        optional: Option<&[RuntimeType]>,
+    ) -> R<UserMethod> {
         let method = md.method();
         if !method.generic_parameters.is_empty() || !md.parent_generics.type_generics.is_empty() {
             return Err(format!("generic callee {}", method.name));
@@ -206,13 +226,26 @@ impl Builder<'_> {
             ),
             _ => return Err(format!("by-ref return on callee {}", method.name)),
         };
+        let varargs = optional
+            .map(|types| {
+                types
+                    .iter()
+                    .map(|t| {
+                        Ok(Parameter(
+                            vec![],
+                            ParameterType::Value(self.translate_runtime(t)?),
+                        ))
+                    })
+                    .collect::<R<Vec<_>>>()
+            })
+            .transpose()?;
         let signature = MethodSignature {
             instance: sig.instance,
-            explicit_this: false,
-            calling_convention: CallingConvention::Default,
+            explicit_this: sig.explicit_this,
+            calling_convention: sig.calling_convention,
             parameters,
             return_type,
-            varargs: None,
+            varargs,
         };
         let idx = self.res.push_method_reference(ExternalMethodReference::new(
             MethodReferenceParent::Type(parent),
@@ -220,6 +253,21 @@ impl Builder<'_> {
             signature,
         ));
         Ok(UserMethod::Reference(idx))
+    }
+
+    fn field_ref(&mut self, fd: &FieldDescription) -> R<FieldSource> {
+        let field = fd.field();
+        let parent = self.type_node(&fd.parent)?;
+        let field_type =
+            self.translate_signature(&fd.resolution(), &field.return_type.clone().into())?;
+        let field_type = member_type(field_type);
+        Ok(FieldSource::Reference(self.res.push_field_reference(
+            ExternalFieldReference::new(
+                FieldReferenceParent::Type(parent),
+                field_type,
+                field.name.to_string().into(),
+            ),
+        )))
     }
 }
 
@@ -259,8 +307,20 @@ fn instruction(
         Some(Operand::Method(m)) => Ok(m.clone()),
         _ => Err(format!("opcode 0x{op:04X} needs a method operand")),
     };
+    let need_field = || match reference {
+        Some(Operand::Field(f)) => Ok(f.clone()),
+        _ => Err(format!("opcode 0x{op:04X} needs a field operand")),
+    };
+    let call_ref = |b: &mut Builder<'_>| match reference {
+        Some(Operand::Method(m)) => b.method_ref(m),
+        Some(Operand::MethodWithOptional(m, optional)) => {
+            b.method_ref_with_optional(m, Some(optional))
+        }
+        _ => Err(format!("opcode 0x{op:04X} needs a method operand")),
+    };
     Ok(match op {
         0x00 => I::NoOperation,
+        0x01 => I::Breakpoint,
         0x02..=0x05 => I::LoadArgument(op - 0x02),
         0x06..=0x09 => I::LoadLocal(op - 0x06),
         0x0A..=0x0D => I::StoreLocal(op - 0x0A),
@@ -281,7 +341,120 @@ fn instruction(
         0x23 => I::LoadConstantFloat64(f64::from_bits(imm as u64)),
         0x25 => I::Duplicate,
         0x26 => I::Pop,
+        0x27 => I::Jump(MethodSource::User(b.method_ref(&need_method()?)?)),
         0x2A => I::Return,
+        0x2B | 0x38 => I::Branch(imm as usize),
+        0x2C | 0x39 => I::BranchFalsy(imm as usize),
+        0x2D | 0x3A => I::BranchTruthy(imm as usize),
+        0x2E | 0x3B => I::BranchEqual(imm as usize),
+        0x2F | 0x3C => I::BranchGreaterOrEqual(NumberSign::Signed, imm as usize),
+        0x30 | 0x3D => I::BranchGreater(NumberSign::Signed, imm as usize),
+        0x31 | 0x3E => I::BranchLessOrEqual(NumberSign::Signed, imm as usize),
+        0x32 | 0x3F => I::BranchLess(NumberSign::Signed, imm as usize),
+        0x33 | 0x40 => I::BranchNotEqual(imm as usize),
+        0x34 | 0x41 => I::BranchGreaterOrEqual(NumberSign::Unsigned, imm as usize),
+        0x35 | 0x42 => I::BranchGreater(NumberSign::Unsigned, imm as usize),
+        0x36 | 0x43 => I::BranchLessOrEqual(NumberSign::Unsigned, imm as usize),
+        0x37 | 0x44 => I::BranchLess(NumberSign::Unsigned, imm as usize),
+        0x45 => match reference {
+            Some(Operand::Targets(targets)) => I::Switch(targets.clone()),
+            _ => return Err("switch needs label operands".into()),
+        },
+        0x46 => I::LoadIndirect {
+            unaligned: None,
+            volatile: false,
+            param0: LoadType::Int8,
+        },
+        0x47 => I::LoadIndirect {
+            unaligned: None,
+            volatile: false,
+            param0: LoadType::UInt8,
+        },
+        0x48 => I::LoadIndirect {
+            unaligned: None,
+            volatile: false,
+            param0: LoadType::Int16,
+        },
+        0x49 => I::LoadIndirect {
+            unaligned: None,
+            volatile: false,
+            param0: LoadType::UInt16,
+        },
+        0x4A => I::LoadIndirect {
+            unaligned: None,
+            volatile: false,
+            param0: LoadType::Int32,
+        },
+        0x4B => I::LoadIndirect {
+            unaligned: None,
+            volatile: false,
+            param0: LoadType::UInt32,
+        },
+        0x4C => I::LoadIndirect {
+            unaligned: None,
+            volatile: false,
+            param0: LoadType::Int64,
+        },
+        0x4D => I::LoadIndirect {
+            unaligned: None,
+            volatile: false,
+            param0: LoadType::IntPtr,
+        },
+        0x4E => I::LoadIndirect {
+            unaligned: None,
+            volatile: false,
+            param0: LoadType::Float32,
+        },
+        0x4F => I::LoadIndirect {
+            unaligned: None,
+            volatile: false,
+            param0: LoadType::Float64,
+        },
+        0x50 => I::LoadIndirect {
+            unaligned: None,
+            volatile: false,
+            param0: LoadType::Object,
+        },
+        0x51 => I::StoreIndirect {
+            unaligned: None,
+            volatile: false,
+            param0: StoreType::Object,
+        },
+        0x52 => I::StoreIndirect {
+            unaligned: None,
+            volatile: false,
+            param0: StoreType::Int8,
+        },
+        0x53 => I::StoreIndirect {
+            unaligned: None,
+            volatile: false,
+            param0: StoreType::Int16,
+        },
+        0x54 => I::StoreIndirect {
+            unaligned: None,
+            volatile: false,
+            param0: StoreType::Int32,
+        },
+        0x55 => I::StoreIndirect {
+            unaligned: None,
+            volatile: false,
+            param0: StoreType::Int64,
+        },
+        0x56 => I::StoreIndirect {
+            unaligned: None,
+            volatile: false,
+            param0: StoreType::Float32,
+        },
+        0x57 => I::StoreIndirect {
+            unaligned: None,
+            volatile: false,
+            param0: StoreType::Float64,
+        },
+        0xDF => I::StoreIndirect {
+            unaligned: None,
+            volatile: false,
+            param0: StoreType::IntPtr,
+        },
         0x58 => I::Add,
         0x59 => I::Subtract,
         0x5A => I::Multiply,
@@ -292,17 +465,130 @@ fn instruction(
         0x5F => I::And,
         0x60 => I::Or,
         0x61 => I::Xor,
+        0x62 => I::ShiftLeft,
+        0x63 => I::ShiftRight(NumberSign::Signed),
+        0x64 => I::ShiftRight(NumberSign::Unsigned),
         0x65 => I::Negate,
         0x66 => I::Not,
+        0x67 => I::Convert(ConversionType::Int8),
+        0x68 => I::Convert(ConversionType::Int16),
+        0x69 => I::Convert(ConversionType::Int32),
+        0x6A => I::Convert(ConversionType::Int64),
+        0x6B => I::ConvertFloat32,
+        0x6C => I::ConvertFloat64,
+        0x6D => I::Convert(ConversionType::UInt32),
+        0x6E => I::Convert(ConversionType::UInt64),
+        0x76 => I::ConvertUnsignedToFloat,
+        0xD1 => I::Convert(ConversionType::UInt16),
+        0xD2 => I::Convert(ConversionType::UInt8),
+        0xD3 => I::Convert(ConversionType::IntPtr),
+        0xE0 => I::Convert(ConversionType::UIntPtr),
+        0xD6 => I::AddOverflow(NumberSign::Signed),
+        0xD7 => I::AddOverflow(NumberSign::Unsigned),
+        0xD8 => I::MultiplyOverflow(NumberSign::Signed),
+        0xD9 => I::MultiplyOverflow(NumberSign::Unsigned),
+        0xDA => I::SubtractOverflow(NumberSign::Signed),
+        0xDB => I::SubtractOverflow(NumberSign::Unsigned),
+        0xB3 => I::ConvertOverflow(ConversionType::Int8, NumberSign::Signed),
+        0xB4 => I::ConvertOverflow(ConversionType::UInt8, NumberSign::Signed),
+        0xB5 => I::ConvertOverflow(ConversionType::Int16, NumberSign::Signed),
+        0xB6 => I::ConvertOverflow(ConversionType::UInt16, NumberSign::Signed),
+        0xB7 => I::ConvertOverflow(ConversionType::Int32, NumberSign::Signed),
+        0xB8 => I::ConvertOverflow(ConversionType::UInt32, NumberSign::Signed),
+        0xB9 => I::ConvertOverflow(ConversionType::Int64, NumberSign::Signed),
+        0xBA => I::ConvertOverflow(ConversionType::UInt64, NumberSign::Signed),
+        0xD4 => I::ConvertOverflow(ConversionType::IntPtr, NumberSign::Signed),
+        0xD5 => I::ConvertOverflow(ConversionType::UIntPtr, NumberSign::Signed),
+        0x82 => I::ConvertOverflow(ConversionType::Int8, NumberSign::Unsigned),
+        0x83 => I::ConvertOverflow(ConversionType::Int16, NumberSign::Unsigned),
+        0x84 => I::ConvertOverflow(ConversionType::Int32, NumberSign::Unsigned),
+        0x85 => I::ConvertOverflow(ConversionType::Int64, NumberSign::Unsigned),
+        0x86 => I::ConvertOverflow(ConversionType::UInt8, NumberSign::Unsigned),
+        0x87 => I::ConvertOverflow(ConversionType::UInt16, NumberSign::Unsigned),
+        0x88 => I::ConvertOverflow(ConversionType::UInt32, NumberSign::Unsigned),
+        0x89 => I::ConvertOverflow(ConversionType::UInt64, NumberSign::Unsigned),
+        0x8A => I::ConvertOverflow(ConversionType::IntPtr, NumberSign::Unsigned),
+        0x8B => I::ConvertOverflow(ConversionType::UIntPtr, NumberSign::Unsigned),
+        0xC3 => I::CheckFinite,
+        0xC2 => I::ReadTypedReferenceValue(b.translate_runtime(&need_type()?)?),
+        0xC6 => I::MakeTypedReference(b.translate_runtime(&need_type()?)?),
+        0xD0 => match reference {
+            Some(Operand::Type(t)) => I::LoadTokenType(b.translate_runtime(t)?),
+            Some(Operand::Method(m)) => I::LoadTokenMethod(MethodSource::User(b.method_ref(m)?)),
+            Some(Operand::Field(f)) => I::LoadTokenField(b.field_ref(f)?),
+            _ => return Err("ldtoken needs a type, method or field".into()),
+        },
         0x28 => I::Call {
             tail_call: false,
-            param0: MethodSource::User(b.method_ref(&need_method()?)?),
+            param0: MethodSource::User(call_ref(b)?),
         },
+        0x29 => {
+            let Some(Operand::Signature(types)) = reference else {
+                return Err("calli needs a signature".into());
+            };
+            let Some((ret, args)) = types.split_first() else {
+                return Err("empty calli signature".into());
+            };
+            let fixed_count = (imm as u64 >> 32) as usize;
+            if fixed_count > args.len() {
+                return Err("invalid calli parameter count".into());
+            }
+            let bits = imm as u32;
+            let convention = if bits & 0x100 != 0 {
+                match bits & 0xff {
+                    1 => StandAloneCallingConvention::DefaultUnmanaged,
+                    2 => StandAloneCallingConvention::Cdecl,
+                    3 => StandAloneCallingConvention::Stdcall,
+                    4 => StandAloneCallingConvention::Thiscall,
+                    5 => StandAloneCallingConvention::Fastcall,
+                    _ => return Err("invalid unmanaged calling convention".into()),
+                }
+            } else if bits & 2 != 0 {
+                StandAloneCallingConvention::Vararg
+            } else {
+                StandAloneCallingConvention::DefaultManaged
+            };
+            let return_type = if matches!(ret, RuntimeType::Void) {
+                ReturnType(vec![], None)
+            } else {
+                ReturnType(
+                    vec![],
+                    Some(ParameterType::Value(b.translate_runtime(ret)?)),
+                )
+            };
+            let mut parameters = Vec::with_capacity(fixed_count);
+            let mut varargs = Vec::with_capacity(args.len() - fixed_count);
+            for (index, t) in args.iter().enumerate() {
+                let parameter = Parameter(vec![], ParameterType::Value(b.translate_runtime(t)?));
+                if index < fixed_count {
+                    parameters.push(parameter);
+                } else {
+                    varargs.push(parameter);
+                }
+            }
+            I::CallIndirect {
+                tail_call: false,
+                param0: MethodSignature {
+                    instance: bits & 0x100 == 0 && bits & 0x20 != 0,
+                    explicit_this: bits & 0x100 == 0 && bits & 0x40 != 0,
+                    calling_convention: convention,
+                    parameters,
+                    return_type,
+                    varargs: (!varargs.is_empty()).then_some(varargs),
+                },
+            }
+        }
         0x6F => I::CallVirtual {
             skip_null_check: false,
-            param0: MethodSource::User(b.method_ref(&need_method()?)?),
+            param0: MethodSource::User(call_ref(b)?),
         },
-        0x73 => I::NewObject(b.method_ref(&need_method()?)?),
+        0x70 => I::CopyObject(b.translate_runtime(&need_type()?)?),
+        0x71 => I::LoadObject {
+            unaligned: None,
+            volatile: false,
+            param0: b.translate_runtime(&need_type()?)?,
+        },
+        0x73 => I::NewObject(call_ref(b)?),
         0x72 => match reference {
             Some(Operand::Str(s)) => I::load_string(s),
             _ => return Err("ldstr needs a string operand".into()),
@@ -312,16 +598,187 @@ fn instruction(
             param0: b.translate_runtime(&need_type()?)?,
         },
         0x75 => I::IsInstance(b.translate_runtime(&need_type()?)?),
+        0x79 => I::UnboxIntoAddress {
+            skip_type_check: false,
+            param0: b.translate_runtime(&need_type()?)?,
+        },
         0x7A => I::Throw,
+        0x7B => I::LoadField {
+            unaligned: None,
+            volatile: false,
+            param0: b.field_ref(&need_field()?)?,
+        },
+        0x7C => I::LoadFieldAddress(b.field_ref(&need_field()?)?),
+        0x7D => I::StoreField {
+            unaligned: None,
+            volatile: false,
+            param0: b.field_ref(&need_field()?)?,
+        },
+        0x7E => I::LoadStaticField {
+            volatile: false,
+            param0: b.field_ref(&need_field()?)?,
+        },
+        0x7F => I::LoadStaticFieldAddress(b.field_ref(&need_field()?)?),
+        0x80 => I::StoreStaticField {
+            volatile: false,
+            param0: b.field_ref(&need_field()?)?,
+        },
+        0x81 => I::StoreObject {
+            unaligned: None,
+            volatile: false,
+            param0: b.translate_runtime(&need_type()?)?,
+        },
         0x8C => I::BoxValue(b.translate_runtime(&need_type()?)?),
+        0x8D => I::NewArray(b.translate_runtime(&need_type()?)?),
+        0x8E => I::LoadLength,
+        0x8F => I::LoadElementAddress {
+            skip_type_check: false,
+            skip_range_check: false,
+            skip_null_check: false,
+            param0: b.translate_runtime(&need_type()?)?,
+        },
+        0x90 => I::LoadElementPrimitive {
+            skip_range_check: false,
+            skip_null_check: false,
+            param0: LoadType::Int8,
+        },
+        0x91 => I::LoadElementPrimitive {
+            skip_range_check: false,
+            skip_null_check: false,
+            param0: LoadType::UInt8,
+        },
+        0x92 => I::LoadElementPrimitive {
+            skip_range_check: false,
+            skip_null_check: false,
+            param0: LoadType::Int16,
+        },
+        0x93 => I::LoadElementPrimitive {
+            skip_range_check: false,
+            skip_null_check: false,
+            param0: LoadType::UInt16,
+        },
+        0x94 => I::LoadElementPrimitive {
+            skip_range_check: false,
+            skip_null_check: false,
+            param0: LoadType::Int32,
+        },
+        0x95 => I::LoadElementPrimitive {
+            skip_range_check: false,
+            skip_null_check: false,
+            param0: LoadType::UInt32,
+        },
+        0x96 => I::LoadElementPrimitive {
+            skip_range_check: false,
+            skip_null_check: false,
+            param0: LoadType::Int64,
+        },
+        0x97 => I::LoadElementPrimitive {
+            skip_range_check: false,
+            skip_null_check: false,
+            param0: LoadType::IntPtr,
+        },
+        0x98 => I::LoadElementPrimitive {
+            skip_range_check: false,
+            skip_null_check: false,
+            param0: LoadType::Float32,
+        },
+        0x99 => I::LoadElementPrimitive {
+            skip_range_check: false,
+            skip_null_check: false,
+            param0: LoadType::Float64,
+        },
+        0x9A => I::LoadElement {
+            skip_range_check: false,
+            skip_null_check: false,
+            param0: prim(BaseType::Object),
+        },
+        0x9B => I::StoreElementPrimitive {
+            skip_type_check: false,
+            skip_range_check: false,
+            skip_null_check: false,
+            param0: StoreType::IntPtr,
+        },
+        0x9C => I::StoreElementPrimitive {
+            skip_type_check: false,
+            skip_range_check: false,
+            skip_null_check: false,
+            param0: StoreType::Int8,
+        },
+        0x9D => I::StoreElementPrimitive {
+            skip_type_check: false,
+            skip_range_check: false,
+            skip_null_check: false,
+            param0: StoreType::Int16,
+        },
+        0x9E => I::StoreElementPrimitive {
+            skip_type_check: false,
+            skip_range_check: false,
+            skip_null_check: false,
+            param0: StoreType::Int32,
+        },
+        0x9F => I::StoreElementPrimitive {
+            skip_type_check: false,
+            skip_range_check: false,
+            skip_null_check: false,
+            param0: StoreType::Int64,
+        },
+        0xA0 => I::StoreElementPrimitive {
+            skip_type_check: false,
+            skip_range_check: false,
+            skip_null_check: false,
+            param0: StoreType::Float32,
+        },
+        0xA1 => I::StoreElementPrimitive {
+            skip_type_check: false,
+            skip_range_check: false,
+            skip_null_check: false,
+            param0: StoreType::Float64,
+        },
+        0xA2 => I::StoreElement {
+            skip_type_check: false,
+            skip_range_check: false,
+            skip_null_check: false,
+            param0: prim(BaseType::Object),
+        },
+        0xA3 => I::LoadElement {
+            skip_range_check: false,
+            skip_null_check: false,
+            param0: b.translate_runtime(&need_type()?)?,
+        },
+        0xA4 => I::StoreElement {
+            skip_type_check: false,
+            skip_range_check: false,
+            skip_null_check: false,
+            param0: b.translate_runtime(&need_type()?)?,
+        },
         0xA5 => I::UnboxIntoValue(b.translate_runtime(&need_type()?)?),
         0xDC => I::EndFinally,
         0xDD | 0xDE => I::Leave(imm as usize),
+        0xFE00 => I::ArgumentList,
         0xFE01 => I::CompareEqual,
         0xFE02 => I::CompareGreater(NumberSign::Signed),
         0xFE03 => I::CompareGreater(NumberSign::Unsigned),
         0xFE04 => I::CompareLess(NumberSign::Signed),
         0xFE05 => I::CompareLess(NumberSign::Unsigned),
+        0xFE06 => I::LoadMethodPointer(MethodSource::User(b.method_ref(&need_method()?)?)),
+        0xFE07 => I::LoadVirtualMethodPointer {
+            skip_null_check: false,
+            param0: MethodSource::User(b.method_ref(&need_method()?)?),
+        },
+        0xFE0F => I::LocalMemoryAllocate,
+        0xFE11 => I::EndFilter,
+        0xFE15 => I::InitializeForObject(b.translate_runtime(&need_type()?)?),
+        0xFE17 => I::CopyMemoryBlock {
+            unaligned: None,
+            volatile: false,
+        },
+        0xFE18 => I::InitializeMemoryBlock {
+            unaligned: None,
+            volatile: false,
+        },
+        0xFE1A => I::Rethrow,
+        0xFE1C => I::Sizeof(b.translate_runtime(&need_type()?)?),
+        0xFE1D => I::ReadTypedReferenceType,
         other => {
             return Err(format!(
                 "opcode 0x{other:04X} is not supported yet (plan 25)"
@@ -333,19 +790,193 @@ fn instruction(
 enum Operand {
     Type(RuntimeType),
     Method(MethodDescription),
+    MethodWithOptional(MethodDescription, Vec<RuntimeType>),
+    Field(FieldDescription),
     Str(String),
+    Targets(Vec<usize>),
+    Signature(Vec<RuntimeType>),
+}
+
+#[derive(Default)]
+struct Prefixes {
+    constraint: Option<MethodType>,
+    tail: bool,
+    volatile: bool,
+    unaligned: Option<Alignment>,
+    readonly: bool,
+    no_checks: u8,
+}
+
+impl Prefixes {
+    fn apply(self, instruction: Instruction) -> R<Instruction> {
+        use Instruction as I;
+        if (self.constraint.is_some() || self.tail)
+            && (self.volatile || self.unaligned.is_some() || self.readonly)
+            || self.readonly && (self.volatile || self.unaligned.is_some())
+            || self.no_checks != 0
+                && (self.constraint.is_some()
+                    || self.tail
+                    || self.volatile
+                    || self.unaligned.is_some()
+                    || self.readonly)
+        {
+            return Err("unsupported prefix combination".into());
+        }
+        if self.constraint.is_some() || self.tail {
+            return match (self.constraint, self.tail, instruction) {
+                (Some(t), true, I::CallVirtual { param0, .. }) => {
+                    Ok(I::CallVirtualConstrainedTail(t, param0))
+                }
+                (Some(t), false, I::CallVirtual { param0, .. }) => {
+                    Ok(I::CallVirtualConstrained(t, param0))
+                }
+                (Some(t), false, I::Call { param0, .. }) => Ok(I::CallConstrained(t, param0)),
+                (Some(t), true, I::Call { param0, .. }) => Ok(I::CallConstrainedTail(t, param0)),
+                (None, true, I::Call { param0, .. }) => Ok(I::Call {
+                    param0,
+                    tail_call: true,
+                }),
+                (None, true, I::CallIndirect { param0, .. }) => Ok(I::CallIndirect {
+                    param0,
+                    tail_call: true,
+                }),
+                (None, true, I::CallVirtual { param0, .. }) => Ok(I::CallVirtualTail(param0)),
+                _ => Err("unsupported constrained or tail prefix".into()),
+            };
+        }
+        if self.readonly {
+            return match instruction {
+                I::LoadElementAddress { param0, .. } => Ok(I::LoadElementAddressReadonly(param0)),
+                _ => Err("readonly prefix requires ldelema".into()),
+            };
+        }
+        if self.no_checks != 0 {
+            let typ = self.no_checks & 1 != 0;
+            let range = self.no_checks & 2 != 0;
+            let null = self.no_checks & 4 != 0;
+            return Ok(match instruction {
+                I::CallVirtual { param0, .. } if !typ && !range => I::CallVirtual {
+                    param0,
+                    skip_null_check: null,
+                },
+                I::LoadVirtualMethodPointer { param0, .. } if !typ && !range => {
+                    I::LoadVirtualMethodPointer {
+                        param0,
+                        skip_null_check: null,
+                    }
+                }
+                I::CastClass { param0, .. } if !range && !null => I::CastClass {
+                    param0,
+                    skip_type_check: typ,
+                },
+                I::UnboxIntoAddress { param0, .. } if !range && !null => I::UnboxIntoAddress {
+                    param0,
+                    skip_type_check: typ,
+                },
+                I::LoadElement { param0, .. } if !typ => I::LoadElement {
+                    param0,
+                    skip_range_check: range,
+                    skip_null_check: null,
+                },
+                I::LoadElementPrimitive { param0, .. } if !typ => I::LoadElementPrimitive {
+                    param0,
+                    skip_range_check: range,
+                    skip_null_check: null,
+                },
+                I::LoadElementAddress { param0, .. } => I::LoadElementAddress {
+                    param0,
+                    skip_type_check: typ,
+                    skip_range_check: range,
+                    skip_null_check: null,
+                },
+                I::StoreElement { param0, .. } => I::StoreElement {
+                    param0,
+                    skip_type_check: typ,
+                    skip_range_check: range,
+                    skip_null_check: null,
+                },
+                I::StoreElementPrimitive { param0, .. } => I::StoreElementPrimitive {
+                    param0,
+                    skip_type_check: typ,
+                    skip_range_check: range,
+                    skip_null_check: null,
+                },
+                I::LoadField { param0, .. } if !typ && !range && null => {
+                    I::LoadFieldSkipNullCheck(param0)
+                }
+                I::StoreField { param0, .. } if !typ && !range && null => {
+                    I::StoreFieldSkipNullCheck(param0)
+                }
+                _ => return Err("unsupported no. prefix".into()),
+            });
+        }
+        if self.volatile || self.unaligned.is_some() {
+            let unaligned = self.unaligned;
+            let volatile = self.volatile;
+            return Ok(match instruction {
+                I::LoadIndirect { param0, .. } => I::LoadIndirect {
+                    param0,
+                    unaligned,
+                    volatile,
+                },
+                I::StoreIndirect { param0, .. } => I::StoreIndirect {
+                    param0,
+                    unaligned,
+                    volatile,
+                },
+                I::LoadField { param0, .. } => I::LoadField {
+                    param0,
+                    unaligned,
+                    volatile,
+                },
+                I::StoreField { param0, .. } => I::StoreField {
+                    param0,
+                    unaligned,
+                    volatile,
+                },
+                I::LoadObject { param0, .. } => I::LoadObject {
+                    param0,
+                    unaligned,
+                    volatile,
+                },
+                I::StoreObject { param0, .. } => I::StoreObject {
+                    param0,
+                    unaligned,
+                    volatile,
+                },
+                I::CopyMemoryBlock { .. } => I::CopyMemoryBlock {
+                    unaligned,
+                    volatile,
+                },
+                I::InitializeMemoryBlock { .. } => I::InitializeMemoryBlock {
+                    unaligned,
+                    volatile,
+                },
+                I::LoadStaticField { param0, .. } if unaligned.is_none() => {
+                    I::LoadStaticField { param0, volatile }
+                }
+                I::StoreStaticField { param0, .. } if unaligned.is_none() => {
+                    I::StoreStaticField { param0, volatile }
+                }
+                _ => return Err("unsupported volatile or unaligned prefix".into()),
+            });
+        }
+        Ok(instruction)
+    }
 }
 
 #[dotnet_intrinsic(
-    "static System.Reflection.MethodInfo DotnetRs.RecordingILGenerator::CompileRecorded(string, System.Type, System.Type[], int[], long[], object[], System.Type[], int[], System.Type[])"
+    "static System.Reflection.MethodInfo DotnetRs.RecordingILGenerator::CompileRecorded(string, System.Type, System.Type[], int[], long[], object[], System.Type[], int[], int[], System.Type[], int)"
 )]
 pub fn compile_recorded<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
+    let max_stack = ctx.pop_i32();
     let eh_types = ctx.pop_obj();
     let eh = ctx.pop_obj();
+    let local_pins = ctx.pop_obj();
     let locals = ctx.pop_obj();
     let refs = ctx.pop_obj();
     let imm = ctx.pop_obj();
@@ -356,7 +987,10 @@ pub fn compile_recorded<'gc, T: ReflectionIntrinsicHost<'gc>>(
 
     match build(
         ctx,
-        [name, ret, params, ops, imm, refs, locals, eh, eh_types],
+        [
+            name, ret, params, ops, imm, refs, locals, local_pins, eh, eh_types,
+        ],
+        max_stack,
     ) {
         Ok(md) => {
             let obj = crate::common::get_runtime_method_obj(ctx, md, GenericLookup::default());
@@ -372,7 +1006,19 @@ pub fn compile_recorded<'gc, T: ReflectionIntrinsicHost<'gc>>(
 
 fn build<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
-    [name, ret, params, ops, imm, refs, locals, eh, eh_types]: [ObjectRef<'gc>; 9],
+    [
+        name,
+        ret,
+        params,
+        ops,
+        imm,
+        refs,
+        locals,
+        local_pins,
+        eh,
+        eh_types,
+    ]: [ObjectRef<'gc>; 10],
+    max_stack: i32,
 ) -> R<MethodDescription> {
     let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let object_refs = |obj: ObjectRef<'gc>| -> R<Vec<ObjectRef<'gc>>> {
@@ -397,19 +1043,68 @@ fn build<'gc, T: ReflectionIntrinsicHost<'gc>>(
     };
     let param_rts = types_of(params)?;
     let local_rts = types_of(locals)?;
+    let local_pins = read_i32s(local_pins)?;
+    if local_pins.len() != local_rts.len() {
+        return Err("inconsistent local recording".into());
+    }
     let eh_rts = types_of(eh_types)?;
     let ops = read_i32s(ops)?;
     let imm = read_i64s(imm)?;
     let eh = read_i32s(eh)?;
 
     let mut operands = Vec::new();
-    for r in object_refs(refs)? {
+    for (i, r) in object_refs(refs)?.into_iter().enumerate() {
         operands.push(if r.0.is_none() {
             None
-        } else if let Ok(s) = crate::types::string_from_heap_obj(r) {
-            Some(Operand::Str(s))
-        } else if let Ok((m, _)) = crate::common::resolve_runtime_method(ctx, r) {
-            Some(Operand::Method(m))
+        } else if ops.get(i).map(|op| op & 0xFFFF) == Some(0x45) {
+            Some(Operand::Targets(
+                read_i32s(r)?.into_iter().map(|x| x as usize).collect(),
+            ))
+        } else if ops.get(i).map(|op| op & 0xFFFF) == Some(0x29) {
+            Some(Operand::Signature(
+                types_of(r)?
+                    .into_iter()
+                    .collect::<Option<Vec<_>>>()
+                    .ok_or("null calli type")?,
+            ))
+        } else if matches!(ops.get(i).map(|op| op & 0xFFFF), Some(0x28 | 0x6F | 0x73))
+            && imm.get(i) == Some(&1)
+        {
+            let call = object_refs(r)?;
+            if call.len() != 2 {
+                return Err("invalid optional argument recording".into());
+            }
+            let method = crate::common::resolve_runtime_method(ctx, call[0])
+                .map_err(|e| e.to_string())?
+                .0;
+            let optional = types_of(call[1])?
+                .into_iter()
+                .collect::<Option<Vec<_>>>()
+                .ok_or("null optional argument type")?;
+            Some(Operand::MethodWithOptional(method, optional))
+        } else if matches!(ops.get(i).map(|op| op & 0xFFFF), Some(0x7B..=0x80))
+            || (ops.get(i).map(|op| op & 0xFFFF) == Some(0xD0) && imm.get(i) == Some(&3))
+        {
+            Some(Operand::Field(
+                crate::common::resolve_runtime_field(ctx, r)
+                    .map_err(|e| e.to_string())?
+                    .0,
+            ))
+        } else if ops.get(i).map(|op| op & 0xFFFF) == Some(0x72) {
+            Some(Operand::Str(
+                crate::types::string_from_heap_obj(r).map_err(|e| format!("{e:?}"))?,
+            ))
+        } else if (ops.get(i).map(|op| op & 0xFFFF) == Some(0xD0) && imm.get(i) == Some(&2))
+            || matches!(
+                ops.get(i).map(|op| op & 0xFFFF),
+                Some(0x27 | 0x28 | 0x6F | 0x73 | 0xFE06 | 0xFE07)
+            )
+        {
+            Some(Operand::Method(
+                crate::common::resolve_runtime_method(ctx, r)
+                    .map_err(|e| e.to_string())?
+                    .0,
+            ))
         } else {
             Some(Operand::Type(
                 crate::common::resolve_runtime_type(ctx, r).map_err(|e| e.to_string())?,
@@ -458,28 +1153,65 @@ fn build<'gc, T: ReflectionIntrinsicHost<'gc>>(
     };
 
     let mut local_variables = Vec::new();
-    for l in &local_rts {
+    for (l, &pinned) in local_rts.iter().zip(&local_pins) {
         let l = l.as_ref().ok_or("null local type")?;
         local_variables.push(LocalVariable::Variable {
             custom_modifiers: vec![],
-            pinned: false,
+            pinned: pinned != 0,
             by_ref: false,
             var_type: b.translate_runtime(l)?,
         });
     }
 
     let mut instructions = Vec::with_capacity(ops.len());
+    let mut prefixes = Prefixes::default();
     for i in 0..ops.len() {
-        instructions.push(instruction(
-            &mut b,
-            (ops[i] & 0xFFFF) as u16,
-            imm[i],
-            operands[i].as_ref(),
-        )?);
+        let op = (ops[i] & 0xFFFF) as u16;
+        match op {
+            0xFE12 => {
+                prefixes.unaligned = Some(match imm[i] {
+                    1 => Alignment::Byte,
+                    2 => Alignment::Double,
+                    4 => Alignment::Quad,
+                    _ => return Err("invalid unaligned prefix".into()),
+                })
+            }
+            0xFE13 => prefixes.volatile = true,
+            0xFE14 => prefixes.tail = true,
+            0xFE16 => {
+                let Some(Operand::Type(t)) = &operands[i] else {
+                    return Err("constrained prefix needs a type".into());
+                };
+                prefixes.constraint = Some(b.translate_runtime(t)?);
+            }
+            0xFE19 => {
+                if imm[i] < 0 || imm[i] > 7 {
+                    return Err("invalid no. prefix".into());
+                }
+                prefixes.no_checks = imm[i] as u8;
+            }
+            0xFE1E => prefixes.readonly = true,
+            _ => {
+                let instr = instruction(&mut b, op, imm[i], operands[i].as_ref())?;
+                instructions.push(std::mem::take(&mut prefixes).apply(instr)?);
+                continue;
+            }
+        }
+        // Keep instruction indices stable for labels and exception clauses.
+        instructions.push(Instruction::NoOperation);
+    }
+    if prefixes.tail
+        || prefixes.constraint.is_some()
+        || prefixes.volatile
+        || prefixes.unaligned.is_some()
+        || prefixes.readonly
+        || prefixes.no_checks != 0
+    {
+        return Err("prefix without an instruction".into());
     }
 
     let mut clauses = Vec::new();
-    for (k, c) in eh.chunks_exact(5).enumerate() {
+    for (k, c) in eh.chunks_exact(6).enumerate() {
         let (kind, try_start, try_end, handler_start, handler_end) = (
             c[0],
             c[1] as usize,
@@ -492,6 +1224,10 @@ fn build<'gc, T: ReflectionIntrinsicHost<'gc>>(
                 b.translate_runtime(eh_rts[k].as_ref().ok_or("catch clause without a type")?)?,
             ),
             2 => ExceptionKind::Finally,
+            1 => ExceptionKind::Filter {
+                offset: c[5] as usize,
+            },
+            4 => ExceptionKind::Fault,
             other => return Err(format!("exception clause kind {other}")),
         };
         clauses.push(Exception {
@@ -504,8 +1240,9 @@ fn build<'gc, T: ReflectionIntrinsicHost<'gc>>(
     }
 
     let mut body = body::Method::with_locals(local_variables, instructions);
-    // Shortcut until plan 25: the CLR computes maxstack from the IL; the recorder does not.
-    body.header.maximum_stack_size = 32;
+    body.header.maximum_stack_size = u16::try_from(max_stack)
+        .map_err(|_| "invalid maxstack")?
+        .into();
     if !clauses.is_empty() {
         body.data_sections
             .push(DataSection::ExceptionHandlers(clauses));

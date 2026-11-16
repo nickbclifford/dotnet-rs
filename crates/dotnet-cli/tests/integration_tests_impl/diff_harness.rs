@@ -1184,6 +1184,126 @@ diff_test!(
 );
 
 diff_test!(
+    dynamic_method_array_matches_dotnet,
+    "tests/fixtures/reflection/dynamic_method_array_42.cs"
+);
+
+diff_test!(
+    dynamic_method_branch_matches_dotnet,
+    "tests/fixtures/reflection/dynamic_method_branch_42.cs"
+);
+
+diff_test!(
+    dynamic_method_calli_matches_dotnet,
+    "tests/fixtures/reflection/dynamic_method_calli_42.cs"
+);
+
+diff_test!(
+    dynamic_method_catch_finally_matches_dotnet,
+    "tests/fixtures/reflection/dynamic_method_catch_finally_42.cs"
+);
+
+diff_test!(
+    dynamic_method_constrained_tail_matches_dotnet,
+    "tests/fixtures/reflection/dynamic_method_constrained_tail_42.cs"
+);
+
+diff_test!(
+    dynamic_method_emitcall_vararg_matches_dotnet,
+    "tests/fixtures/reflection/dynamic_method_emitcall_vararg_42.cs"
+);
+diff_test!(
+    dynamic_method_explicit_this_matches_dotnet,
+    "tests/fixtures/reflection/dynamic_method_explicit_this_42.cs"
+);
+
+diff_test!(
+    dynamic_method_fault_matches_dotnet,
+    "tests/fixtures/reflection/dynamic_method_fault_42.cs"
+);
+
+diff_test!(
+    dynamic_method_field_matches_dotnet,
+    "tests/fixtures/reflection/dynamic_method_field_42.cs"
+);
+
+diff_test!(
+    dynamic_method_filter_matches_dotnet,
+    "tests/fixtures/reflection/dynamic_method_filter_42.cs"
+);
+
+diff_test!(
+    dynamic_method_iloffset_matches_dotnet,
+    "tests/fixtures/reflection/dynamic_method_iloffset_42.cs"
+);
+
+diff_test!(
+    dynamic_method_maxstack_matches_dotnet,
+    "tests/fixtures/reflection/dynamic_method_maxstack_42.cs"
+);
+
+diff_test!(
+    dynamic_method_pinned_local_matches_dotnet,
+    "tests/fixtures/reflection/dynamic_method_pinned_local_42.cs"
+);
+
+diff_test!(
+    dynamic_method_pinned_signature_matches_dotnet,
+    "tests/fixtures/reflection/dynamic_method_pinned_signature_42.cs"
+);
+
+diff_test!(
+    dynamic_method_signature_matches_dotnet,
+    "tests/fixtures/reflection/dynamic_method_signature_42.cs"
+);
+
+diff_test!(
+    dynamic_method_signature_edge_matches_dotnet,
+    "tests/fixtures/reflection/dynamic_method_signature_edge_42.cs"
+);
+
+diff_test!(
+    dynamic_method_signature_helpers_matches_dotnet,
+    "tests/fixtures/reflection/dynamic_method_signature_helpers_42.cs"
+);
+
+diff_test!(
+    dynamic_method_signature_middle_sentinel_matches_dotnet,
+    "tests/fixtures/reflection/dynamic_method_signature_middle_sentinel_42.cs"
+);
+
+diff_test!(
+    dynamic_method_signature_reference_matches_dotnet,
+    "tests/fixtures/reflection/dynamic_method_signature_reference_42.cs"
+);
+
+diff_test!(
+    dynamic_method_static_constrained_tail_matches_dotnet,
+    "tests/fixtures/reflection/dynamic_method_static_constrained_tail_42.cs"
+);
+
+diff_test!(
+    dynamic_method_switch_matches_dotnet,
+    "tests/fixtures/reflection/dynamic_method_switch_42.cs"
+);
+
+#[cfg(target_os = "linux")]
+diff_test!(
+    dynamic_method_unmanaged_calli_matches_dotnet,
+    "tests/fixtures/reflection/dynamic_method_unmanaged_calli_42.cs"
+);
+
+diff_test!(
+    dynamic_method_validation_matches_dotnet,
+    "tests/fixtures/reflection/dynamic_method_validation_42.cs"
+);
+
+diff_test!(
+    dynamic_method_vararg_calli_matches_dotnet,
+    "tests/fixtures/reflection/dynamic_method_vararg_calli_42.cs"
+);
+
+diff_test!(
     reflection_byref_return_matches_dotnet,
     "tests/fixtures/reflection/invoke_byref_return_42.cs"
 );
