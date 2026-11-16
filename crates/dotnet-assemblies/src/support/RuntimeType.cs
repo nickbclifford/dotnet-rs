@@ -89,9 +89,7 @@ internal class RuntimeType : Type
     [MethodImpl(MethodImplOptions.InternalCall)]
     public override extern string ToString();
 
-    [MethodImpl(MethodImplOptions.InternalCall)]
-    private extern Module GetModule();
-    public override System.Reflection.Module Module => GetModule();
+    public override System.Reflection.Module Module => DotnetRs.Module.ForAssembly(Assembly);
 
     public override extern string? Namespace { [MethodImpl(MethodImplOptions.InternalCall)] get; }
 

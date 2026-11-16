@@ -1,6 +1,6 @@
 # Implement `DynamicMethod`
 
-**Status:** Slices 1–2 complete; slices 3–5 remain
+**Status:** Slices 1–3 complete; slices 4–5 remain
 **Outcome:** `System.Reflection.Emit.DynamicMethod` runs on the VM for every `ILGenerator`
 operation a real library uses: branches and labels, fields, `calli`, filters and faults, generic
 and nested types and callees, byref signatures, and the owner, module and `skipVisibility`
@@ -202,6 +202,29 @@ host projects also match .NET on stdout and exit code with the debug and release
 
 Slice 2 verification (2026-11-16): `./check.sh --fast` passed clippy and 1135, 1441 and
 1458 tests in its three configurations; `cargo fmt --all -- --check` passed.
+
+### Slice 3: modules and reflection API
+
+`Type.Module` returns a stable manifest-module object per loaded assembly, and owner- and
+module-hosted `DynamicMethod` instances report that object. Anonymous methods share a separate
+module. The shim exposes the method's parameter metadata, return parameter and empty return
+attribute provider, validates parameter positions and returns null from `DefineParameter`, as .NET
+does. `MethodHandle` remains unavailable on .NET and throws `InvalidOperationException` here too;
+`GetDynamicILInfo` explicitly reports that raw IL is unsupported.
+
+The VM's `call` and field instruction paths do not enforce general member visibility. On the
+.NET 10.0.14 Linux CLR, private calls and fields in the fixture work with anonymous, module and
+owner hosting with `skipVisibility` false, and with it true. A separate probe also accessed the
+private `string._stringLength` field from a method hosted by a different module with
+`skipVisibility` false. The VM replaces the `string` layout, so that cross-assembly probe is not a
+differential fixture. These observations do not establish visibility behavior on other runtimes.
+.NET 10.0.14 also throws `NullReferenceException` when a dynamic parameter's custom-attribute
+data is requested; the shim matches that observed behavior.
+
+Slice 3 verification (2026-11-16): `./check.sh --fast` passed clippy and 1137, 1443 and
+1460 tests in its three configurations; `cargo fmt --all -- --check` passed. The new fixture and
+the Newtonsoft and EF InMemory host rungs match .NET on stdout and exit code with the debug and
+release CLI.
 
 ## Done when
 

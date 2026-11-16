@@ -15,6 +15,8 @@ public sealed class DynamicMethod : System.Reflection.MethodInfo
     private readonly string _name;
     private readonly Type _returnType;
     private readonly Type[] _parameterTypes;
+    private System.Reflection.Module _module = DotnetRs.Module.Anonymous;
+    private DynamicParameterInfo[]? _parameters;
     private RecordingILGenerator? _il;
     private System.Reflection.MethodInfo? _built;
 
@@ -23,11 +25,12 @@ public sealed class DynamicMethod : System.Reflection.MethodInfo
         ArgumentNullException.ThrowIfNull(name);
         _name = name;
         _returnType = returnType ?? typeof(void);
-        _parameterTypes = parameterTypes ?? Type.EmptyTypes;
+        _parameterTypes = parameterTypes == null ? Type.EmptyTypes : (Type[])parameterTypes.Clone();
+        foreach (var type in _parameterTypes)
+            if (type == null || type == typeof(void))
+                throw new ArgumentException("Invalid type in signature.");
     }
 
-    // Spike shortcut: owner/module association and skipVisibility are validated or ignored, not
-    // modelled. The CLR places the method in the owner's module so it can reach private members.
     public DynamicMethod(string name, Type? returnType, Type[]? parameterTypes, bool restrictedSkipVisibility)
         : this(name, returnType, parameterTypes) { }
 
@@ -35,6 +38,7 @@ public sealed class DynamicMethod : System.Reflection.MethodInfo
         : this(name, returnType, parameterTypes)
     {
         ArgumentNullException.ThrowIfNull(m);
+        _module = m;
     }
 
     public DynamicMethod(string name, Type? returnType, Type[]? parameterTypes, System.Reflection.Module m,
@@ -44,6 +48,7 @@ public sealed class DynamicMethod : System.Reflection.MethodInfo
         : this(name, returnType, parameterTypes)
     {
         ValidateOwner(owner);
+        _module = owner.Module;
     }
 
     public DynamicMethod(string name, Type? returnType, Type[]? parameterTypes, Type owner, bool skipVisibility)
@@ -51,20 +56,76 @@ public sealed class DynamicMethod : System.Reflection.MethodInfo
 
     public DynamicMethod(string name, MethodAttributes attributes, CallingConventions callingConvention,
         Type? returnType, Type[]? parameterTypes, Type owner, bool skipVisibility)
-        : this(name, returnType, parameterTypes, owner) { }
+        : this(name, returnType, parameterTypes, owner) => ValidateFlags(attributes, callingConvention);
 
     public DynamicMethod(string name, MethodAttributes attributes, CallingConventions callingConvention,
         Type? returnType, Type[]? parameterTypes, System.Reflection.Module m, bool skipVisibility)
-        : this(name, returnType, parameterTypes, m) { }
+        : this(name, returnType, parameterTypes, m) => ValidateFlags(attributes, callingConvention);
+
+    private static void ValidateFlags(MethodAttributes attributes, CallingConventions callingConvention)
+    {
+        if (attributes != (MethodAttributes.Public | MethodAttributes.Static) ||
+            callingConvention != CallingConventions.Standard)
+            throw new NotSupportedException("Invalid dynamic method flags.");
+    }
 
     private static void ValidateOwner(Type owner)
     {
         ArgumentNullException.ThrowIfNull(owner);
-        if (owner.IsArray || owner.IsInterface || owner.ContainsGenericParameters)
+        if (owner.HasElementType || owner.IsInterface || owner.IsGenericParameter || owner.ContainsGenericParameters)
             throw new ArgumentException("Invalid type for a dynamic method owner.");
     }
 
     public ILGenerator GetILGenerator() => _il ??= new RecordingILGenerator();
+    public ILGenerator GetILGenerator(int streamSize) => GetILGenerator();
+    public DynamicILInfo GetDynamicILInfo() => throw new NotSupportedException("DynamicMethod.GetDynamicILInfo is not supported.");
+
+    public ParameterBuilder? DefineParameter(int position, ParameterAttributes attributes, string? parameterName)
+    {
+        if (position < 0 || position > _parameterTypes.Length)
+            throw new ArgumentOutOfRangeException(nameof(position));
+        if (position > 0)
+            Parameters()[position - 1].Define(attributes, parameterName);
+        return null;
+    }
+
+    private DynamicParameterInfo[] Parameters()
+    {
+        if (_parameters != null) return _parameters;
+        var parameters = new DynamicParameterInfo[_parameterTypes.Length];
+        for (int i = 0; i < parameters.Length; i++)
+            parameters[i] = new DynamicParameterInfo(this, _parameterTypes[i], i);
+        return _parameters = parameters;
+    }
+
+    private sealed class DynamicParameterInfo : System.Reflection.ParameterInfo
+    {
+        internal DynamicParameterInfo(DynamicMethod method, Type type, int position)
+        {
+            MemberImpl = method;
+            ClassImpl = type;
+            PositionImpl = position;
+        }
+
+        public override bool HasDefaultValue => false;
+        public override object? DefaultValue => null;
+        public override object? RawDefaultValue => null;
+        // CoreCLR 10 attempts to read metadata from a missing module for these parameters.
+        public override IList<CustomAttributeData> GetCustomAttributesData() => throw new NullReferenceException();
+
+        internal void Define(ParameterAttributes attributes, string? name)
+        {
+            AttrsImpl = attributes;
+            NameImpl = name;
+        }
+    }
+
+    private sealed class EmptyAttributes : ICustomAttributeProvider
+    {
+        public object[] GetCustomAttributes(bool inherit) => System.Array.Empty<object>();
+        public object[] GetCustomAttributes(Type attributeType, bool inherit) => System.Array.Empty<object>();
+        public bool IsDefined(Type attributeType, bool inherit) => false;
+    }
 
     private System.Reflection.MethodInfo Built()
     {
@@ -85,16 +146,24 @@ public sealed class DynamicMethod : System.Reflection.MethodInfo
         Built().Invoke(obj, invokeAttr, binder, parameters, culture);
 
     public override string Name => _name;
+    public override System.Reflection.Module Module => _module;
     public override Type? DeclaringType => null;
     public override Type? ReflectedType => null;
     public override Type ReturnType => _returnType;
     public override MethodAttributes Attributes => MethodAttributes.Public | MethodAttributes.Static;
     public override CallingConventions CallingConvention => CallingConventions.Standard;
     public override System.RuntimeMethodHandle MethodHandle => throw new InvalidOperationException();
-    public override ICustomAttributeProvider ReturnTypeCustomAttributes => throw new NotSupportedException();
+    public override ICustomAttributeProvider ReturnTypeCustomAttributes => new EmptyAttributes();
+    public override System.Reflection.ParameterInfo ReturnParameter => new DynamicParameterInfo(this, _returnType, -1);
     public override System.Reflection.MethodInfo GetBaseDefinition() => this;
     public override MethodImplAttributes GetMethodImplementationFlags() => MethodImplAttributes.IL;
-    public override ParameterInfo[] GetParameters() => throw new NotSupportedException();
+    public override System.Reflection.ParameterInfo[] GetParameters()
+    {
+        var parameters = Parameters();
+        var copy = new System.Reflection.ParameterInfo[parameters.Length];
+        for (int i = 0; i < copy.Length; i++) copy[i] = parameters[i];
+        return copy;
+    }
     public override object[] GetCustomAttributes(bool inherit) => System.Array.Empty<object>();
     public override object[] GetCustomAttributes(Type attributeType, bool inherit) => System.Array.Empty<object>();
     public override bool IsDefined(Type attributeType, bool inherit) => false;
