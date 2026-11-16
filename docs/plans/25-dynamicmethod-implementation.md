@@ -1,6 +1,6 @@
 # Implement `DynamicMethod`
 
-**Status:** Slices 1–3 complete; slices 4–5 remain
+**Status:** Slices 1–4 complete; slice 5 remains
 **Outcome:** `System.Reflection.Emit.DynamicMethod` runs on the VM for every `ILGenerator`
 operation a real library uses: branches and labels, fields, `calli`, filters and faults, generic
 and nested types and callees, byref signatures, and the owner, module and `skipVisibility`
@@ -225,6 +225,37 @@ Slice 3 verification (2026-11-16): `./check.sh --fast` passed clippy and 1137, 1
 1460 tests in its three configurations; `cargo fmt --all -- --check` passed. The new fixture and
 the Newtonsoft and EF InMemory host rungs match .NET on stdout and exit code with the debug and
 release CLI.
+
+### Slice 4: library seams and delegate thunks
+
+System.Text.Json now uses its own Reflection.Emit accessor. Synthetic methods named `.ctor`
+are classified by their runtime-special-name flag, so STJ's constructor accessors receive a
+`MethodInfo`. The existing generic object-array thunk table remains for supported shapes; other
+shapes dispatch to the framework's `CreateObjectArrayDelegateRefEmit`. Differential fixtures
+cover a byref interpreter delegate, copy-back after an exception, 17 parameters, pointer
+arguments and returns, and a POCO round-trip. The direct thunk fixture uses the support-table
+entry on the VM and the framework entry on .NET, since Expression.Parameter rejects pointer types.
+
+Release CLI experiments (multithreading, .NET 10.0.14, stdout and exit code):
+
+| Configuration | Newtonsoft | DI | EF InMemory | Expression samples |
+| --- | --- | --- | --- | --- |
+| `IsDynamicCodeCompiled` true | Fail: `DynamicMethod.set_InitLocals` missing | Pass | Pass | Pass |
+| `CanCompileToIL` true | Pass | Pass | Fail: `RuntimeType.GetMembers` missing | Pass |
+| Both unchanged | Pass | Pass | Pass | Pass |
+
+The expression samples include `expression_compile`, `expression_custom_delegate` and
+`expression_compile_many_params`; the final configuration also passes the new delegate fixtures.
+The DI rung resolves a service twice and waits for the provider's queued compilation; its matching
+output does not prove that background compilation succeeded because DI catches compilation errors.
+Both switches stay false: each experiment failed a host rung. `IsDynamicCodeSupported` stays true.
+The host projects are `crates/dotnet-cli/tests/host_projects/newtonsoft_roundtrip` and
+`dependency_injection`, and `crates/dotnet-benchmarks/fixtures/ef_inmemory`; run them with
+`scripts/diff_run.sh --host` and `DOTNET_RS_BIN` set to the release CLI.
+
+Slice 4 verification (2026-11-16): `./check.sh --fast` passed clippy and 1144, 1450 and
+1467 tests in its three configurations; `cargo fmt --all -- --check` passed. Newtonsoft and
+EF InMemory also matched .NET with the single-threaded debug CLI.
 
 ## Done when
 

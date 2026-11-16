@@ -55,32 +55,20 @@ surface.
 
 ## Dynamic code and Reflection.Emit
 
-The VM reports `RuntimeFeature.IsDynamicCodeSupported` true and `IsDynamicCodeCompiled` false
-(`crates/dotnet-vm/src/intrinsics/app_context.rs`), because EF Core treats a false
-`IsDynamicCodeSupported` as NativeAOT. Libraries therefore take their interpreted or reflection
-paths:
+The VM reports `RuntimeFeature.IsDynamicCodeSupported` true and `IsDynamicCodeCompiled` false.
+EF Core needs the former; Newtonsoft's Emit path currently needs `DynamicMethod.InitLocals`.
 
-- **Expression trees** compile through the Linq interpreter
-  (`LambdaExpression.CanCompileToIL` and `DelegateHelpers.CanEmitObjectArrayDelegate` report false,
-  as under NativeAOT). Delegates for up to 16 parameters, none byref, pointer or byref-like, are
-  built by a support-assembly thunk table. Byref or pointer delegate types and more than 16
-  parameters throw `PlatformNotSupportedException`.
-- **System.Text.Json** reflection serialization uses its reflection member accessor through a VM
-  seam (`DefaultJsonTypeInfoResolver.MemberAccessor`) instead of its Emit accessor.
-- **`System.Reflection.Emit.DynamicMethod`** is replaced by a recording stub in the support
-  assembly ([plan 24](plans/24-reflection-emit-investigation.md); [plan 25](plans/25-dynamicmethod-implementation.md)
-  completes it). It runs `Invoke` and `CreateDelegate` on methods
-  that use straight-line code, calls to non-generic methods, `newobj`, `throw` and typed
-  `try`/`catch`/`finally`. It rejects with `NotSupportedException`: labels and branches, field
-  operands, `calli`, filters and faults, generic or nested types and callees, byref signatures,
-  opcodes outside a table of about 70, and `DynamicILInfo`/`GetTokenFor`. `owner`, module and
-  `skipVisibility` do not grant private access, compiled methods are never freed, and stack-trace
-  frames were not compared with `dotnet`.
-- **`AssemblyBuilder`, `TypeBuilder` and `ModuleBuilder`** are not supported and not planned;
-  no application rung needs them.
-
-[Plan 25](plans/25-dynamicmethod-implementation.md) covers extending `DynamicMethod` to the
-operations real libraries use.
+- **Expression trees** use the Linq interpreter. Generic support-assembly thunks handle up to 16
+  parameters without byref, pointer or byref-like types; other shapes use the framework's emitted
+  object-array thunk. `CanCompileToIL` stays false because EF InMemory hits an unimplemented
+  reflection method when it is true.
+- **System.Text.Json** uses its own Reflection.Emit member accessor.
+- **`System.Reflection.Emit.DynamicMethod`** uses a recording support-assembly implementation.
+  It supports branches, fields, indirect calls, exception regions, generic and nested types,
+  byref signatures and modules. Raw `DynamicILInfo` is unsupported; compiled synthetic assemblies
+  are not yet collected and dynamic stack traces have not been compared. See
+  [plan 25](plans/25-dynamicmethod-implementation.md).
+- **`AssemblyBuilder`, `TypeBuilder` and `ModuleBuilder`** are not supported and not planned.
 
 ## Remaining boundaries
 

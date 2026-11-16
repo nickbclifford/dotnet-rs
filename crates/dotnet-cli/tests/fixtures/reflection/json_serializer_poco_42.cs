@@ -28,8 +28,7 @@ public static class Program
 
     public static int Main()
     {
-        // System.Text.Json picks its member accessor from IsDynamicCodeSupported. The VM can't run
-        // the Reflection.Emit accessors, so this exercises the reflection-based one. bool and null
+        // System.Text.Json picks its Reflection.Emit accessor from IsDynamicCodeSupported. bool and null
         // values are left out because the writer's "true"u8 / "null"u8 constants crash the VM, and
         // numbers are only written, never read back, because the reader sometimes returns 0 for a
         // number (all separate gaps).

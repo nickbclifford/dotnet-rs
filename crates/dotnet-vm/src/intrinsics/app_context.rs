@@ -63,9 +63,7 @@ pub fn intrinsic_app_context_get_data<'gc, T: TypedStackOps<'gc>>(
     StepResult::Continue
 }
 
-/// `RuntimeFeature.IsDynamicCodeCompiled` is false: the VM interprets all code and has no
-/// Reflection.Emit, which is the .NET definition of this property for interpreters (Mono's
-/// interpreter reports the same). CoreCLR's CoreLib returns `IsDynamicCodeSupported`, which stays
+/// `RuntimeFeature.IsDynamicCodeCompiled` is false: the VM interprets all code (Mono's interpreter reports the same). CoreCLR's CoreLib returns `IsDynamicCodeSupported`, which stays
 /// at its default of true because EF Core treats a false value as NativeAOT and refuses to build
 /// models at runtime. Libraries that pick Reflection.Emit with this property (Newtonsoft.Json,
 /// Microsoft.Extensions.DependencyInjection) take their reflection paths instead.

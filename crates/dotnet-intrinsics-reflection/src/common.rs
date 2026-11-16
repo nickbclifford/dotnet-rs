@@ -415,7 +415,8 @@ pub fn get_runtime_method_obj<'gc>(
 
     let index = get_runtime_method_index(ctx, method.clone(), lookup.clone()) as usize;
 
-    let is_ctor = method.method().name == ".ctor" || method.method().name == ".cctor";
+    let is_ctor = method.method().runtime_special_name
+        && (method.method().name == ".ctor" || method.method().name == ".cctor");
     let class = if is_ctor {
         WellKnown::SupportConstructorInfo
     } else {

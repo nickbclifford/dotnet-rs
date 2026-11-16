@@ -1,15 +1,12 @@
 use crate::{
     StepResult,
-    stack::ops::{ReflectionLookupOps, TypedStackOps, VmCallOps, VmLoaderOps},
+    stack::ops::{TypedStackOps, VmCallOps, VmLoaderOps},
 };
 use dotnet_macros::dotnet_intrinsic;
-use dotnet_types::{
-    TypeDescription, generics::GenericLookup, members::MethodDescription, runtime::RuntimeType,
-};
+use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
 use dotnetdll::prelude::MethodMemberIndex;
 
-/// A VM error for a type or method these substitutions expect but the loaded assemblies lack,
-/// e.g. a System.Text.Json version that no longer has `ReflectionMemberAccessor`.
+/// A VM error for a type or method these substitutions expect but the loaded assemblies lack.
 #[cold]
 fn missing(what: String) -> StepResult {
     StepResult::Error(
@@ -45,9 +42,8 @@ fn dispatch_support_static<'gc, T: VmCallOps<'gc> + VmLoaderOps>(
 }
 
 /// `DelegateHelpers.CanEmitObjectArrayDelegate` is false, the value NativeAOT's trimmer substitutes.
-/// The Linq interpreter then never builds its delegate thunks with `DynamicMethod`. (CoreCLR's
-/// CoreLib bakes in `true`; the NativeAOT-only fallback it would call instead doesn't exist there,
-/// so [`delegate_helpers_create_object_array_delegate`] supplies it.)
+/// CoreCLR's NativeAOT-only fallback does not exist there, so
+/// [`delegate_helpers_create_object_array_delegate`] supplies a table and an Emit fallback.
 #[dotnet_intrinsic(
     "static bool System.Dynamic.Utils.DelegateHelpers::get_CanEmitObjectArrayDelegate()"
 )]
@@ -76,7 +72,8 @@ pub fn delegate_helpers_create_object_array_delegate<'gc, T: VmCallOps<'gc> + Vm
     dispatch_support_static(ctx, "DotnetRs.ObjectArrayDelegates", "Create")
 }
 
-/// `LambdaExpression.CanCompileToIL` is false: the VM can't compile expression trees to IL, so
+/// `LambdaExpression.CanCompileToIL` is false: EF InMemory needs unsupported reflection on the
+/// IL compiler path, so
 /// `Compile()` takes the `LightCompiler` interpreter, as it does under NativeAOT and Mono's
 /// interpreter. CoreLib defines it as `RuntimeFeature.IsDynamicCodeSupported`, which has to stay
 /// true for EF Core's model-building check.
@@ -90,38 +87,37 @@ pub fn lambda_expression_can_compile_to_il<'gc, T: TypedStackOps<'gc>>(
     StepResult::Continue
 }
 
-/// `DefaultJsonTypeInfoResolver.MemberAccessor` is System.Text.Json's `ReflectionMemberAccessor`.
-/// The library picks `ReflectionEmitCachingMemberAccessor` whenever
-/// `RuntimeFeature.IsDynamicCodeSupported` is true and has no switch of its own, but that value
-/// has to stay true for EF Core. The Emit accessors need `DynamicMethod`, which the VM lacks.
+/// Dispatch unsupported generic-thunk shapes to the framework's own Emit implementation.
 #[dotnet_intrinsic(
-    "static System.Text.Json.Serialization.Metadata.MemberAccessor System.Text.Json.Serialization.Metadata.DefaultJsonTypeInfoResolver::get_MemberAccessor()"
+    "static System.Delegate DotnetRs.ObjectArrayDelegates::CreateEmitted(System.Type, System.Func<object[], object>)"
 )]
-pub fn json_default_resolver_member_accessor<
-    'gc,
-    T: VmCallOps<'gc> + VmLoaderOps + ReflectionLookupOps<'gc> + TypedStackOps<'gc>,
->(
+pub fn object_array_delegate_create_emitted<'gc, T: VmCallOps<'gc> + VmLoaderOps>(
     ctx: &mut T,
-    method: MethodDescription,
+    _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    // Type.GetType(string) isn't available on the VM, so find the accessor type in the library's
-    // own metadata and hand the support method its Type object.
-    let resolution = method.parent.resolution.clone();
-    let accessor = resolution
+    let resolution = dotnet_vm_ops::vm_try!(ctx.loader().get_assembly("System.Linq.Expressions"));
+    let ty = resolution
         .definition()
         .enumerate_type_definitions()
-        .find(|(_, ty)| {
-            ty.type_name() == "System.Text.Json.Serialization.Metadata.ReflectionMemberAccessor"
-        })
+        .find(|(_, ty)| ty.type_name() == "System.Dynamic.Utils.DelegateHelpers")
         .map(|(index, _)| TypeDescription::new(resolution.clone(), index));
-    let Some(accessor) = accessor else {
-        return missing(
-            "System.Text.Json.Serialization.Metadata.ReflectionMemberAccessor in System.Text.Json"
-                .into(),
-        );
+    let Some(ty) = ty else {
+        return missing("System.Dynamic.Utils.DelegateHelpers".into());
     };
-    let type_object = ctx.get_runtime_type(RuntimeType::Type(accessor));
-    ctx.push_obj(type_object);
-    dispatch_support_static(ctx, "DotnetRs.JsonReflectionMemberAccessor", "Get")
+    let Some(index) = ty
+        .definition()
+        .methods
+        .iter()
+        .position(|method| method.name == "CreateObjectArrayDelegateRefEmit")
+    else {
+        return missing("DelegateHelpers.CreateObjectArrayDelegateRefEmit".into());
+    };
+    let method = MethodDescription::new(
+        ty,
+        GenericLookup::default(),
+        resolution,
+        MethodMemberIndex::Method(index),
+    );
+    ctx.dispatch_method(method, GenericLookup::default())
 }

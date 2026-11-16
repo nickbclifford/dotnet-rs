@@ -1547,3 +1547,23 @@ diff_test!(
     reflection_thread_static_match_dotnet,
     "tests/fixtures/reflection/reflection_thread_static_42.cs"
 );
+
+diff_test!(
+    expression_byref_wide_matches_dotnet,
+    "tests/fixtures/expressions/expression_byref_wide_42.cs"
+);
+
+diff_test!(
+    dynamic_method_constructor_name_matches_dotnet,
+    "tests/fixtures/reflection/dynamic_method_constructor_name_42.cs"
+);
+
+diff_test!(
+    json_serializer_poco_matches_dotnet,
+    "tests/fixtures/reflection/json_serializer_poco_42.cs"
+);
+
+diff_test!(
+    object_array_delegate_shapes_match_dotnet,
+    "tests/fixtures/expressions/object_array_delegate_shapes_42.cs"
+);

@@ -7,7 +7,8 @@ namespace DotnetRs;
 /// type and emits a <c>DynamicMethod</c> for delegates with more than two parameters. These generic
 /// thunks pack the arguments into an <c>object[]</c>, call the handler and cast the result, the
 /// same shape the Emit thunk has, for delegates of up to 16 parameters without byref, pointer or
-/// byref-like types. The VM routes <c>DelegateHelpers.CreateObjectArrayDelegate</c> here.
+/// byref-like types. Other shapes use the framework's emitted thunk. The VM routes
+/// <c>DelegateHelpers.CreateObjectArrayDelegate</c> here.
 /// </summary>
 public static class ObjectArrayDelegates
 {
@@ -27,6 +28,7 @@ public static class ObjectArrayDelegates
         if (thunk == null)
         {
             thunk = FindThunk(delegateType);
+            if (thunk == null) return CreateEmitted(delegateType, handler);
             lock (s_lock)
             {
                 s_thunks[delegateType] = thunk;
@@ -36,7 +38,10 @@ public static class ObjectArrayDelegates
         return thunk.CreateDelegate(delegateType, handler);
     }
 
-    private static System.Reflection.MethodInfo FindThunk(Type delegateType)
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.InternalCall)]
+    private static extern System.Delegate CreateEmitted(Type delegateType, Func<object[], object> handler);
+
+    private static System.Reflection.MethodInfo? FindThunk(Type delegateType)
     {
         System.Reflection.MethodInfo invoke = delegateType.GetMethod("Invoke")!;
         Type returnType = invoke.ReturnType;
@@ -44,7 +49,7 @@ public static class ObjectArrayDelegates
         System.Reflection.ParameterInfo[] parameters = invoke.GetParameters();
         if (parameters.Length > MaxParameters || IsUnsupported(returnType))
         {
-            throw new PlatformNotSupportedException();
+            return null;
         }
 
         Type[] typeArguments = new Type[parameters.Length + (hasReturn ? 1 : 0)];
@@ -53,7 +58,7 @@ public static class ObjectArrayDelegates
             Type parameterType = parameters[i].ParameterType;
             if (IsUnsupported(parameterType))
             {
-                throw new PlatformNotSupportedException();
+                return null;
             }
 
             typeArguments[i] = parameterType;
