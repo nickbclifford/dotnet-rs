@@ -1,6 +1,6 @@
 # Investigate Reflection.Emit and `DynamicMethod`
 
-**Status:** Slices 1 (demand survey), 2 (AV) and 3 (switch-level experiment, on `plan24/slice3-switch`) done; slice 4 investigated but incomplete; slice 5 not started
+**Status:** Slices 1 (demand survey), 2 (AV) and 3 (switch-level experiment, on `plan24/slice3-switch`) done; slice 4 (spike on `worktree-agent-ae6f4cca00cbb9a7a`) done: all three `DynamicMethod` fixtures exit 42 on the VM via a recording shim; slice 5 not started
 **Outcome:** This plan records a decision, backed by a working spike or a measured blocker:
 either a follow-up plan to implement `DynamicMethod` (and, separately, whether to do
 `AssemblyBuilder`/`TypeBuilder`), or a single switch-level answer that replaces the per-call-site
@@ -281,7 +281,9 @@ planned" list):
 
 ## Slice 4 investigation: dynamic method entry points
 
-In progress, 2026-11-15. The requested execution spike **does not yet work**. Three independent
+### Baseline investigation (before the spike)
+
+2026-11-15. At this point the execution spike did not yet work. Three independent
 fixtures are in `crates/dotnet-cli/tests/debug_fixtures`: `dynamic_method_add_42` checks both
 `Invoke` and `CreateDelegate`, `dynamic_method_call_42` emits a call to an existing method, and
 `dynamic_method_catch_42` emits a constructor call, throw and typed catch. On .NET 10.0.14 all
@@ -335,10 +337,103 @@ max stack, init-locals and exception count; its locals signature and EH data nee
   one another and collectible methods need identities and lifetime handling. The existing loader
   only has a public file-based loading entry point; an in-memory registration path is also needed.
 
-Neither option has yet established that an upstream dotnetdll change is necessary, or that option
-(a) requires changing every resolver cache. Those are decision points in the plan, not conclusions
-from this experiment. Slice 4 remains open until the three fixtures execute or a further experiment
-establishes a measured blocker for the body bridge.
+Neither option had yet established that an upstream dotnetdll change is necessary, or that option
+(a) requires changing every resolver cache. The spike below answers both.
+
+### Spike result (2026-11-15): all three fixtures pass
+
+`dynamic_method_add_42` (both `Invoke` and `CreateDelegate`), `dynamic_method_call_42` and
+`dynamic_method_catch_42` print 42 and exit 42, and `bash scripts/diff_run.sh` reports
+`PASS: exit code and stdout match (mode=host)` for each. They stay in `debug_fixtures`; the
+decision slice promotes them. `dynamic_method_ctor_42` (slice 2) also passes now. Existing suite:
+`./check.sh --fast` passes (1068/1374/1391 tests across its three stages) and
+`cargo clippy --workspace --all-targets -- -D warnings` is clean.
+
+**Option chosen: (b), a synthetic module, with a different front end than the plan imagined.** The
+spike does not run CoreLib's `DynamicILGenerator`/`DynamicScope`/`DynamicResolver` at all. It
+replaces `System.Reflection.Emit.DynamicMethod` with a stub type in the support assembly
+(`[Stub(InPlaceOf = ...)]`, the mechanism `System.Array` and `System.RuntimeType` already use). The
+stub's `GetILGenerator()` returns an `ILGenerator` subclass that records `(opcode, immediate,
+reference operand)` per instruction, plus locals and exception clauses, as instruction-indexed
+data. On the first `Invoke`/`CreateDelegate`, one `InternalCall` hands the record to the VM, which
+builds a `dotnetdll` `Resolution` with one type and one static method, registers it through the
+existing `AssemblyLoader::register_owned_assembly`, and returns the ordinary
+`DotnetRs.MethodInfo` for it. The shim then forwards `Invoke`/`CreateDelegate` to that
+`MethodInfo`.
+
+Why this beats the two options as written:
+
+- **(a)** needs a new `MethodDescription` representation (`parent`, `method_resolution` and
+  `method_member_index` all assume metadata) that every resolver cache keys on. That is an "Ask the
+  maintainer" condition, so it was not attempted. It is still not measured.
+- **(b) as written** needs `DynamicResolver` raw IL bytes decoded to resolved instructions.
+  dotnetdll 0.4.0's decoder is private, so it would need an upstream change or a hand-written
+  decoder. Recording resolved operations in the generator removes the decoder: dotnetdll's writer
+  side takes resolved `Instruction` values directly, and a `Resolution` built in memory needs no
+  PE round trip. **No dotnetdll change was needed.**
+- It also removes the module identity, `GetCorElementType`/`GetNativeTypeHandle` and
+  `DynamicScope`-accepts-VM-reflection-objects walls from the baseline investigation, because none
+  of that code runs.
+
+**Per-step record** (no earlier steps to compare against: each step was the first run of its
+fixture; the shim and VM bridge were written together and the fixtures passed on the first run of
+the complete bridge after the build errors below were fixed).
+
+| Step | What broke | Fix | Code |
+|---|---|---|---|
+| Entry (add, ctor to emit) | CoreLib `DynamicMethod` ctor needs `DefaultAssemblyLoadContext` and a real `RuntimeModule` | Stub replaces the type; no CoreLib code runs | `DynamicMethod.cs`, 250 lines in the support assembly (stub, `ILGenerator` subclass, `LocalBuilder` subclass, owner/module constructor overloads) |
+| Compile support assembly | In namespace `DotnetRs`, bare `MethodInfo`, `ConstructorInfo`, `FieldInfo`, `Delegate`, `RuntimeMethodHandle` bind to the support types, not `System.*` | Fully qualify | a handful of lines |
+| VM bridge (add) | `no body in executing method: ...CompileRecorded` (the expected next boundary) | Intrinsic `CompileRecorded` | `dynamic_method.rs`, 528 lines in `dotnet-intrinsics-reflection`, plus 1 line in `lib.rs` and a `dotnet-assemblies` dependency in that crate's `Cargo.toml` |
+| call | Callee operand is a `MethodInfo` from another assembly | Build `AssemblyRef`/`TypeRef`/`MemberRef` rows in the synthetic resolution from the callee's `MethodDescription`; callee signature types translated across resolutions (primitives, object, string, non-generic non-nested classes and value types, SZ arrays) | inside the 528 lines |
+| catch | `Newobj`, `Throw`, typed catch, locals, EH clause | Generator mirrors CLR `ILGenerator` (a `leave` at the end of each try/handler, `endfinally` for finally); VM maps clauses to instruction-indexed `Exception` records | inside the 528 and 250 lines |
+| Regression | `reflection_dynamic_method_owner_validation_42` failed: the stub lacked the `(string, Type, Type[], Type, bool)` constructor | Added the public constructor overloads with the CLR's owner validation (null, array, interface, open generic) | ~35 lines of the 250 |
+
+**Existing machinery that worked unchanged**, once the synthetic method existed:
+
+- Intrinsic dispatch: `DotnetRs.MethodInfo.Invoke` and `CreateDelegate` operate on the synthetic
+  method as on any `MethodInfo`; the registry hands out indexes for it normally.
+- Frames and the evaluation stack, argument and local homes, and delegate invocation.
+- Exception handling: the emitted `try`/`catch` and `try`/`finally` regions, `newobj`+`throw`,
+  and an uncaught throw from a dynamic method surfacing to a managed `catch` in `Main` (checked in
+  a throwaway probe, not a committed fixture, as is the `finally` case).
+- Method and type resolution of `MemberRef`/`TypeRef` rows pointing into CoreLib and into the
+  fixture assembly, including stub redirection by name.
+- The VM's in-memory assembly registration (`register_owned_assembly`) needed no change.
+
+**Not touched or not run**, so unvalidated:
+
+- Anything that depends on CoreLib's real Emit stack: `DynamicScope`, `DynamicResolver`,
+  `DynamicILGenerator`, `DynamicILInfo`, raw-IL `SetCode`, tokens from `GetTokenFor`. Libraries
+  that go through `ILGenerator` abstractly work in principle; libraries that use `DynamicILInfo`,
+  `ILGenerator` on `MethodBuilder`/`TypeBuilder`, or read IL bytes do not.
+- Shortcuts, all honest rather than silent (each rejects with `NotSupportedException` or is listed
+  here): `maxstack` is fixed at 32 instead of computed; labels and every branch opcode are
+  rejected, as are field operands, `calli`, filters, faults, signatures and generic callees,
+  generic or nested types in signatures, by-ref parameters and returns on callees, and any opcode
+  outside a table of about 70; `owner`, module and `skipVisibility` are validated or ignored, so a
+  dynamic method does not get its owner's private-member access (the VM may not enforce
+  visibility anyway, which was not checked); a recorded method is never evicted, so there is no
+  collectible-method lifetime (every compile adds a resolution to the metadata arena).
+- Stack-trace frames for dynamic methods (name and `DeclaringType` as `null`) were not compared
+  with `dotnet`; the synthetic method has a declaring type `DynamicMethods` in an assembly
+  `DynamicMethod$N`, where the CLR reports none.
+- The stub replaces `DynamicMethod` for every caller, including any library that constructs one
+  directly. The two call-site patches for `Expression.Compile` were not removed and the host
+  rungs (Newtonsoft, EF) were not rerun against it.
+- `DynamicMethod.GetParameters`, `MethodHandle`, `ReturnTypeCustomAttributes`, `Define*Parameter`
+  and `GetDynamicILInfo` are not implemented on the stub.
+- Thread safety of concurrent compiles, GC of delegates over dynamic methods across a collection,
+  and the `NEXT_DYNAMIC_ASSEMBLY` naming scheme were not tested.
+
+**Effort and cost signal for the decision slice.** About 780 lines of new code in two files plus
+three configuration lines, written in one pass. The only VM-side change is one intrinsic and a new
+dependency edge from `dotnet-intrinsics-reflection` to `dotnet-assemblies` (the spike did not check
+for a layering rule against it). Extending to branches and labels, fields, generic callees and
+`MaxStack` is more of the same translation work. Real `DynamicILGenerator` fidelity (so
+`DynamicILInfo` and IL-byte consumers work) is a separate, much larger job that this approach
+sidesteps rather than solves: it would need the raw-IL decoder (an upstream dotnetdll change or
+our own), which is the blocker the baseline investigation measured. The spike is on
+`worktree-agent-ae6f4cca00cbb9a7a`; nothing here is production quality.
 
 ## Scope
 
