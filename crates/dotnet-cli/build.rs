@@ -251,12 +251,19 @@ fn main() {
         } else if is_fuzzing_enabled
             && (is_pinvoke_fixture
                 || uses_console_in_fuzzing
-                || test_name == "memory_nullable_boxing_42")
+                || matches!(
+                    test_name.as_str(),
+                    "memory_nullable_boxing_42"
+                        | "reflection_json_serializer_numbers_42"
+                        | "reflection_json_serializer_poco_42"
+                ))
         {
             // Fuzzing mode hardens native interop paths by denying P/Invoke, so
             // fixtures that rely on libc/libm entry points (and console code paths
             // that transitively use them, e.g. Console.WriteLine -> SystemNative_SetErrNo)
-            // are expected to fail.
+            // are expected to fail. JsonSerializer's options cache hashes through
+            // System.HashCode, whose static constructor seeds itself via
+            // SystemNative_GetNonCryptographicallySecureRandomBytes.
             ignore_prefix = "#[ignore] ".to_string();
         } else if (file_name == "monitor_try_enter_timeout_42"
             || file_name == "monitor_is_entered_42"
