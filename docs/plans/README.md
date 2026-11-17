@@ -10,6 +10,7 @@ In priority order. Each plan's own `Status:` line is the only record of its stat
 
 | ID | Plan | Note |
 |---|---|---|
+| 26 | [Thread lifecycle reclamation, single-threaded finalizer identity and the multicast fallback](26-thread-lifecycle-and-multicast-fallback.md) | Not started; closes the multicast-fallback, single-threaded finalizer, thread-static, Loom and per-worker resource entries below |
 | 23 | [Runtime behavior gaps: static field reflection, Math FCalls, Array.Fill, Span.CopyTo, signed byref offsets and generic arity](23-runtime-behavior-gaps.md) | Validated runtime surface and remaining limits are recorded in the plan |
 | 25 | [Implement `DynamicMethod`](25-dynamicmethod-implementation.md) | Complete except eviction of unreachable dynamic methods (deferred, see Not yet planned) |
 | 24 | [Investigate Reflection.Emit and `DynamicMethod`](24-reflection-emit-investigation.md) | Complete; decision is a `DynamicMethod` implementation (plan 25), no `TypeBuilder`; the access violation is fixed |
@@ -146,9 +147,9 @@ Evidence and IDs (p01…, R01…) are defined in the
   `string` change to a commit.
 - **Loom model coverage:** the hand-written `loom_stw.rs` model does not compile the production
   `WorkerRegistry` and does not cover every stop-the-world, retirement or shutdown interleaving.
-  `dotnet-vm` does not compile under `cfg(loom)` with `multithreading`, so only
-  `dotnet-runtime-memory/tests/loom_shared_tables.rs` drives production types (`SharedGcHandles`,
-  `Finalizers`). It does not model the owner-partition color reads as data races: loom does not
+  `dotnet-vm` has compiled under `cfg(loom)` with `multithreading` since 6e29f56d, but no model
+  drives it yet; only `dotnet-runtime-memory/tests/loom_shared_tables.rs` drives production types
+  (`SharedGcHandles`, `Finalizers`). It does not model the owner-partition color reads as data races: loom does not
   track gc-arena's mark colors.
 
 ## Writing a plan
