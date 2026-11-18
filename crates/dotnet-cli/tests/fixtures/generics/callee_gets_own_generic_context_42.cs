@@ -106,6 +106,7 @@ public class Program {
         return "";
     }
 
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
     static void MakeFinalizable<T>() { new Finalized<T>(); }
 
     public static int Main() {
@@ -116,7 +117,7 @@ public class Program {
         MakeFinalizable<short>();
         GC.Collect();
         GC.WaitForPendingFinalizers();
-        if (Finalized<short>.Seen != null && Finalized<short>.Seen != "Int16") return 40;
+        if (Finalized<short>.Seen != "Int16") return 40;
         return 42;
     }
 }

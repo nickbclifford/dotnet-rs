@@ -263,7 +263,7 @@ mod tests {
         let sig = parameterless_i32_signature();
 
         let body = make_test_method!(
-            max_stack: 2,
+            max_stack: 3,
             instructions: vec![
                 Instruction::LoadNull,
                 Instruction::StoreStaticField {
@@ -276,6 +276,20 @@ mod tests {
                 },
                 Instruction::LoadNull,
                 Instruction::CompareEqual,
+                // A non-null array reference must survive the static-field round trip by identity.
+                Instruction::LoadConstantInt32(1),
+                Instruction::NewArray(MethodType::Base(Box::new(BaseType::Int32))),
+                Instruction::Duplicate,
+                Instruction::StoreStaticField {
+                    param0: object_field,
+                    volatile: false,
+                },
+                Instruction::LoadStaticField {
+                    param0: object_field,
+                    volatile: false,
+                },
+                Instruction::CompareEqual,
+                Instruction::And,
                 Instruction::Return,
             ],
         );

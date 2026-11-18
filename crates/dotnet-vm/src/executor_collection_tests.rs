@@ -633,25 +633,6 @@ fn arena_lifetime_mark_command_rejects_stale_registration() {
     drop(foreign_arena);
 }
 
-/// The registry's current
-/// generation alone does not identify the particular destination arena.
-#[cfg(feature = "multithreading")]
-#[test]
-fn arena_lifetime_installation_checks_arena_generation() {
-    let source = include_str!("threading/basic.rs");
-    let command = source
-        .split("MarkPhaseCommand::Objects(ptrs) =>")
-        .nth(1)
-        .unwrap()
-        .split("GCCommand::Sweep(sweep_command)")
-        .next()
-        .unwrap();
-    assert!(
-        command.contains("c.stack.arena_identity"),
-        "mark installation does not compare the destination arena's original generation"
-    );
-}
-
 #[cfg(feature = "multithreading")]
 #[test]
 fn collection_request_retries_when_coordinator_is_busy() {

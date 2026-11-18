@@ -25,8 +25,9 @@ public static class Program
         if (aggregate != 12) return 2;
         if (sum != 12) return 3;
         if (list.Count != 3) return 4;
-        if (array == null) return 5;
-        if (dictionary.Count != 2 || dictionary[4] != 5 || dictionary[6] != 7) return 6;
+        if (list[0] != 2 || list[1] != 4 || list[2] != 6) return 5;
+        if (array.Length != 3 || array[0] != 2 || array[1] != 4 || array[2] != 6) return 6;
+        if (dictionary.Count != 2 || dictionary[4] != 5 || dictionary[6] != 7) return 7;
 
         return 42;
     }

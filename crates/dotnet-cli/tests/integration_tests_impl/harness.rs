@@ -20,21 +20,23 @@ pub fn get_test_timeout(default_secs: u64) -> Duration {
     Duration::from_secs(secs)
 }
 
+#[cfg(not(feature = "fuzzing"))]
 thread_local! {
     static PATH_EVENT_CAPTURE: std::cell::RefCell<Option<tracing::Dispatch>> =
         const { std::cell::RefCell::new(None) };
 }
 
-/// Whether `metadata` is one of the native-path selection events the selection tests count.
+/// Whether `metadata` is a reflection-invocation path event captured by the tail-call probe.
+#[cfg(not(feature = "fuzzing"))]
 fn is_path_event(metadata: &tracing::Metadata<'_>) -> bool {
-    metadata.is_event()
-        && (metadata.fields().field("multicast_path").is_some()
-            || metadata.fields().field("reflection_invoke_path").is_some())
+    metadata.is_event() && metadata.fields().field("reflection_invoke_path").is_some()
 }
 
 /// Global subscriber layer that forwards path-selection events to this thread's capture.
+#[cfg(not(feature = "fuzzing"))]
 struct PathEventForward;
 
+#[cfg(not(feature = "fuzzing"))]
 impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for PathEventForward {
     fn register_callsite(
         &self,
@@ -71,9 +73,10 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for PathEventForward {
 /// A scoped `with_default` subscriber is not reliable here. `tracing` caches each callsite's
 /// interest process-wide and recomputes it whenever a dispatcher is created, so a parallel
 /// test that creates or drops one can leave a counted callsite cached as uninteresting (the
-/// selection tests then saw `(0, 0, 0)` for their first fixture). One permanent global
+/// tail-call trace probe then saw zero events for its first fixture). One permanent global
 /// dispatcher, interested in exactly the counted callsites, never changes that answer.
 /// Rebuilding once per call repairs a callsite that was mid-registration when it was installed.
+#[cfg(not(feature = "fuzzing"))]
 pub fn with_counting_subscriber<S, R>(subscriber: S, f: impl FnOnce() -> R) -> R
 where
     S: tracing::Subscriber + Send + Sync + 'static,
@@ -130,7 +133,7 @@ impl TestHarness {
         clippy::arc_with_non_send_sync,
         reason = "the AssemblyLoader fixture is confined to this thread-local integration harness"
     )]
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let assemblies_path = assemblies::find_dotnet_app_path()
             .expect("could not find .NET shared path")
             .to_str()
@@ -375,10 +378,12 @@ impl TestHarness {
             if shutdown {
                 shared.shutdown_workers();
             }
-            return ExecutionResult {
+            let result = ExecutionResult {
                 exit_code: 255,
                 stderr: Some(msg),
             };
+            on_complete(result.clone());
+            return result;
         }
 
         let result = match executor.run() {
@@ -461,10 +466,10 @@ impl TestHarness {
 
     #[cfg(not(feature = "fuzzing"))]
     pub fn run_cli(&self, dll_path: &Path) -> (u8, String) {
-        let output = self
-            .cli_command(dll_path)
-            .output()
-            .expect("failed to run dotnet-rs");
+        let output = crate::integration_tests_impl::diff_harness::fixture_output(
+            &mut self.cli_command(dll_path),
+            "VM",
+        );
 
         let exit_code = output.status.code().unwrap_or(255) as u8;
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -505,24 +510,18 @@ impl TestHarness {
             abort_flags.push(shared.abort_signal());
 
             let handle = thread::spawn(move || {
-                let tx_ok = tx.clone();
-                let tx_err = tx;
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-                    harness.run_with_shared_signal_then_wait(
-                        resolution.clone(),
-                        shared,
-                        &release_gate,
-                        move |result| {
-                            let _ = tx_ok.send(Ok(result));
-                        },
-                    );
-                }));
-                if let Err(panic_info) = result {
-                    let _ = tx_err.send(Err(panic_info));
-                }
+                harness.run_with_shared_signal_then_wait(
+                    resolution,
+                    shared,
+                    &release_gate,
+                    move |result| {
+                        let _ = tx.send(result);
+                    },
+                );
             });
             handles.push(handle);
         }
+        drop(tx);
 
         let start = std::time::Instant::now();
         let mut test_error = None;
@@ -530,7 +529,7 @@ impl TestHarness {
         for _ in 0..thread_count {
             let remaining = timeout.saturating_sub(start.elapsed());
             match rx.recv_timeout(remaining) {
-                Ok(Ok(result)) => {
+                Ok(result) => {
                     if result.exit_code != expected_exit_code {
                         test_error = Some(format!(
                             "Multi-arena test {} failed: expected exit code {}, got {}. Stderr: {:?}",
@@ -539,29 +538,17 @@ impl TestHarness {
                         break;
                     }
                 }
-                Ok(Err(panic_info)) => {
-                    for flag in &abort_flags {
-                        flag.request_abort();
-                    }
-                    {
-                        let (lock, condvar) = &*release_gate;
-                        let mut released = lock.lock().expect("release gate lock poisoned");
-                        *released = true;
-                        condvar.notify_all();
-                    }
-                    // Join all before resuming unwind
-                    for handle in handles {
-                        let _ = handle.join();
-                    }
-                    // Process teardown runs once, after the last entry executor.
-                    shared.shutdown_workers();
-                    std::panic::resume_unwind(panic_info);
-                }
-                Err(_) => {
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                     for flag in &abort_flags {
                         flag.request_abort();
                     }
                     test_error = Some(format!("TIMEOUT in {}", test_name));
+                    break;
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    test_error = Some(format!(
+                        "Multi-arena test {test_name} worker exited without an entry result"
+                    ));
                     break;
                 }
             }
@@ -577,12 +564,13 @@ impl TestHarness {
                 *released = true;
                 condvar.notify_all();
             }
-            for handle in handles {
-                let _ = handle.join();
-            }
+            let worker_result = join_multi_arena_workers(handles, test_name);
             // Process teardown runs once, after the last entry executor.
             shared.shutdown_workers();
-            panic!("{}", err);
+            if let Err(worker_error) = worker_result {
+                panic!("{err}; {worker_error}");
+            }
+            panic!("{err}");
         }
 
         {
@@ -591,12 +579,64 @@ impl TestHarness {
             *released = true;
             condvar.notify_all();
         }
-        for handle in handles {
-            let _ = handle.join();
-        }
+        let worker_result = join_multi_arena_workers(handles, test_name);
         // Process teardown runs once, after the last entry executor.
         shared.shutdown_workers();
+        if let Err(error) = worker_result {
+            panic!("{error}");
+        }
     }
+}
+
+#[cfg(feature = "multithreading")]
+fn join_multi_arena_workers(
+    handles: Vec<std::thread::JoinHandle<()>>,
+    test_name: &str,
+) -> Result<(), String> {
+    let mut panicked = Vec::new();
+    for (index, handle) in handles.into_iter().enumerate() {
+        if handle.join().is_err() {
+            panicked.push(index);
+        }
+    }
+    if panicked.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Multi-arena test {test_name} worker(s) {panicked:?} panicked after entry execution"
+        ))
+    }
+}
+
+#[cfg(all(test, feature = "multithreading"))]
+#[test]
+fn multi_arena_worker_panic_after_release_is_reported() {
+    use std::{sync::mpsc, time::Duration};
+
+    let (result_tx, result_rx) = mpsc::channel();
+    let gate = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+    let worker_gate = Arc::clone(&gate);
+    let handle = std::thread::spawn(move || {
+        result_tx.send(()).unwrap();
+        let (lock, condvar) = &*worker_gate;
+        let mut released = lock.lock().unwrap();
+        while !*released {
+            released = condvar.wait(released).unwrap();
+        }
+        panic!("injected arena teardown panic");
+    });
+
+    result_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("worker entry result");
+    {
+        let (lock, condvar) = &*gate;
+        *lock.lock().unwrap() = true;
+        condvar.notify_all();
+    }
+
+    let error = join_multi_arena_workers(vec![handle], "teardown control").unwrap_err();
+    assert!(error.contains("worker(s) [0] panicked"), "{error}");
 }
 
 #[test]

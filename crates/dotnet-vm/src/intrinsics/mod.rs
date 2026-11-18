@@ -472,28 +472,154 @@ mod async_registry_tests {
 
     #[test]
     fn blocking_intrinsics_have_no_sync_fallback() {
-        for (prefix, expected) in [
-            ("System_GC_Collect_", 3),
-            ("System_Threading_Thread_Join_", 2),
-            ("System_Threading_LowLevelLock_Acquire_", 1),
-            ("System_Threading_Monitor_ReliableEnter_", 1),
-            ("System_Threading_Monitor_Enter_", 2),
-            ("System_Threading_Monitor_TryEnter_", 2),
-            ("System_Threading_Monitor_ReliableEnterTimeout_", 1),
-            ("System_Threading_Monitor_TryEnter_FastPath_", 1),
-            ("System_Threading_Monitor_TryEnter_FastPath_WithTimeout_", 2),
-        ] {
-            let matches: Vec<_> = ASYNC_INTRINSIC_SIGNATURES
-                .iter()
-                .filter(|(name, _, _, _, _, _)| {
-                    name.strip_prefix(prefix)
-                        .is_some_and(|suffix| suffix.chars().all(|c| c.is_ascii_hexdigit()))
-                })
-                .collect();
-            assert_eq!(matches.len(), expected, "{prefix}");
-            for (name, _, _, fallback, _, _) in matches {
-                assert!(!fallback, "{name}");
+        let blocking_methods = [
+            ("System.GC", "Collect"),
+            ("System.Threading.Thread", "Join"),
+            ("System.Threading.LowLevelLock", "Acquire"),
+            ("System.Threading.Monitor", "ReliableEnter"),
+            ("System.Threading.Monitor", "Enter"),
+            ("System.Threading.Monitor", "TryEnter"),
+            ("System.Threading.Monitor", "ReliableEnterTimeout"),
+            ("System.Threading.Monitor", "TryEnter_FastPath"),
+            ("System.Threading.Monitor", "TryEnter_FastPath_WithTimeout"),
+        ];
+
+        // These names are the semantic boundary for operations that must suspend rather than
+        // fall back to synchronous execution. Any new overload is checked automatically.
+        let mut discovered = 0;
+        for (_, type_name, member_name, _, fallback, _, _) in ASYNC_INTRINSIC_SIGNATURES {
+            if blocking_methods.contains(&(*type_name, *member_name)) {
+                discovered += 1;
+                assert!(
+                    !fallback,
+                    "blocking intrinsic {type_name}::{member_name} has a synchronous fallback"
+                );
             }
+        }
+        assert!(
+            discovered > 0,
+            "no blocking intrinsic signatures were discovered"
+        );
+
+        let has_signature = |type_name: &str,
+                             member_name: &str,
+                             is_static: bool,
+                             result: &str,
+                             parameters: &[&str]| {
+            ASYNC_INTRINSIC_SIGNATURES.iter().any(
+                |(
+                    _,
+                    actual_type,
+                    actual_member,
+                    actual_static,
+                    _,
+                    actual_result,
+                    actual_params,
+                )| {
+                    *actual_type == type_name
+                        && *actual_member == member_name
+                        && *actual_static == is_static
+                        && *actual_result == result
+                        && *actual_params == parameters
+                },
+            )
+        };
+
+        // Retain the overloads the VM services through async native effects. These are declared
+        // as managed signatures, so their identity does not depend on generated handler hashes.
+        for (type_name, member_name, is_static, result, parameters) in [
+            ("System.GC", "Collect", true, "Void", &[][..]),
+            ("System.GC", "Collect", true, "Void", &["Int32"][..]),
+            (
+                "System.GC",
+                "Collect",
+                true,
+                "Void",
+                &["Int32", "System.GCCollectionMode"][..],
+            ),
+            ("System.Threading.Thread", "Join", false, "Void", &[][..]),
+            (
+                "System.Threading.Thread",
+                "Join",
+                false,
+                "Boolean",
+                &["Int32"][..],
+            ),
+            (
+                "System.Threading.LowLevelLock",
+                "Acquire",
+                false,
+                "Void",
+                &[][..],
+            ),
+            (
+                "System.Threading.Monitor",
+                "ReliableEnter",
+                true,
+                "Void",
+                &["Object", "Boolean&"][..],
+            ),
+            (
+                "System.Threading.Monitor",
+                "Enter",
+                true,
+                "Void",
+                &["Object"][..],
+            ),
+            (
+                "System.Threading.Monitor",
+                "Enter",
+                true,
+                "Void",
+                &["Object", "Boolean&"][..],
+            ),
+            (
+                "System.Threading.Monitor",
+                "TryEnter",
+                true,
+                "Boolean",
+                &["Object", "Int32"][..],
+            ),
+            (
+                "System.Threading.Monitor",
+                "TryEnter",
+                true,
+                "Void",
+                &["Object", "Int32", "Boolean&"][..],
+            ),
+            (
+                "System.Threading.Monitor",
+                "ReliableEnterTimeout",
+                true,
+                "Void",
+                &["Object", "Int32", "Boolean&"][..],
+            ),
+            (
+                "System.Threading.Monitor",
+                "TryEnter_FastPath",
+                true,
+                "Boolean",
+                &["Object"][..],
+            ),
+            (
+                "System.Threading.Monitor",
+                "TryEnter_FastPath_WithTimeout",
+                true,
+                "Boolean",
+                &["Object", "Int32"][..],
+            ),
+            (
+                "System.Threading.Monitor",
+                "TryEnter_FastPath_WithTimeout",
+                true,
+                "Void",
+                &["Object", "Int32", "Boolean&"][..],
+            ),
+        ] {
+            assert!(
+                has_signature(type_name, member_name, is_static, result, parameters),
+                "missing async registration for {type_name}::{member_name}({parameters:?}) -> {result}"
+            );
         }
     }
 
@@ -523,7 +649,8 @@ mod async_registry_tests {
                     | "Microsoft.Win32.SafeHandles.SafeWaitHandle"
             )
         };
-        for (name, receiver, is_static, fallback, result, parameters) in ASYNC_INTRINSIC_SIGNATURES
+        for (name, receiver, _, is_static, fallback, result, parameters) in
+            ASYNC_INTRINSIC_SIGNATURES
         {
             if *fallback {
                 continue;

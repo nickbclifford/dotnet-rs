@@ -2028,48 +2028,89 @@ mod tests {
         assert!(!field_layout_contains_heap_refs(&layout));
     }
 
-    /// Verify that `CompareExchangeError` variants carry the expected payloads,
-    /// covering the two match arms at every call site.
     #[test]
-    fn compare_exchange_error_variants() {
-        // Mismatch arm — carries the actual current value.
-        let mismatch = CompareExchangeError::Mismatch(42);
-        match mismatch {
-            CompareExchangeError::Mismatch(v) => assert_eq!(v, 42),
-            _ => panic!("expected Mismatch"),
-        }
+    fn compare_exchange_reports_mismatch_and_owner_bounds_errors() {
+        use dotnet_utils::{ByteOffset, gc::GCHandle};
+        use dotnet_value::{CLRString, HeapStorage, object::ObjectRef};
+        use gc_arena::{Arena, Rootable};
 
-        // Bounds arm — carries the underlying MemoryAccessError.
-        let bounds_inner = MemoryAccessError::BoundsCheck {
-            offset: 0,
-            size: 8,
-            len: 4,
+        type TestRoot = Rootable![()];
+        let arena = Arena::<TestRoot>::new(|_| ());
+        #[cfg(any(feature = "multithreading", feature = "memory-validation"))]
+        let arena_id = dotnet_utils::sync::get_current_thread_id();
+        #[cfg(feature = "multithreading")]
+        let arena_handle = dotnet_utils::gc::ArenaHandle::new(arena_id);
+        #[cfg(feature = "multithreading")]
+        let arena_handle_inner = {
+            // SAFETY: F1.GcHandleRooted — the owner stays alive through `arena.mutate`, and the
+            // extended reference is only used to construct the `GCHandle` passed into its closure.
+            unsafe {
+                std::mem::transmute::<
+                    &dotnet_utils::gc::ArenaHandleInner,
+                    &'static dotnet_utils::gc::ArenaHandleInner,
+                >(arena_handle.as_inner())
+            }
         };
-        let bounds_err = CompareExchangeError::Bounds(bounds_inner.clone());
-        match bounds_err {
-            CompareExchangeError::Bounds(e) => assert_eq!(e, bounds_inner),
-            _ => panic!("expected Bounds"),
-        }
-    }
 
-    /// Confirm that `check_bounds` errors can be promoted to `CompareExchangeError::Bounds`
-    /// exactly as `compare_exchange_atomic` does it via `.map_err(CompareExchangeError::Bounds)`.
-    #[test]
-    fn check_bounds_error_promoted_to_compare_exchange_error() {
-        let buf = [0u8; 4];
-        let base = buf.as_ptr();
-        let cas_result: Result<(), CompareExchangeError> =
-            check_bounds(base, base, 4, 8).map_err(CompareExchangeError::Bounds);
-        assert_eq!(
-            cas_result,
-            Err(CompareExchangeError::Bounds(
-                MemoryAccessError::BoundsCheck {
-                    offset: 0,
-                    size: 8,
-                    len: 4,
-                }
-            ))
-        );
+        arena.mutate(|mc, _| {
+            let gc = GCHandle::new(
+                mc,
+                #[cfg(feature = "multithreading")]
+                arena_handle_inner,
+                #[cfg(feature = "memory-validation")]
+                arena_id,
+            );
+            let owner = crate::MemoryOwner::Local(ObjectRef::new(
+                gc,
+                HeapStorage::Str(CLRString::from("AB")),
+            ));
+            let before = owner.with_data(|bytes| bytes.to_vec()).unwrap();
+            let current = u64::from(before[0]);
+            let heap = crate::heap::HeapManager::new();
+            let mut memory = super::RawMemoryAccess::new(&heap);
+
+            // SAFETY: F10.RawMemoryAccessValid — the owner retains the live string storage, and a one-byte atomic access is valid at offset zero.
+            let mismatch = unsafe {
+                memory.compare_exchange_atomic(
+                    gc,
+                    Some(owner),
+                    ByteOffset::ZERO,
+                    current.wrapping_add(1),
+                    0xFF,
+                    1,
+                    dotnet_utils::sync::Ordering::SeqCst,
+                    dotnet_utils::sync::Ordering::SeqCst,
+                )
+            };
+            assert_eq!(mismatch, Err(CompareExchangeError::Mismatch(current)));
+            assert_eq!(owner.with_data(|bytes| bytes.to_vec()).unwrap(), before);
+
+            let offset = before.len();
+            // SAFETY: F10.RawMemoryAccessValid — an owner-backed access at offset `len` is rejected by the production bounds check before any pointer is used.
+            let out_of_bounds = unsafe {
+                memory.compare_exchange_atomic(
+                    gc,
+                    Some(owner),
+                    ByteOffset::new(offset),
+                    0,
+                    0xFF,
+                    1,
+                    dotnet_utils::sync::Ordering::SeqCst,
+                    dotnet_utils::sync::Ordering::SeqCst,
+                )
+            };
+            assert_eq!(
+                out_of_bounds,
+                Err(CompareExchangeError::Bounds(
+                    MemoryAccessError::BoundsCheck {
+                        offset,
+                        size: 1,
+                        len: before.len(),
+                    }
+                ))
+            );
+            assert_eq!(owner.with_data(|bytes| bytes.to_vec()).unwrap(), before);
+        });
     }
 
     /// An entry for an unregistered arena identity; flushing it is validated away, never

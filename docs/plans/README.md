@@ -50,16 +50,19 @@ lists the entries it closes.
 Evidence and IDs (p01…, R01…) are defined in the
 [pointer-provenance inventory](../pointer-provenance/INVENTORY.md).
 
-- **Type identity after resolution failure** ([27a LIB-6](27-audit/libraries.md#lib-6-equal-resolution-errors-treated-as-type-identity)):
-  `concrete_types_equal` treats equal resolution errors as type equality, and its regression test
-  explicitly requires that legacy behavior. The production loader can produce the same
-  `SynchronizedValueType` error for distinct malformed definitions; guest reachability and the
-  appropriate false/error policy need investigation. This is not a reproduced guest exploit.
-  Decide the production policy before changing the test; 27b tracks that dependency separately.
 - **Negative GC generation validation** ([27a CLI-11](27-audit/cli.md)):
-  `exceptions_intrinsic_trace_42` documents a CLR/VM difference for `GC.Collect(-1)` and its
-  exit-only differential does not establish parity. Reproduce the negative-generation behavior
-  against CLR and decide/fix validation separately from replacing this fixture's trace oracle.
+  `gc_collect_negative_count_smoke_42` exercises `GC.Collect(-1)` without claiming CLR parity.
+  Reproduce the negative-generation behavior against CLR and decide/fix validation separately
+  from this smoke fixture's contract.
+- **Metadata failures hidden by boolean classification and reflection probes**
+  ([27b library scope](27-audit/cleanup-libraries.md), [reflection scope](27-audit/cleanup-cli.md)):
+  concrete comparison and assignability propagate resolution errors, while existing bool
+  classifiers (`is_class`, `is_interface`, `is_nullable`, `has_default_constructor`, and the
+  compatibility `is_value_type`) can reduce lookup failures to a classifier result. Generic
+  special-constraint validation still uses those legacy classifiers. Reflection also retains
+  optional nullable/primitive probes and constructor-candidate shape handling that can discard
+  lookup errors. Audit those query contracts and carry genuine metadata failures to the typed
+  VM-error boundary without confusing an ordinary negative query result with failed resolution.
 - **Eviction of unreachable `DynamicMethod`s (plan 25 slice 5, deferred 2026-11-16):** compiled
   dynamic methods and their metadata arenas are never reclaimed. Safe eviction needs GC-visible
   owners for delegates, `ParameterInfo` and `ldftn` function pointers (today a bare method

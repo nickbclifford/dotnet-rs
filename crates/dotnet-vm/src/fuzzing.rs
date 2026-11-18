@@ -1,4 +1,4 @@
-use crate::{Executor, GenericLookup, state::SharedGlobalState, sync::Arc};
+use crate::{Executor, ExecutorResult, GenericLookup, state::SharedGlobalState, sync::Arc};
 use arbitrary::Arbitrary;
 use dotnet_assemblies::AssemblyLoader;
 use dotnet_types::{TypeDescription, members::MethodDescription};
@@ -84,7 +84,17 @@ fn get_mock_loader() -> Arc<AssemblyLoader> {
             mscorlib.assembly = Some(Assembly::new("mscorlib"));
             let mut obj = TypeDefinition::new(None, "Object");
             obj.namespace = Some("System".into());
-            mscorlib.push_type_definition(obj);
+            let object = mscorlib.push_type_definition(obj);
+
+            let mut value_type = TypeDefinition::new(None, "ValueType");
+            value_type.namespace = Some("System".into());
+            value_type.extends = Some(object.into());
+            let value_type = mscorlib.push_type_definition(value_type);
+
+            let mut enum_type = TypeDefinition::new(None, "Enum");
+            enum_type.namespace = Some("System".into());
+            enum_type.extends = Some(value_type.into());
+            mscorlib.push_type_definition(enum_type);
 
             loader.register_owned_assembly(mscorlib);
 
@@ -115,7 +125,7 @@ fn get_mock_loader() -> Arc<AssemblyLoader> {
     MOCK_LOADER.with(|l| l.clone())
 }
 
-#[derive(Debug, Arbitrary, Clone)]
+#[derive(Debug, Arbitrary, Clone, PartialEq)]
 pub enum FuzzInstruction {
     // Stack operations
     Dup,
@@ -220,13 +230,165 @@ pub enum FuzzInstruction {
     Endfinally,
 }
 
-#[derive(Debug, Arbitrary, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FuzzProgram {
     pub instructions: Vec<FuzzInstruction>,
-    #[arbitrary(with = |u: &mut arbitrary::Unstructured| u.int_in_range(0..=10))]
     pub num_locals: u8,
-    #[arbitrary(with = |u: &mut arbitrary::Unstructured| u.int_in_range(1..=10))]
     pub num_args: u8,
+}
+
+#[derive(Debug, Arbitrary)]
+struct ArbitraryFuzzProgram {
+    instructions: Vec<FuzzInstruction>,
+    #[arbitrary(with = |u: &mut arbitrary::Unstructured| u.int_in_range(0..=10))]
+    num_locals: u8,
+    #[arbitrary(with = |u: &mut arbitrary::Unstructured| u.int_in_range(1..=10))]
+    num_args: u8,
+}
+
+/// Named, decodable program seeds for the executor fuzzer.
+///
+/// `ArithmeticOverflow` exercises unchecked `i32` addition at the signed boundary; this
+/// instruction set has no checked-add opcode, so the seed does not claim to test overflow
+/// exceptions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SemanticFuzzSeed {
+    ArithmeticAdd,
+    ArithmeticDivideByZero,
+    ArithmeticOverflow,
+    MemoryLocalloc,
+    MemoryNullDereference,
+    MemoryCpblkNull,
+    ControlBranch,
+    ControlInfiniteLoop,
+    StackDeep,
+    StackUnderflow,
+    StackDup,
+}
+
+impl SemanticFuzzSeed {
+    pub const ALL: [Self; 11] = [
+        Self::ArithmeticAdd,
+        Self::ArithmeticDivideByZero,
+        Self::ArithmeticOverflow,
+        Self::MemoryLocalloc,
+        Self::MemoryNullDereference,
+        Self::MemoryCpblkNull,
+        Self::ControlBranch,
+        Self::ControlInfiniteLoop,
+        Self::StackDeep,
+        Self::StackUnderflow,
+        Self::StackDup,
+    ];
+
+    const fn id(self) -> u8 {
+        match self {
+            Self::ArithmeticAdd => 0,
+            Self::ArithmeticDivideByZero => 1,
+            Self::ArithmeticOverflow => 2,
+            Self::MemoryLocalloc => 3,
+            Self::MemoryNullDereference => 4,
+            Self::MemoryCpblkNull => 5,
+            Self::ControlBranch => 6,
+            Self::ControlInfiniteLoop => 7,
+            Self::StackDeep => 8,
+            Self::StackUnderflow => 9,
+            Self::StackDup => 10,
+        }
+    }
+
+    fn from_id(id: u8) -> Option<Self> {
+        Self::ALL.get(id as usize).copied()
+    }
+
+    pub const fn file_name(self) -> &'static str {
+        match self {
+            Self::ArithmeticAdd => "seed_program_arithmetic_add",
+            Self::ArithmeticDivideByZero => "seed_program_arithmetic_div_zero",
+            Self::ArithmeticOverflow => "seed_program_arithmetic_overflow",
+            Self::MemoryLocalloc => "seed_program_memory_localloc",
+            Self::MemoryNullDereference => "seed_program_memory_null_deref",
+            Self::MemoryCpblkNull => "seed_program_memory_cpblk_null",
+            Self::ControlBranch => "seed_program_control_branch",
+            Self::ControlInfiniteLoop => "seed_program_control_infinite_loop",
+            Self::StackDeep => "seed_program_stack_deep",
+            Self::StackUnderflow => "seed_program_stack_underflow",
+            Self::StackDup => "seed_program_stack_dup",
+        }
+    }
+
+    pub fn encode(self) -> Vec<u8> {
+        let mut bytes = b"DVMSEED1".to_vec();
+        bytes.push(self.id());
+        bytes
+    }
+
+    pub fn program(self) -> FuzzProgram {
+        use FuzzInstruction as I;
+        let instructions = match self {
+            Self::ArithmeticAdd => vec![I::LdcI4(42), I::LdcI4(1), I::Add, I::Pop, I::Ret],
+            Self::ArithmeticDivideByZero => {
+                vec![I::LdcI4(10), I::LdcI4(0), I::Div, I::Pop, I::Ret]
+            }
+            Self::ArithmeticOverflow => {
+                vec![I::LdcI4(i32::MAX), I::LdcI4(1), I::Add, I::Pop, I::Ret]
+            }
+            Self::MemoryLocalloc => vec![
+                I::LdcI4(4),
+                I::ConvI,
+                I::Localloc,
+                I::Dup,
+                I::LdcI4(1234),
+                I::StindI4,
+                I::LdindI4,
+                I::Pop,
+                I::Ret,
+            ],
+            Self::MemoryNullDereference => vec![I::Ldnull, I::LdindI4, I::Ret],
+            Self::MemoryCpblkNull => {
+                vec![I::Ldnull, I::Ldnull, I::LdcI4(10), I::Cpblk, I::Ret]
+            }
+            Self::ControlBranch => {
+                vec![I::LdcI4(1), I::Brtrue(1), I::Pop, I::Ret]
+            }
+            Self::ControlInfiniteLoop => vec![I::Br(-1)],
+            Self::StackDeep => {
+                let mut instructions = Vec::with_capacity(101);
+                for _ in 0..50 {
+                    instructions.push(I::LdcI4(0));
+                }
+                instructions.extend(std::iter::repeat_n(I::Pop, 50));
+                instructions.push(I::Ret);
+                instructions
+            }
+            Self::StackUnderflow => vec![I::Pop, I::Ret],
+            Self::StackDup => vec![I::LdcI4(42), I::Dup, I::Add, I::Pop, I::Ret],
+        };
+        FuzzProgram {
+            instructions,
+            num_locals: 0,
+            num_args: 1,
+        }
+    }
+}
+
+impl<'a> Arbitrary<'a> for FuzzProgram {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        if u.peek_bytes(8) == Some(&b"DVMSEED1"[..]) {
+            let _ = u.bytes(8)?;
+            let id = u.arbitrary::<u8>()?;
+            return SemanticFuzzSeed::from_id(id)
+                .map(SemanticFuzzSeed::program)
+                .ok_or(arbitrary::Error::IncorrectFormat);
+        }
+
+        let raw = ArbitraryFuzzProgram::arbitrary(u)?;
+        Ok(Self {
+            instructions: raw.instructions,
+            num_locals: raw.num_locals,
+            num_args: raw.num_args,
+        })
+    }
 }
 
 impl FuzzInstruction {
@@ -568,14 +730,21 @@ pub fn execute_cil_program(program: FuzzProgram) {
     execute_cil_program_with_loader(program, get_loader());
 }
 
+pub fn execute_cil_program_with_loader(program: FuzzProgram, loader: Arc<AssemblyLoader>) {
+    let _ = execute_cil_program_with_loader_result(program, loader);
+}
+
 #[cfg_attr(
     not(feature = "multithreading"),
-    expect(
+    allow(
         clippy::arc_with_non_send_sync,
-        reason = "fuzz execution is confined to the invoking corpus thread; VM APIs require Arc"
+        reason = "single-threaded fuzz execution uses VM APIs that require Arc"
     )
 )]
-pub fn execute_cil_program_with_loader(program: FuzzProgram, loader: Arc<AssemblyLoader>) {
+fn execute_cil_program_with_loader_result(
+    program: FuzzProgram,
+    loader: Arc<AssemblyLoader>,
+) -> Result<ExecutorResult, crate::error::VmError> {
     let shared = Arc::new(SharedGlobalState::new(loader.clone()));
 
     // Build a minimal Resolution with one type and one static void method
@@ -664,7 +833,12 @@ pub fn execute_cil_program_with_loader(program: FuzzProgram, loader: Arc<Assembl
             local_variables: vec![],
             initialize_locals: true,
         },
-        instructions: vec![Instruction::LoadArgument(0), Instruction::Return],
+        instructions: vec![
+            Instruction::LoadArgument(0),
+            Instruction::Pop,
+            Instruction::LoadArgument(0),
+            Instruction::Return,
+        ],
         data_sections: vec![],
     };
     methods.push(MethodSource::User(UserMethod::Definition(res.push_method(
@@ -769,7 +943,7 @@ pub fn execute_cil_program_with_loader(program: FuzzProgram, loader: Arc<Assembl
                 local_variables: vec![],
                 initialize_locals: true,
             },
-            instructions: vec![Instruction::Return],
+            instructions: vec![Instruction::LoadNull, Instruction::Pop, Instruction::Return],
             data_sections: vec![],
         };
         methods.push(MethodSource::User(UserMethod::Definition(res.push_method(
@@ -806,37 +980,300 @@ pub fn execute_cil_program_with_loader(program: FuzzProgram, loader: Arc<Assembl
 
     let mut executor = Executor::new(shared);
     executor.instruction_budget = Some(10000); // Prevent infinite loops
-    if executor.entrypoint(entrypoint).is_err() {
-        return;
-    }
+    #[cfg(test)]
+    let _trace_target_guard = FuzzEntrypointTraceGuard::install(entrypoint.clone());
+    let setup = executor.entrypoint(entrypoint);
+    run_after_entrypoint_setup(&mut executor, setup)
+}
 
-    let _result = executor.run();
+#[cfg(test)]
+struct FuzzEntrypointTraceGuard;
+
+#[cfg(test)]
+impl FuzzEntrypointTraceGuard {
+    fn install(target: MethodDescription) -> Self {
+        crate::dispatch::FUZZ_ENTRYPOINT_TRACE_TARGET.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            assert!(
+                slot.is_none(),
+                "fuzz entrypoint trace target is already set"
+            );
+            *slot = Some(target);
+        });
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for FuzzEntrypointTraceGuard {
+    fn drop(&mut self) {
+        crate::dispatch::FUZZ_ENTRYPOINT_TRACE_TARGET.with(|slot| {
+            slot.borrow_mut().take();
+        });
+    }
+}
+
+#[cfg(test)]
+struct FuzzAllMethodTraceGuard;
+
+#[cfg(test)]
+impl FuzzAllMethodTraceGuard {
+    fn install() -> Self {
+        crate::dispatch::FUZZ_CAPTURE_ALL_METHOD_IPS.with(|capture| {
+            assert!(
+                !capture.replace(true),
+                "all-method fuzz trace is already enabled"
+            );
+        });
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for FuzzAllMethodTraceGuard {
+    fn drop(&mut self) {
+        crate::dispatch::FUZZ_CAPTURE_ALL_METHOD_IPS.with(|capture| capture.set(false));
+    }
+}
+
+fn run_after_entrypoint_setup(
+    executor: &mut Executor,
+    setup: Result<(), crate::error::VmError>,
+) -> Result<ExecutorResult, crate::error::VmError> {
+    setup?;
+    Ok(executor.run())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Helper to build and execute a FuzzProgram with given instructions.
-    fn run_program(instructions: Vec<FuzzInstruction>, num_locals: u8, num_args: u8) {
+    struct FuzzRun {
+        result: ExecutorResult,
+        instruction_ips: Vec<usize>,
+        dispatched_method_ips: Vec<(String, String, usize)>,
+    }
+
+    /// Builds, installs and executes a program, retaining the real executor outcome and every
+    /// instruction pointer dispatched by the execution engine.
+    fn run_program(instructions: Vec<FuzzInstruction>, num_locals: u8, num_args: u8) -> FuzzRun {
+        let loader = if cfg!(miri) {
+            get_mock_loader()
+        } else {
+            get_loader()
+        };
+        run_program_with_loader(instructions, num_locals, num_args, loader)
+    }
+
+    fn run_program_with_loader(
+        instructions: Vec<FuzzInstruction>,
+        num_locals: u8,
+        num_args: u8,
+        loader: Arc<AssemblyLoader>,
+    ) -> FuzzRun {
         let program = FuzzProgram {
             instructions,
             num_locals,
             num_args,
         };
-
-        if cfg!(miri) {
-            execute_cil_program_with_loader(program, get_mock_loader());
-        } else {
-            execute_cil_program(program);
+        crate::dispatch::FUZZ_EXECUTED_INSTRUCTION_IPS.with(|ips| ips.borrow_mut().clear());
+        crate::dispatch::FUZZ_DISPATCHED_METHOD_IPS.with(|events| events.borrow_mut().clear());
+        let result = execute_cil_program_with_loader_result(program, loader)
+            .expect("fuzz regression entrypoint must install successfully");
+        let instruction_ips = crate::dispatch::FUZZ_EXECUTED_INSTRUCTION_IPS
+            .with(|ips| std::mem::take(&mut *ips.borrow_mut()));
+        let dispatched_method_ips = crate::dispatch::FUZZ_DISPATCHED_METHOD_IPS
+            .with(|events| std::mem::take(&mut *events.borrow_mut()));
+        FuzzRun {
+            result,
+            instruction_ips,
+            dispatched_method_ips,
         }
+    }
+
+    fn assert_reached(run: &FuzzRun, expected_ips: &[usize]) {
+        for ip in expected_ips {
+            assert!(
+                run.instruction_ips.contains(ip),
+                "instruction at IL index {ip} did not execute; trace: {:?}; outcome: {:?}",
+                run.instruction_ips,
+                run.result
+            );
+        }
+    }
+
+    fn assert_completed(run: &FuzzRun) {
+        assert!(
+            matches!(run.result, ExecutorResult::Exited(0)),
+            "program did not return successfully: {:?}; trace: {:?}",
+            run.result,
+            run.instruction_ips
+        );
+    }
+
+    fn assert_failed_in_vm(run: &FuzzRun) {
+        assert!(
+            matches!(
+                run.result,
+                ExecutorResult::Threw(_) | ExecutorResult::Error(_)
+            ),
+            "expected a managed exception or host VM error, got {:?}",
+            run.result
+        );
+    }
+
+    #[test]
+    fn named_arithmetic_memory_and_branch_seeds_decode_and_execute_as_intended() {
+        use FuzzInstruction as I;
+
+        let decode = |seed: SemanticFuzzSeed| {
+            let bytes = seed.encode();
+            FuzzProgram::arbitrary(&mut arbitrary::Unstructured::new(&bytes))
+                .expect("named semantic seed must decode")
+        };
+
+        let arithmetic = decode(SemanticFuzzSeed::ArithmeticAdd);
+        assert_eq!(
+            arithmetic.instructions,
+            vec![I::LdcI4(42), I::LdcI4(1), I::Add, I::Pop, I::Ret],
+            "arithmetic seed must decode to the documented operands and operation"
+        );
+        let arithmetic_run = run_program(arithmetic.instructions, 0, 1);
+        assert_reached(&arithmetic_run, &[0, 1, 2, 3, 4]);
+        assert_completed(&arithmetic_run);
+
+        let overflow = decode(SemanticFuzzSeed::ArithmeticOverflow);
+        assert_eq!(
+            overflow.instructions,
+            vec![I::LdcI4(i32::MAX), I::LdcI4(1), I::Add, I::Pop, I::Ret,],
+            "overflow seed is unchecked boundary addition followed by stack cleanup"
+        );
+        let overflow_run = run_program(overflow.instructions, 0, 1);
+        assert_reached(&overflow_run, &[0, 1, 2, 3, 4]);
+        assert_completed(&overflow_run);
+
+        let memory = decode(SemanticFuzzSeed::MemoryLocalloc);
+        assert_eq!(
+            memory.instructions,
+            vec![
+                I::LdcI4(4),
+                I::ConvI,
+                I::Localloc,
+                I::Dup,
+                I::LdcI4(1234),
+                I::StindI4,
+                I::LdindI4,
+                I::Pop,
+                I::Ret,
+            ],
+            "memory seed must allocate four bytes and perform the stated indirect write/read"
+        );
+        let memory_run = run_program(memory.instructions, 0, 1);
+        assert_reached(&memory_run, &(0..9).collect::<Vec<_>>());
+        assert_completed(&memory_run);
+
+        let branch = decode(SemanticFuzzSeed::ControlBranch);
+        assert_eq!(
+            branch.instructions,
+            vec![I::LdcI4(1), I::Brtrue(1), I::Pop, I::Ret],
+            "branch seed must take the true branch over the Pop"
+        );
+        let branch_run = run_program(branch.instructions, 0, 1);
+        assert_eq!(
+            branch_run.instruction_ips,
+            vec![0, 1, 3],
+            "true branch must skip instruction 2 and reach the return"
+        );
+        assert_completed(&branch_run);
+
+        let stack_deep = decode(SemanticFuzzSeed::StackDeep);
+        let mut expected_deep = vec![I::LdcI4(0); 50];
+        expected_deep.extend(std::iter::repeat_n(I::Pop, 50));
+        expected_deep.push(I::Ret);
+        assert_eq!(
+            stack_deep.instructions, expected_deep,
+            "deep-stack seed must push fifty values before popping them"
+        );
+        let stack_deep_run = run_program(stack_deep.instructions, 0, 1);
+        assert_reached(&stack_deep_run, &(0..101).collect::<Vec<_>>());
+        assert_completed(&stack_deep_run);
+
+        let stack_dup = decode(SemanticFuzzSeed::StackDup);
+        assert_eq!(
+            stack_dup.instructions,
+            vec![I::LdcI4(42), I::Dup, I::Add, I::Pop, I::Ret],
+            "dup seed duplicates and adds one value, then empties the void method stack"
+        );
+        let stack_dup_run = run_program(stack_dup.instructions, 0, 1);
+        assert_reached(&stack_dup_run, &[0, 1, 2, 3, 4]);
+        assert_completed(&stack_dup_run);
+    }
+
+    #[test]
+    #[cfg_attr(
+        not(feature = "multithreading"),
+        allow(
+            clippy::arc_with_non_send_sync,
+            reason = "the setup control stays on one thread and VM APIs require Arc"
+        )
+    )]
+    fn entrypoint_setup_failure_is_reported_instead_of_running() {
+        let shared = Arc::new(SharedGlobalState::new(get_mock_loader()));
+        let mut executor = Executor::new(shared);
+        executor.instruction_budget = Some(0);
+        let setup_error =
+            crate::error::VmError::Execution(crate::error::ExecutionError::InvalidIP(usize::MAX));
+        let result = run_after_entrypoint_setup(&mut executor, Err(setup_error));
+        assert!(
+            matches!(
+                result,
+                Err(crate::error::VmError::Execution(
+                    crate::error::ExecutionError::InvalidIP(ip)
+                )) if ip == usize::MAX
+            ),
+            "entrypoint setup errors must propagate without running the executor"
+        );
+    }
+
+    #[test]
+    fn instruction_trace_excludes_constructor_helper_ips() {
+        // The constructor executes IP 3, while FuzzMain branches over its own IP 3.
+        let _method_trace_guard = FuzzAllMethodTraceGuard::install();
+        let run = run_program_with_loader(
+            vec![
+                FuzzInstruction::Newobj(0),
+                FuzzInstruction::Pop,
+                FuzzInstruction::Br(1),
+                FuzzInstruction::LdcI4(0),
+                FuzzInstruction::Ret,
+            ],
+            0,
+            1,
+            get_mock_loader(),
+        );
+        assert!(
+            run.dispatched_method_ips
+                .iter()
+                .any(|(type_name, method, ip)| {
+                    type_name == "FuzzType" && method == ".ctor" && *ip == 3
+                }),
+            "constructor control must really execute its IP 3; result: {:?}; dispatches: {:?}",
+            run.result,
+            run.dispatched_method_ips,
+        );
+        assert_reached(&run, &[0, 1, 2, 4]);
+        assert!(
+            !run.instruction_ips.contains(&3),
+            "the constructor's IP 3 must not satisfy reachability for skipped FuzzMain IP 3"
+        );
+        assert_completed(&run);
     }
 
     /// Simple arithmetic: push two i32s, add, return.
     /// Exercises stack push/pop and arithmetic under miri.
     #[test]
     fn miri_arithmetic_add() {
-        run_program(
+        let run = run_program(
             vec![
                 FuzzInstruction::LdcI4(10),
                 FuzzInstruction::LdcI4(20),
@@ -847,12 +1284,14 @@ mod tests {
             0,
             1,
         );
+        assert_reached(&run, &[0, 1, 2, 3, 4]);
+        assert_completed(&run);
     }
 
-    /// Division by zero should not cause UB — must be caught as a managed exception.
+    /// Division by zero exercises VM error/managed-throw handling without panic or UB.
     #[test]
     fn miri_div_by_zero() {
-        run_program(
+        let run = run_program(
             vec![
                 FuzzInstruction::LdcI4(42),
                 FuzzInstruction::LdcI4(0),
@@ -863,18 +1302,22 @@ mod tests {
             0,
             1,
         );
+        assert_reached(&run, &[0, 1, 2]);
+        assert_failed_in_vm(&run);
     }
 
     /// Stack underflow: pop from empty stack should not cause UB.
     #[test]
     fn miri_stack_underflow() {
-        run_program(vec![FuzzInstruction::Pop, FuzzInstruction::Ret], 0, 1);
+        let run = run_program(vec![FuzzInstruction::Pop, FuzzInstruction::Ret], 0, 1);
+        assert_reached(&run, &[0]);
+        assert_failed_in_vm(&run);
     }
 
     /// Load and store locals with various types.
     #[test]
     fn miri_locals() {
-        run_program(
+        let run = run_program(
             vec![
                 FuzzInstruction::LdcI4(99),
                 FuzzInstruction::Stloc(0),
@@ -889,24 +1332,30 @@ mod tests {
             3,
             1,
         );
+        assert_reached(&run, &(0..9).collect::<Vec<_>>());
+        assert_completed(&run);
     }
 
     /// Load null and throw — exception path should not trigger UB.
     #[test]
     fn miri_null_throw() {
-        run_program(vec![FuzzInstruction::Ldnull, FuzzInstruction::Throw], 0, 1);
+        let run = run_program(vec![FuzzInstruction::Ldnull, FuzzInstruction::Throw], 0, 1);
+        assert_reached(&run, &[0, 1]);
+        assert_failed_in_vm(&run);
     }
 
     /// Branch forward past end — should be clamped safely.
     #[test]
     fn miri_branch_out_of_bounds() {
-        run_program(vec![FuzzInstruction::Br(127), FuzzInstruction::Ret], 0, 1);
+        let run = run_program(vec![FuzzInstruction::Br(127), FuzzInstruction::Ret], 0, 1);
+        assert_reached(&run, &[0, 1]);
+        assert_completed(&run);
     }
 
     /// Dup and arithmetic on floats.
     #[test]
     fn miri_float_ops() {
-        run_program(
+        let run = run_program(
             vec![
                 FuzzInstruction::LdcR8(std::f64::consts::PI),
                 FuzzInstruction::Dup,
@@ -917,13 +1366,15 @@ mod tests {
             0,
             1,
         );
+        assert_reached(&run, &[0, 1, 2, 3, 4]);
+        assert_completed(&run);
     }
 
     /// Load and store via IntPtr local to exercise native-int paths.
     #[test]
     fn miri_native_int_local() {
         // Local index 6 maps to IntPtr in the local_types array
-        run_program(
+        let run = run_program(
             vec![
                 FuzzInstruction::LdcI4(0),
                 FuzzInstruction::Stloc(6),
@@ -934,24 +1385,30 @@ mod tests {
             7,
             1,
         );
+        assert_reached(&run, &[0, 1, 2, 3, 4]);
+        assert_completed(&run);
     }
 
     /// Empty program — just return.
     #[test]
     fn miri_empty_program() {
-        run_program(vec![], 0, 1);
+        let run = run_program(vec![], 0, 1);
+        assert_reached(&run, &[0]);
+        assert_completed(&run);
     }
 
     /// Program without return — should handle falling off the end.
     #[test]
     fn miri_no_return_error() {
-        run_program(vec![FuzzInstruction::LdcI4(42)], 0, 1);
+        let run = run_program(vec![FuzzInstruction::LdcI4(42)], 0, 1);
+        assert_reached(&run, &[0]);
+        assert_failed_in_vm(&run);
     }
 
     /// Bitwise operations should not trigger UB.
     #[test]
     fn miri_bitwise_ops() {
-        run_program(
+        let run = run_program(
             vec![
                 FuzzInstruction::LdcI4(0xFF),
                 FuzzInstruction::LdcI4(0x0F),
@@ -965,12 +1422,14 @@ mod tests {
             0,
             1,
         );
+        assert_reached(&run, &(0..8).collect::<Vec<_>>());
+        assert_completed(&run);
     }
 
     /// Test localloc and indirect memory access.
     #[test]
     fn miri_localloc_indirect() {
-        run_program(
+        let run = run_program(
             vec![
                 FuzzInstruction::LdcI4(4),
                 FuzzInstruction::ConvI,
@@ -985,12 +1444,14 @@ mod tests {
             0,
             1,
         );
+        assert_reached(&run, &(0..9).collect::<Vec<_>>());
+        assert_completed(&run);
     }
 
     /// Test array creation and element access.
     #[test]
     fn miri_array_ops() {
-        run_program(
+        let run = run_program(
             vec![
                 FuzzInstruction::LdcI4(10),
                 FuzzInstruction::Newarr,
@@ -1006,5 +1467,7 @@ mod tests {
             0,
             1,
         );
+        assert_reached(&run, &(0..10).collect::<Vec<_>>());
+        assert_completed(&run);
     }
 }

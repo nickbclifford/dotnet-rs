@@ -947,18 +947,28 @@ fn test_managed_ptr_offset_oob() {
 }
 
 #[test]
-fn test_managed_ptr_offset_valid() {
+fn ptr_arith_managed_ptr_offset_valid() {
     with_test_gc_context(|gc_handle| {
         let storage = HeapStorage::Str(crate::string::CLRString::from("test"));
         let obj = ObjectRef::new(gc_handle, storage);
+        let expected = obj.with_data(|data| {
+            assert!(data.len() > 4);
+            assert_ne!(
+                data[0], data[4],
+                "the selected byte distinguishes a no-op offset"
+            );
+            data[4]
+        });
 
         let ptr = managed_ptr_to_heap_object_start(obj);
-
-        // Offset by 4 bytes (end of object) should be valid
-        // SAFETY: F10.RawMemoryAccessValid — the 4-byte offset stays within the live 8-byte UTF-16 payload of `obj`, and the result is never dereferenced.
-        unsafe {
-            ptr.offset(4);
-        }
+        // SAFETY: F10.RawMemoryAccessValid — the result remains within the live string payload;
+        // `with_data` below reads only the byte at this checked in-bounds displacement.
+        let displaced = unsafe { ptr.offset(4) };
+        assert_eq!(displaced.pointer_offset(), PointerOffset::Managed(4));
+        // SAFETY: F10.RawMemoryAccessValid — `displaced` retains `obj`, and one byte at offset
+        // four lies inside the payload whose length was checked above.
+        let actual = unsafe { displaced.with_data(1, |bytes| bytes[0]) };
+        assert_eq!(actual, expected);
     });
 }
 
@@ -996,6 +1006,68 @@ impl<'gc> ManagedPtrResolver<'gc> for FrameHomeResolver {
     fn frame_home_block(&self, serial: FrameHomeSerial) -> Option<(NonNull<u8>, usize)> {
         (serial == self.serial).then_some((self.base, self.len))
     }
+}
+
+#[test]
+fn ptr_arith_live_offset_preserves_provenance_strict_core() {
+    let mut storage = [0x10, 0x11, 0xA5, 0x33];
+    let base = NonNull::new(storage.as_mut_ptr()).expect("array pointers are non-null");
+
+    let unmanaged = ManagedPtr::new(
+        Some(base),
+        TypeDescription::NULL,
+        None,
+        false,
+        Some(ByteOffset::ZERO),
+    );
+    // SAFETY: F10.RawMemoryAccessValid — the pointer starts at `storage` and the displacement
+    // remains within its four-byte allocation.
+    let unmanaged_offset = unsafe { unmanaged.offset(2) };
+    assert_eq!(
+        // SAFETY: F10.RawMemoryAccessValid — the returned pointer has a live in-bounds byte.
+        unsafe { unmanaged_offset.with_data(1, |bytes| bytes[0]) },
+        0xA5
+    );
+
+    let serial = FrameHomeSerial::FIRST;
+    let frame_home = frame_home_ptr(base, serial, 0);
+    // SAFETY: F10.RawMemoryAccessValid — the cached pointer and logical displacement stay in the
+    // live frame-home block supplied to the access resolver below.
+    let frame_home_offset = unsafe { frame_home.offset(2) };
+    assert_eq!(
+        // SAFETY: F10.FrameHomeChecked — the resolver supplies the live block, and the
+        // returned offset selects the initialized byte at index two.
+        unsafe {
+            frame_home_offset.with_frame_home_data(
+                &FrameHomeResolver {
+                    serial,
+                    base,
+                    len: storage.len(),
+                },
+                1,
+                |bytes| bytes[0],
+            )
+        }
+        .unwrap(),
+        0xA5
+    );
+
+    let static_ptr = ManagedPtr::new_static(
+        Some(base),
+        TypeDescription::NULL,
+        TypeDescription::NULL,
+        GenericLookup::default(),
+        false,
+        ByteOffset::ZERO,
+    );
+    // SAFETY: F10.RawMemoryAccessValid — the pointer starts at `storage` and the displacement
+    // remains within its four-byte allocation.
+    let static_offset = unsafe { static_ptr.offset(2) };
+    assert_eq!(
+        // SAFETY: F10.RawMemoryAccessValid — the returned static pointer has a live in-bounds byte.
+        unsafe { static_offset.with_data(1, |bytes| bytes[0]) },
+        0xA5
+    );
 }
 
 fn frame_home_ptr(
@@ -1547,25 +1619,37 @@ fn thread_static_pointer_serialization_preserves_owner() {
 
 #[test]
 fn test_managed_ptr_unmanaged_roundtrip_miri() {
-    let mut buf = [0u8; ManagedPtr::SIZE];
-    let addr = 0xAAAA_BBBB_CCCC_DDDDusize;
-    let ptr = ManagedPtr::new(
-        NonNull::new(std::ptr::without_provenance_mut(addr)),
-        TypeDescription::NULL,
-        None,
-        false,
-        None,
-    );
+    let addresses = [0, 1usize << (usize::BITS - 1), usize::MAX];
+    for addr in addresses {
+        let mut buf = [0u8; ManagedPtr::SIZE];
+        let ptr = ManagedPtr::new(
+            NonNull::new(std::ptr::without_provenance_mut(addr)),
+            TypeDescription::NULL,
+            None,
+            false,
+            None,
+        );
 
-    ptr.write(&mut buf);
-    // SAFETY: F10.RawMemoryAccessValid — `buf` holds a complete Unmanaged encoding just written by `write`; decoding forms the address without accessing it.
-    let info = unsafe { ManagedPtr::read_resolved_unchecked(&buf, &NO_MANAGED_BASES) }.unwrap();
-    assert_eq!(
-        info.address,
-        NonNull::new(std::ptr::without_provenance_mut(addr))
-    );
-    assert_eq!(info.origin, PointerOrigin::Unmanaged);
-    assert_eq!(info.offset.checked_byte_offset().unwrap().as_usize(), addr);
+        ptr.write(&mut buf);
+        // SAFETY: F10.RawMemoryAccessValid — `buf` holds a complete Unmanaged encoding just written by `write`; decoding
+        // forms the address without accessing it.
+        let metadata = unsafe { ManagedPtr::read_metadata_unchecked(&buf) }.unwrap();
+        assert_eq!(metadata.origin, PointerOrigin::Unmanaged);
+        assert_eq!(metadata.offset, PointerOffset::Unmanaged(addr));
+
+        // SAFETY: F10.RawMemoryAccessValid — `buf` holds the same complete encoding; the resolver only reconstructs address
+        // bits for this test, and none of these synthetic addresses is dereferenced.
+        let resolved =
+            unsafe { ManagedPtr::read_resolved_unchecked(&buf, &NO_MANAGED_BASES) }.unwrap();
+        assert_eq!(
+            resolved.address,
+            NonNull::new(std::ptr::without_provenance_mut(addr))
+        );
+        assert_eq!(
+            resolved.offset.checked_byte_offset().unwrap().as_usize(),
+            addr
+        );
+    }
 }
 
 #[test]

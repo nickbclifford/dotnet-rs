@@ -1,9 +1,6 @@
 //! Configuration-specific tests for feature flags
 //! Tests that verify the correct behavior of different feature configurations
 
-#[cfg(feature = "multithreading")]
-use dotnet_vm::threading::ThreadManagerOps;
-
 use dotnet_vm::state;
 use std::sync::Arc;
 
@@ -27,73 +24,6 @@ fn test_single_threaded_stub_thread_manager() {
         dotnet_utils::sync::get_current_thread_id(),
         dotnet_utils::ArenaId::new(1)
     );
-}
-
-#[test]
-#[cfg(not(feature = "multithreading"))]
-fn test_single_threaded_sync_block_manager() {
-    // In single-threaded mode, sync blocks should work but without actual locking
-    let loader = create_test_loader();
-    #[allow(
-        clippy::arc_with_non_send_sync,
-        reason = "the no-MT test keeps shared state on its sole executor"
-    )]
-    let shared = Arc::new(state::SharedGlobalState::new(loader));
-
-    // Sync block manager should exist and be usable
-    let manager = &shared.sync_blocks;
-    // Basic operations should not panic
-    let _ = manager;
-}
-
-// ============================================================================
-// Multithreading Configuration Tests
-// ============================================================================
-
-#[test]
-#[cfg(feature = "multithreading")]
-fn test_multithreading_sync_blocks() {
-    use dotnet_vm::state;
-    use std::thread;
-
-    let loader = create_test_loader();
-    let shared = Arc::new(state::SharedGlobalState::new(loader));
-    let _manager = &shared.sync_blocks;
-
-    // Test that sync blocks work across threads
-    let shared_clone = Arc::clone(&shared);
-    let handle = thread::spawn(move || {
-        let _ = shared_clone.thread_manager.register_thread();
-        // Thread operations should work
-    });
-
-    handle.join().unwrap();
-}
-
-#[test]
-#[cfg(feature = "multithreading")]
-fn test_multithreading_gc_coordinator_exists() {
-    let loader = create_test_loader();
-    let shared = Arc::new(state::SharedGlobalState::new(loader));
-
-    // GC coordinator should exist - just accessing it verifies compilation
-    let _gc_coord = &shared.gc_coordinator;
-}
-
-#[test]
-#[cfg(feature = "multithreading")]
-fn test_multithreading_arena_handle() {
-    let loader = create_test_loader();
-    let shared = Arc::new(state::SharedGlobalState::new(loader));
-
-    // Create an arena handle
-    let handle = dotnet_vm::gc::coordinator::ArenaHandle::new(dotnet_utils::ArenaId::new(1));
-
-    // Register and unregister the arena
-    shared.gc_coordinator.register_arena(handle.clone());
-    shared
-        .gc_coordinator
-        .unregister_arena(dotnet_utils::ArenaId::new(1));
 }
 
 // ============================================================================

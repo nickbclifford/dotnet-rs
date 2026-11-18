@@ -801,6 +801,9 @@ mod tests {
     use super::*;
     use std::sync::atomic::Ordering;
 
+    #[repr(align(8))]
+    struct AlignedBytes<const N: usize>([u8; N]);
+
     #[test]
     fn test_sizes() {
         let mut data = [0u64; 2];
@@ -820,9 +823,8 @@ mod tests {
         // SAFETY: F10.RawMemoryAccessValid — `ptr2` points into the test's live two-word backing allocation.
         let second = unsafe { StandardAtomicAccess::load_atomic_sized(ptr2, 2, Ordering::SeqCst) };
         assert_eq!(second, 0xBBCC);
-        // On little-endian, 0xBBCC at offset 2 in u64:
-        // [00 00 CC BB 00 00 00 00]
-        assert_eq!((data[0] >> 16) as u16, 0xBBCC);
+        let first_word = data[0].to_ne_bytes();
+        assert_eq!(&first_word[2..4], &0xBBCCu16.to_ne_bytes());
 
         // SAFETY: F10.RawMemoryAccessValid — Offset four is within the test's live two-word backing allocation.
         let ptr4 = unsafe { ptr.add(4) };
@@ -831,7 +833,8 @@ mod tests {
         // SAFETY: F10.RawMemoryAccessValid — `ptr4` points into the test's live two-word backing allocation.
         let fourth = unsafe { StandardAtomicAccess::load_atomic_sized(ptr4, 4, Ordering::SeqCst) };
         assert_eq!(fourth, 0xDEADBEEF);
-        assert_eq!((data[0] >> 32) as u32, 0xDEADBEEF);
+        let first_word = data[0].to_ne_bytes();
+        assert_eq!(&first_word[4..8], &0xDEADBEEFu32.to_ne_bytes());
 
         // SAFETY: F10.RawMemoryAccessValid — Offset eight is the start of the second word in the allocation.
         let ptr8 = unsafe { ptr.add(8) };
@@ -968,25 +971,30 @@ mod tests {
 
     #[test]
     #[cfg(feature = "memory-validation")]
-    fn test_mixed_access_validation() {
-        let mut val = 0u64;
-        let ptr = ptr::from_mut(&mut val).cast::<u8>();
+    fn test_mixed_access_validation_records_both_access_kinds() {
+        let mut val = Box::new(0u64);
+        let ptr = ptr::from_mut(&mut *val).cast::<u8>();
+        let tracked_ptr = ptr.cast_const();
+        ATOMIC_LOCATIONS.with(|locations| locations.borrow_mut().remove(&tracked_ptr));
+        NON_ATOMIC_LOCATIONS.with(|locations| locations.borrow_mut().remove(&tracked_ptr));
         // SAFETY: F4.WidthAligned — `ptr` points to the live local `u64` used by this test.
         unsafe {
-            // This should not panic, but it will populate ATOMIC_LOCATIONS
             StandardAtomicAccess::store_atomic_sized(ptr, 8, 42, Ordering::SeqCst);
-            // This trigger a warning (not a panic)
-            validate_atomic_access(ptr, false);
+            validate_atomic_access(tracked_ptr, false);
         }
+        assert!(ATOMIC_LOCATIONS.with(|locations| locations.borrow().contains(&tracked_ptr)));
+        assert!(NON_ATOMIC_LOCATIONS.with(|locations| locations.borrow().contains(&tracked_ptr)));
+        ATOMIC_LOCATIONS.with(|locations| locations.borrow_mut().remove(&tracked_ptr));
+        NON_ATOMIC_LOCATIONS.with(|locations| locations.borrow_mut().remove(&tracked_ptr));
     }
 
     #[test]
     #[cfg(feature = "memory-validation")]
     #[should_panic(expected = "Alignment violation")]
     fn test_validate_alignment_rejects_misaligned_pointer() {
-        let data = [0u8; 16];
+        let data = AlignedBytes([0u8; 16]);
         // SAFETY: F10.RawMemoryAccessValid — Offset one remains within the live sixteen-byte allocation.
-        let misaligned_ptr = unsafe { data.as_ptr().add(1) };
+        let misaligned_ptr = unsafe { data.0.as_ptr().add(1) };
         crate::validate_alignment(misaligned_ptr, 4);
     }
 
@@ -995,9 +1003,9 @@ mod tests {
     fn test_load_field_misaligned_falls_back_in_mt() {
         // Misaligned 8-byte load: not atomically expressible, falls back to memcpy.
         // Caller must hold an external lock; here we just verify correct data is returned.
-        let mut data = [0u8; 16];
-        data[1..9].copy_from_slice(&0x0102030405060708u64.to_ne_bytes());
-        let ptr = data.as_ptr();
+        let mut data = AlignedBytes([0u8; 16]);
+        data.0[1..9].copy_from_slice(&0x0102030405060708u64.to_ne_bytes());
+        let ptr = data.0.as_ptr();
         // SAFETY: F10.RawMemoryAccessValid — offset 1 is within the 16-byte `data` array.
         let misaligned_ptr = unsafe { ptr.add(1) };
         // SAFETY: F10.RawMemoryAccessValid — bytes 1..9 lie within `data`, and this thread is its only user.
@@ -1021,9 +1029,9 @@ mod tests {
     #[test]
     #[cfg(not(feature = "multithreading"))]
     fn test_load_field_misaligned_falls_back_non_mt() {
-        let mut data = [0u8; 8];
-        data[1..5].copy_from_slice(&[0x11, 0x22, 0x33, 0x44]);
-        let ptr = data.as_ptr();
+        let mut data = AlignedBytes([0u8; 8]);
+        data.0[1..5].copy_from_slice(&[0x11, 0x22, 0x33, 0x44]);
+        let ptr = data.0.as_ptr();
         // SAFETY: F10.RawMemoryAccessValid — offset 1 is within the 8-byte `data` array.
         let misaligned_ptr = unsafe { ptr.add(1) };
         // SAFETY: F10.RawMemoryAccessValid — bytes 1..5 lie within `data`, and this thread is its only user.

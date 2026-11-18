@@ -7,7 +7,10 @@ use dotnet_utils::{
 };
 use dotnet_value::{
     CLRString, HeapStorage, ObjectRef,
-    pointer::{FrameHomeSerial, ManagedPtr, ManagedPtrResolver, PointerOrigin, StaticMetadata},
+    pointer::{
+        FrameHomeSerial, ManagedPtr, ManagedPtrResolver, PointerOffset, PointerOrigin,
+        StaticMetadata,
+    },
 };
 use gc_arena::{Arena, Rootable};
 use libfuzzer_sys::fuzz_target;
@@ -167,6 +170,10 @@ fuzz_target!(|input: RoundtripInput| {
         let mut buf = [0u8; ManagedPtr::SIZE];
         let mut storage = [0u8; STORAGE_LEN];
         let storage_base = NonNull::new(storage.as_mut_ptr()).expect("array pointers are non-null");
+        let unmanaged_input = match &input {
+            RoundtripInput::Unmanaged { address } => Some(*address),
+            _ => None,
+        };
 
         // The string supplies 512 bytes of live GC-owned storage, so every
         // `u8` offset remains in bounds for both GC-backed origin variants.
@@ -288,6 +295,25 @@ fuzz_target!(|input: RoundtripInput| {
         // SAFETY: F10.RawMemoryAccessValid — `buf` was just populated with a complete ManagedPtr encoding.
         let read_info =
             unsafe { ManagedPtr::read_metadata_unchecked(&buf) }.expect("Roundtrip read failed");
+
+        if let Some(address) = unmanaged_input {
+            assert_eq!(word1, address, "unmanaged address bits must be serialized");
+            assert_eq!(
+                read_info.offset,
+                PointerOffset::Unmanaged(address),
+                "unmanaged offset must decode to the original address bits"
+            );
+            let resolver = FuzzResolver { storage_base };
+            // SAFETY: F10.RawMemoryAccessValid — the complete encoding was written above;
+            // resolution only forms the unmanaged address and the test never dereferences it.
+            let resolved = unsafe { ManagedPtr::read_resolved_unchecked(&buf, &resolver) }
+                .expect("valid unmanaged address must resolve");
+            assert_eq!(
+                resolved.address.map(|pointer| pointer.as_ptr().addr()),
+                (address != 0).then_some(address),
+                "unmanaged address must roundtrip, with zero retaining null semantics"
+            );
+        }
 
         let info_norm = info.origin.normalize();
         let read_info_norm = read_info.origin.normalize();

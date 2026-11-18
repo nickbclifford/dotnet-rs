@@ -26,12 +26,12 @@ class AdvisoryTests(unittest.TestCase):
 
     def test_manifest_matrix_exactly_once(self):
         rows = miri.rows(self.data)
-        self.assertEqual(len(rows), 54)
-        for config, count in [("default-features", 38), ("no-features", 8), ("multithreading", 8)]:
-            shards = [r["shard"] for r in rows if r["configuration"] == config]
-            self.assertEqual(len(shards), count)
-            self.assertEqual(len(set(shards)), count)
-            self.assertTrue(all(r["crate"] == miri.CONFIGS[config][0] for r in rows if r["configuration"] == config))
+        for config, (crate, _, prefix, _) in miri.CONFIGS.items():
+            selected = [row for row in rows if row["configuration"] == config]
+            expected = {key for key in self.data if key.startswith(prefix)}
+            self.assertEqual({row["shard"] for row in selected}, expected)
+            self.assertEqual(len(selected), len(expected))
+            self.assertTrue(all(row["crate"] == crate for row in selected))
 
     def test_workflow_discovers_each_configuration_once_without_suppressing_shards(self):
         workflow = (ROOT / ".github/workflows/miri.yml").read_text()
@@ -53,12 +53,13 @@ class AdvisoryTests(unittest.TestCase):
         self.assertIn("needs: advisory-matrix", shards)
         self.assertNotIn("advisory-discovery", shards)
 
-    def test_manifest_rejects_missing_extra_duplicate_and_invalid(self):
+    def test_manifest_rejects_missing_family_duplicate_and_invalid(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "m.json"
             variants = []
-            missing = dict(self.data); missing.pop("A01"); variants.append(json.dumps(missing))
-            extra = dict(self.data); extra["A39"] = "extra"; variants.append(json.dumps(extra))
+            missing = {key: value for key, value in self.data.items() if not key.startswith("A")}; variants.append(json.dumps(missing))
+            for key in ("Z01", "A00", "A001", "A-1", "A"):
+                extra = dict(self.data); extra[key] = "extra"; variants.append(json.dumps(extra))
             duplicate = dict(self.data); duplicate["A02"] = duplicate["A01"]; variants.append(json.dumps(duplicate))
             invalid = dict(self.data); invalid["V01"] = "--ignored"; variants.append(json.dumps(invalid))
             variants.append('{"A01":"first", "A01":"second"}')
@@ -68,8 +69,27 @@ class AdvisoryTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         miri.manifest(path)
 
+    def test_registered_growth_is_accepted_but_unlisted_cases_are_rejected(self):
+        original = {"A01": "assembly::first", "V01": "vm::first"}
+        extended = {**original, "A02": "assembly::added"}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "manifest.json"
+            path.write_text(json.dumps(extended))
+            data = miri.manifest(path)
+        self.assertEqual(data, extended)
+        self.assertEqual(
+            [row["shard"] for row in miri.rows(data) if row["configuration"] == "default-features"],
+            ["A01", "A02"],
+        )
+        listed = listing(["assembly::first", "assembly::added"])
+        miri.verify_lists("default-features", data, listed, listing([]))
+        with self.assertRaises(ValueError):
+            miri.verify_lists("default-features", original, listed, listing([]))
+        with self.assertRaises(ValueError):
+            miri.verify_lists("default-features", data, listing(["assembly::first"]), listing([]))
+
     def test_listing_union_and_empty_ancillary(self):
-        for config, (_, _, prefix, _, _) in miri.CONFIGS.items():
+        for config, (_, _, prefix, _) in miri.CONFIGS.items():
             with self.subTest(config=config):
                 names = [name for key, name in self.data.items() if key.startswith(prefix)]
                 ancillary = 1 if prefix == "A" else 2
@@ -121,7 +141,7 @@ else:
             fake.chmod(0o755)
             env = dict(os.environ, PATH=tmp + os.pathsep + os.environ["PATH"], CALLS=tmp + "/calls",
                        LIST=tmp + "/list", IGNORED=tmp + "/ignored")
-            for config, (crate, features, prefix, _, filters) in miri.CONFIGS.items():
+            for config, (crate, features, prefix, filters) in miri.CONFIGS.items():
                 names = [name for key, name in self.data.items() if key.startswith(prefix)]
                 anc = 1 if prefix == "A" else 2
                 Path(env["LIST"]).write_text(listing(names, anc)); Path(env["IGNORED"]).write_text(listing([], anc))

@@ -56,8 +56,8 @@ files and fails on drift.
 
 | Job | Source of truth |
 |---|---|
-| `doc-lint` | Its steps in `ci.yml`: `xtask verify-slots`, the pointer, selector, aggregate and cross-arena manifest script tests, `pointer_provenance.sh verify-batches`, `scripts/check_doc_drift.sh`, and the intra-doc-link check |
-| `format`, `clippy`, `test` | `cargo fmt`; `SHARED_FEATURE_MATRIX` in `xtask/src/main.rs` (`cargo run -p xtask -- matrix test-features`). The `test` job also runs the native-effects compile-fail doctests and `scripts/check_vm_effects_compile_fail.py` in no-features and multithreading, and the multithreading hang-probe filters listed in its YAML step. |
+| `doc-lint` | Its steps in `ci.yml`: `xtask verify-slots`, the pointer, selector, aggregate, cross-arena manifest and build-invocation guard script tests, `pointer_provenance.sh verify-batches`, `scripts/check_doc_drift.sh`, and the intra-doc-link check |
+| `format`, `clippy`, `test` | `cargo fmt`; `SHARED_FEATURE_MATRIX` in `xtask/src/main.rs` (`cargo run -p xtask -- matrix test-features`). The `test` job also runs native-effects and FieldType compile-fail doctests with diagnostic checking through `scripts/check_vm_effects_compile_fail.py` (the `field-types` mode selects FieldType) in no-features and multithreading, and the multithreading hang-probe filters listed in its YAML step. |
 | `clippy-release` | No features and `multithreading` with `--release`, so code under `cfg(not(debug_assertions))` is linted |
 | `provenance-lints` | `scripts/check_provenance_lints.sh` |
 | `loom` | `crates/dotnet-vm/tests/loom_stw.rs`, `crates/dotnet-vm/tests/loom_workers.rs` and `crates/dotnet-runtime-memory/tests/loom_shared_tables.rs` |
@@ -123,8 +123,8 @@ rustup toolchain install "$NIGHTLY" --component miri
 export MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"
 ```
 
-Every Miri job uses these flags. The one exception is the isolated strict-core cross-arena
-singleton, which appends `-Zmiri-strict-provenance`.
+Every Miri job uses these flags. The isolated library transport and live-pointer offset controls
+add `-Zmiri-strict-provenance`.
 
 ### `check.sh`
 
@@ -137,6 +137,9 @@ configuration.
   `bench-instrumentation`, `heap-diagnostics` and `deadlock-diagnostics` guards.
 
 Neither mode runs Miri, Loom, doc lint or fuzz replay, and neither selects by changed paths.
+Run feature configurations sequentially, or give concurrent runs separate `CARGO_TARGET_DIR`
+directories. CLI subprocess tests use Cargo's executable path; different feature builds sharing
+that directory can replace the executable while another configuration is testing it.
 In the fuzzing configuration, fixture cases that require native interop, including the
 console-writing multicast, nested-filter, substring and weak-reference cases, are ignored because the fuzzing
 sandbox denies P/Invoke. The multicast path-selection test is disabled in that configuration
@@ -184,11 +187,11 @@ bash scripts/pointer_provenance.sh batch --configuration multithreading --batch 
 bash scripts/pointer_provenance.sh controls --configuration no-features --shard 1
 ```
 
-Ignored probes run only through the diagnostic entrypoint, one probe per process. Known-UB probes
-must not run natively; `--lane native` is permitted only for p19.
+Ignored probes run only through the diagnostic entrypoint, one probe per process. Native
+diagnostics require explicit catalog permission; the remaining diagnostic-only probes use Miri.
 
 ```bash
-bash scripts/pointer_provenance.sh diagnostic --configuration no-features --probe p19_ldelem_negative_index
+bash scripts/pointer_provenance.sh diagnostic --configuration no-features --probe p12_ldsflda_convu_stind_static
 ```
 
 ### Loom
@@ -285,8 +288,8 @@ show that tests ran; check the job logs.
 
 ### Strict provenance
 
-No Miri lane runs `-Zmiri-strict-provenance` except the isolated cross-arena transport-core
-singleton. The VM still exposes and reconstructs provenance for unmanaged addresses. The
+The isolated cross-arena transport and live-pointer offset controls run with
+`-Zmiri-strict-provenance`. The VM still exposes and reconstructs provenance for unmanaged addresses. The
 `provenance-lints` job makes every such cast explicit (`expose_provenance` /
 `with_exposed_provenance*`); it is a source-level check, not Miri evidence.
 

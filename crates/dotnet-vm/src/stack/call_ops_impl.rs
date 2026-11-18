@@ -834,15 +834,17 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
 
         let receiver_type = concrete_from_type_description_and_lookup(this_type, lookup);
         let interface_type = concrete_from_method_parent(base_method);
-        if self
+        match self
             .loader()
             .comparer()
             .is_assignable_to(&receiver_type, &interface_type)
         {
-            return None;
+            Ok(true) => None,
+            Ok(false) => Some(
+                self.throw_by_name_with_message("System.InvalidCastException", INVALID_CAST_MSG),
+            ),
+            Err(error) => Some(StepResult::Error(error.into())),
         }
-
-        Some(self.throw_by_name_with_message("System.InvalidCastException", INVALID_CAST_MSG))
     }
 
     #[inline]

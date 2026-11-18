@@ -182,23 +182,15 @@ impl<'gc> ObjectInner<'gc> {
         self.storage.validate_resurrection_invariants();
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, any(feature = "memory-validation", debug_assertions)))]
     pub(crate) fn with_magic_for_tests(
         storage: HeapStorage<'gc>,
         owner_id: ArenaId,
         magic: u64,
     ) -> Self {
-        #[cfg(any(feature = "memory-validation", debug_assertions))]
-        {
-            let mut inner = Self::new(storage, owner_id);
-            inner.magic = ValidationTag::new(magic);
-            inner
-        }
-        #[cfg(not(any(feature = "memory-validation", debug_assertions)))]
-        {
-            let _ = magic;
-            Self::new(storage, owner_id)
-        }
+        let mut inner = Self::new(storage, owner_id);
+        inner.magic = ValidationTag::new(magic);
+        inner
     }
 }
 
@@ -1042,12 +1034,6 @@ mod tests {
     #[cfg(feature = "multithreading")]
     use std::sync::atomic::AtomicBool;
     #[cfg(feature = "multithreading")]
-    use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
-
-    #[cfg(feature = "multithreading")]
-    static NEXT_TEST_ARENA_ID: AtomicU64 = AtomicU64::new(2000);
-
-    #[cfg(feature = "multithreading")]
     struct EmptyTestRoot;
     #[cfg(feature = "multithreading")]
     gc_arena::static_collect!(EmptyTestRoot);
@@ -1083,7 +1069,7 @@ mod tests {
 
     #[cfg(feature = "multithreading")]
     fn next_test_arena_id() -> ArenaId {
-        ArenaId::new(NEXT_TEST_ARENA_ID.fetch_add(1, AtomicOrdering::Relaxed))
+        crate::test_helpers::next_test_arena_id()
     }
 
     #[cfg(feature = "multithreading")]
@@ -1310,10 +1296,9 @@ mod tests {
         unregister_arena(arena_id);
     }
 
-    /// Verify that `ObjectPtr::as_heap_storage` panics when the magic number is
-    /// corrupt.  `validate_magic` is active under `debug_assertions` (always
-    /// true for `cargo test`), so no feature gate is needed here.
+    /// Verify that `ObjectPtr::as_heap_storage` panics when magic validation is enabled.
     #[test]
+    #[cfg(any(debug_assertions, feature = "memory-validation"))]
     fn test_object_ptr_as_heap_storage_corrupt_magic_panics() {
         use std::panic::{AssertUnwindSafe, catch_unwind};
 

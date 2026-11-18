@@ -1,13 +1,16 @@
 #!/usr/bin/env cargo
-//! Tool to generate a seed corpus for the CIL bytecode fuzzer from existing test fixtures.
+//! Tool to generate opaque mutation seeds from fixture instruction descriptions.
 //!
 //! Usage:
 //!   cargo run --manifest-path crates/dotnet-vm/fuzz/tools/Cargo.toml
 //!
-//! This extracts method bodies from compiled test fixtures and saves them as binary seeds.
+//! The target does not parse these bytes as CIL. Use `generate_structured_corpus` for named
+//! programs with a checked `FuzzProgram` decode.
 use dotnetdll::prelude::*;
 use std::{
-    fs, io::Write, path::{Path, PathBuf},
+    fs,
+    io::Write,
+    path::{Path, PathBuf},
     process::Command,
 };
 
@@ -31,12 +34,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("\nProcessing: {}", cs_path.display());
 
         match build_fixture(cs_path, &workspace_root) {
-            Ok(dll_path) => {
-                match extract_method_bodies(&dll_path, &corpus_dir, &mut seed_count) {
-                    Ok(extracted) => println!("  Extracted {} method bodies", extracted),
-                    Err(e) => eprintln!("  Warning: Failed to extract: {}", e),
-                }
-            }
+            Ok(dll_path) => match extract_method_bodies(&dll_path, &corpus_dir, &mut seed_count) {
+                Ok(extracted) => println!("  Extracted {} method bodies", extracted),
+                Err(e) => eprintln!("  Warning: Failed to extract: {}", e),
+            },
             Err(e) => eprintln!("  Warning: Failed to build: {}", e),
         }
     }
@@ -66,7 +67,10 @@ fn find_workspace_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
     }
 }
 
-fn build_fixture(cs_path: &Path, workspace_root: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
+fn build_fixture(
+    cs_path: &Path,
+    workspace_root: &Path,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let file_name = cs_path.file_stem().unwrap().to_str().unwrap();
     let output_dir = workspace_root
         .join("target")
@@ -94,7 +98,10 @@ fn build_fixture(cs_path: &Path, workspace_root: &Path) -> Result<PathBuf, Box<d
             &format!("-p:TestFile={}", absolute_file.display()),
             "-o",
             output_dir.to_str().unwrap(),
-            &format!("-p:IntermediateOutputPath={}/", output_dir.join("obj").display()),
+            &format!(
+                "-p:IntermediateOutputPath={}/",
+                output_dir.join("obj").display()
+            ),
         ])
         .current_dir(workspace_root.join("crates/dotnet-cli"))
         .status()?;
@@ -136,16 +143,15 @@ fn extract_method_bodies(
             }
 
             let seed_file = corpus_dir.join(format!(
-                "seed_{}_{:03}_{:04}_{}",
+                "opaque_fixture_{}_{:03}_{:04}_{}",
                 dll_path.file_stem().unwrap().to_str().unwrap(),
                 type_idx,
                 method_idx,
                 sanitize_filename(&method.name)
             ));
 
-            // Write deterministic binary seed bytes for this method.
-            let mut file = fs::File::create(&seed_file)?;
-            file.write_all(&il_bytes)?;
+            // The target treats these bytes as mutation material; it does not parse CIL text.
+            write_seed_without_replacing(&seed_file, &il_bytes)?;
 
             extracted += 1;
             *seed_count += 1;
@@ -168,6 +174,26 @@ fn encode_seed_bytes(instructions: &[Instruction]) -> Vec<u8> {
         }
     }
     bytes
+}
+
+fn write_seed_without_replacing(
+    path: &Path,
+    bytes: &[u8],
+) -> Result<(), Box<dyn std::error::Error>> {
+    if path.exists() {
+        let existing = fs::read(path)?;
+        if existing == bytes {
+            return Ok(());
+        }
+        return Err(format!(
+            "refusing to replace existing corpus input {}",
+            path.display()
+        )
+        .into());
+    }
+    let mut file = fs::File::create(path)?;
+    file.write_all(bytes)?;
+    Ok(())
 }
 
 fn sanitize_filename(name: &str) -> String {

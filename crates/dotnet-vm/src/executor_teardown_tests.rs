@@ -6,6 +6,8 @@
 
 use super::*;
 use dotnet_assemblies::AssemblyLoader;
+#[cfg(feature = "multithreading")]
+use dotnet_value::{CLRString, HeapStorage};
 use gc_arena::{Collect, Gc};
 use std::sync::{
     Arc as StdArc,

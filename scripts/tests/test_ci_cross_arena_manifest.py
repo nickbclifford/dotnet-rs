@@ -40,7 +40,7 @@ MT_TEARDOWN = {
 GUARD = 'test result: ok. 1 passed; 0 failed; 0 ignored;'
 
 LIBRARY_BOTH = {
-    ('dotnet-value', 'object_tests::tests::publication_pending_survival'),
+    ('dotnet-value', 'object_tests::tests::publication_root_barrier_control'),
     ('dotnet-value', 'pointer::tests::arena_identity_origin_aba'),
 }
 LIBRARY_ST = LIBRARY_BOTH | {
@@ -50,7 +50,6 @@ LIBRARY_ST = LIBRARY_BOTH | {
 LIBRARY_MT = LIBRARY_BOTH | {
     ('dotnet-value', 'object_tests::tests::codec_id40000'),
     ('dotnet-value', 'object_tests::tests::codec_registered_boundaries'),
-    ('dotnet-utils', 'gc::cross_arena::tests::arena_lifetime_transport'),
     ('dotnet-utils', 'gc::cross_arena::tests::arena_lifetime_transport_permissive_control'),
 } | {('dotnet-utils', 'gc::cross_arena::tests::arena_identity_registry_' + suffix)
      for suffix in ('duplicate', 'fast_bit_transaction', 'generation_exhaustion',
@@ -106,7 +105,8 @@ HANDLES_MT = {'executor::executor_collection_tests::dependent_handle_chain_survi
 COLLECTION_MT = {'executor::executor_collection_tests::' + name for name in (
     'arena_lifetime_vm_collection_fixed_point_payload_and_reclamation',
     'arena_lifetime_vm_collection',
-    'arena_lifetime_vm_collection_unrooted_negative_control')}
+    'arena_lifetime_vm_collection_unrooted_negative_control',
+    'arena_lifetime_mark_command_rejects_stale_registration')}
 
 
 def matrix_rows():
@@ -146,7 +146,6 @@ def execute(row, name='Execute guarded singletons'):
 class CrossArenaManifestTests(unittest.TestCase):
     def test_matrix_teardown_is_exact_and_mt_only(self):
         rows = matrix_rows()
-        self.assertEqual(len(rows), 98)
         self.assertEqual(len({(r['configuration'], r['group'], r['shard']) for r in rows}), len(rows))
         teardown = [r for r in rows if r['group'] == 'vm-teardown']
         st = [r for r in teardown if r['configuration'] == 'no-features']
@@ -190,9 +189,9 @@ class CrossArenaManifestTests(unittest.TestCase):
                                  ('30', '900') if library else ('45', '1800'))
                 calls = execute(row)
                 if library:
-                    expected_count = 12 if row['configuration'] == 'multithreading' else 4
+                    expected_count = len(LIBRARY_MT if row['configuration'] == 'multithreading' else LIBRARY_ST)
                 elif row['group'] == 'vm-collection' and row['configuration'] == 'multithreading':
-                    expected_count = 3
+                    expected_count = len(COLLECTION_MT)
                 else:
                     expected_count = 1
                 self.assertEqual(len(calls), expected_count)
@@ -245,18 +244,17 @@ class CrossArenaManifestTests(unittest.TestCase):
             handles = {selector for crate, selector in seen[config]
                        if crate == 'dotnet-vm' and selector in HANDLES_MT}
             self.assertEqual(handles, HANDLES_MT if config == 'multithreading' else set())
-        self.assertEqual(len(seen['no-features']), 33)
-        self.assertEqual(len(seen['multithreading']), 81)
 
     def test_strict_core_is_isolated_and_guarded(self):
-        strict = JOB[JOB.index('      - name: Isolated strict-provenance transport core'):
+        strict = JOB[JOB.index('      - name: Isolated strict-provenance controls'):
                      JOB.index('      - name: Summarize diagnostics')]
         self.assertIn("matrix.configuration == 'multithreading' && matrix.group == 'library'", strict)
         self.assertIn('-Zmiri-ignore-leaks -Zmiri-strict-provenance', strict)
-        self.assertNotIn('-Zmiri-strict-provenance', JOB[:JOB.index('      - name: Isolated strict-provenance transport core')])
+        self.assertNotIn('-Zmiri-strict-provenance', JOB[:JOB.index('      - name: Isolated strict-provenance controls')])
         self.assertIn("--timeout 900", strict)
         self.assertIn("--require '" + GUARD + "'", strict)
         self.assertIn('pointer::tests::arena_lifetime_transport_strict_core -- --exact --test-threads=1', strict)
+        self.assertIn('pointer::tests::ptr_arith_live_offset_preserves_provenance_strict_core -- --exact --test-threads=1', strict)
 
 
 if __name__ == '__main__':

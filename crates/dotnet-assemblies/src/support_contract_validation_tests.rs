@@ -122,6 +122,16 @@ fn assert_context(violation: &ContractViolation, type_name: &str, field_name: &s
     assert_eq!(violation.field_name.as_ref(), field_name);
 }
 
+fn assert_reason_contains(violation: &ContractViolation, parts: &[&str]) {
+    for part in parts {
+        assert!(
+            violation.reason.contains(part),
+            "diagnostic must contain {part:?}; got {:?}",
+            violation.reason
+        );
+    }
+}
+
 #[test]
 fn generated_runtime_slot_ids_are_required() {
     assert_eq!(
@@ -134,7 +144,7 @@ fn generated_runtime_slot_ids_are_required() {
         FixedArg::String(Some("Handle".into())),
         FixedArg::Enum("DotnetRs.OtherId".into(), IntegralParam::Int32(1)),
         FixedArg::Enum("DotnetRs.RuntimeSlotId".into(), IntegralParam::Int16(1)),
-        FixedArg::Integral(IntegralParam::Int32(22)),
+        FixedArg::Integral(IntegralParam::Int32(i32::MIN)),
     ] {
         assert!(parse_runtime_slot_id(&[argument]).is_err());
     }
@@ -144,14 +154,17 @@ fn generated_runtime_slot_ids_are_required() {
 fn unknown_id_is_a_contextual_contract_violation() {
     let resolution = synthetic_slot_resolution(
         "System.RuntimeTypeHandle",
-        SyntheticSlotId::Unknown(22),
+        SyntheticSlotId::Unknown(i32::MIN),
         handle_field(),
         1,
         true,
     );
     let violation = contract_violation(bare_loader().validate_support_contract(&resolution));
     assert_context(&violation, "System.RuntimeTypeHandle", "_value");
-    assert_eq!(violation.reason.as_ref(), "unknown RuntimeSlot ID 22");
+    assert_reason_contains(
+        &violation,
+        &["unknown RuntimeSlot ID", &i32::MIN.to_string()],
+    );
 }
 
 #[test]
@@ -159,9 +172,14 @@ fn missing_id_reports_its_exact_expected_slot() {
     let resolution = Resolution::new(Module::new("fake-support.dll"));
     let violation = contract_violation(bare_loader().validate_support_contract(&resolution));
     assert_context(&violation, "System.RuntimeTypeHandle", "_value");
-    assert_eq!(
-        violation.reason.as_ref(),
-        "missing RuntimeSlot ID RuntimeTypeHandleValue: expected System.RuntimeTypeHandle._value with signature IntPtr"
+    assert_reason_contains(
+        &violation,
+        &[
+            "missing RuntimeSlot ID",
+            "RuntimeTypeHandleValue",
+            "System.RuntimeTypeHandle._value",
+            "IntPtr",
+        ],
     );
 }
 
@@ -176,9 +194,15 @@ fn duplicate_annotations_report_the_id_and_both_locations() {
     );
     let violation = contract_violation(bare_loader().validate_support_contract(&resolution));
     assert_context(&violation, "System.RuntimeTypeHandle", "_value");
-    assert_eq!(
-        violation.reason.as_ref(),
-        "duplicate RuntimeSlot ID RuntimeTypeHandleValue: found System.RuntimeTypeHandle._value, already used by System.RuntimeTypeHandle._value; expected System.RuntimeTypeHandle._value"
+    assert_reason_contains(
+        &violation,
+        &[
+            "duplicate RuntimeSlot ID",
+            "RuntimeTypeHandleValue",
+            "found System.RuntimeTypeHandle._value",
+            "already used by System.RuntimeTypeHandle._value",
+            "expected System.RuntimeTypeHandle._value",
+        ],
     );
 }
 
@@ -197,9 +221,14 @@ fn misplaced_id_reports_actual_and_expected_locations() {
     );
     let violation = contract_violation(bare_loader().validate_support_contract(&resolution));
     assert_context(&violation, "DotnetRs.Extra", "not_consumed_by_rust");
-    assert_eq!(
-        violation.reason.as_ref(),
-        "RuntimeSlot ID DelegateTarget is misplaced: found DotnetRs.Extra.not_consumed_by_rust, expected System.Delegate._target"
+    assert_reason_contains(
+        &violation,
+        &[
+            "DelegateTarget",
+            "misplaced",
+            "found DotnetRs.Extra.not_consumed_by_rust",
+            "expected System.Delegate._target",
+        ],
     );
 }
 
@@ -214,9 +243,15 @@ fn exact_signature_mismatch_reports_expected_and_found_shape() {
     );
     let violation = contract_violation(bare_loader().validate_support_contract(&resolution));
     assert_context(&violation, "DotnetRs.PropertyInfo", "getter");
-    assert_eq!(
-        violation.reason.as_ref(),
-        "RuntimeSlot ID PropertyInfoGetter has an exact signature mismatch at DotnetRs.PropertyInfo.getter: expected Class(ReflectionMethodInfo), found by_ref=false type Base(String)"
+    assert_reason_contains(
+        &violation,
+        &[
+            "PropertyInfoGetter",
+            "signature mismatch",
+            "DotnetRs.PropertyInfo.getter",
+            "expected Class(ReflectionMethodInfo)",
+            "found by_ref=false type Base(String)",
+        ],
     );
 }
 
@@ -233,9 +268,15 @@ fn wrong_staticness_reports_actual_and_expected_staticness() {
     );
     let violation = contract_violation(bare_loader().validate_support_contract(&resolution));
     assert_context(&violation, "System.RuntimeTypeHandle", "_value");
-    assert_eq!(
-        violation.reason.as_ref(),
-        "RuntimeSlot ID RuntimeTypeHandleValue has wrong staticness at System.RuntimeTypeHandle._value: expected instance field, found static field"
+    assert_reason_contains(
+        &violation,
+        &[
+            "RuntimeTypeHandleValue",
+            "wrong staticness",
+            "System.RuntimeTypeHandle._value",
+            "expected instance field",
+            "found static field",
+        ],
     );
 }
 
@@ -250,10 +291,7 @@ fn runtime_slot_field_without_used_implicitly_is_a_contract_violation() {
     );
     let violation = contract_violation(bare_loader().validate_support_contract(&resolution));
     assert_context(&violation, "System.RuntimeTypeHandle", "_value");
-    assert_eq!(
-        violation.reason.as_ref(),
-        "fields marked [RuntimeSlot(...)] must carry [UsedImplicitly]"
-    );
+    assert_reason_contains(&violation, &["RuntimeSlot", "UsedImplicitly"]);
 }
 
 enum StubUse {

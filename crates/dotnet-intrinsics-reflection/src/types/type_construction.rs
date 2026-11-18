@@ -1,6 +1,8 @@
 use crate::ReflectionIntrinsicHost;
 use dotnet_macros::dotnet_intrinsic;
 #[cfg(feature = "generic-constraint-validation")]
+use dotnet_types::error::TypeResolutionError;
+#[cfg(feature = "generic-constraint-validation")]
 use dotnet_types::generics::ConcreteType;
 use dotnet_types::{
     error::ExecutionError, generics::GenericLookup, members::MethodDescription,
@@ -212,11 +214,17 @@ pub fn activator_target<'gc, T: ReflectionIntrinsicHost<'gc>>(
             .map_err(|error| StepResult::Error(error.into()))?
     };
     let selected =
-        crate::invoke_args::select_constructor(ctx, &td, &lookup, &args).map_err(|()| {
-            ctx.throw_by_name_with_message(
-                "System.Reflection.AmbiguousMatchException",
-                "Ambiguous match found.",
-            )
+        crate::invoke_args::select_constructor(ctx, &td, &lookup, &args).map_err(|error| {
+            match error {
+                crate::invoke_args::ConstructorSelectionError::Ambiguous => ctx
+                    .throw_by_name_with_message(
+                        "System.Reflection.AmbiguousMatchException",
+                        "Ambiguous match found.",
+                    ),
+                crate::invoke_args::ConstructorSelectionError::Resolution(error) => {
+                    StepResult::Error(error)
+                }
+            }
         })?;
     if let Some(method) = selected {
         if td.definition().flags.abstract_type {
@@ -346,16 +354,22 @@ pub fn handle_make_generic_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
                 .map(|rt| rt.to_concrete(loader.as_ref()))
                 .collect();
             let lookup = GenericLookup::new(new_generics_concrete);
-            if let Err(_e) = lookup.validate_constraints(
+            if let Err(error) = lookup.validate_constraints(
                 td.resolution.clone(),
                 loader.as_ref(),
                 &td.definition().generic_parameters,
                 false,
             ) {
-                return ctx.throw_by_name_with_message(
-                    "System.TypeLoadException",
-                    "Generic constraint violation.",
-                );
+                return match error {
+                    // Type.MakeGenericType reports rejected type arguments as ArgumentException.
+                    TypeResolutionError::GenericConstraintViolation(_) => ctx
+                        .throw_by_name_with_message(
+                            "System.ArgumentException",
+                            "Generic constraint violation.",
+                        ),
+                    // Metadata lookup/comparison failures are host errors, not an argument mismatch.
+                    error => StepResult::Error(error.into()),
+                };
             }
         }
 

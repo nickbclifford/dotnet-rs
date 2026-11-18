@@ -316,14 +316,17 @@ mod tests {
         let service = CanonicalService::default();
         service.open(ArenaId::from(7));
         let wait = service.request(&key("a")).expect("admitted");
+        let completion = wait.completion.clone();
         let request = service.take_batch(8).pop().expect("queued");
         service.finish(request, Ok(()));
+        assert_eq!(completion.outcome(), Some(Ok(())));
         drop(wait);
         assert!(service.take_batch(8).is_empty());
         // The published success is not rolled back by the later drop, and a new request for
         // the key (a table miss would be the caller's retry) is admitted normally.
         let wait = service.request(&key("a")).expect("admitted");
         assert!(!wait.ready());
+        assert_eq!(completion.outcome(), Some(Ok(())));
     }
 
     #[test]
@@ -344,8 +347,9 @@ mod tests {
     fn canonical_homing_shutdown() {
         let service = CanonicalService::default();
         service.open(ArenaId::from(7));
-        let queued = service.request(&key("queued")).expect("admitted");
         let running = service.request(&key("running")).expect("admitted");
+        let running_completion = running.completion.clone();
+        let queued = service.request(&key("queued")).expect("admitted");
         let mut batch = service.take_batch(1);
         assert_eq!(batch.len(), 1);
         service.close();
@@ -359,6 +363,11 @@ mod tests {
         );
         // Finishing a request after shutdown cannot overwrite the terminal result.
         service.finish(batch.pop().expect("taken"), Ok(()));
+        assert_eq!(
+            running_completion.outcome(),
+            Some(Err(CanonicalError::Shutdown)),
+            "shutdown remains terminal when in-flight work finishes"
+        );
         assert!(matches!(
             service.request(&key("late")),
             Err(CanonicalError::Shutdown)

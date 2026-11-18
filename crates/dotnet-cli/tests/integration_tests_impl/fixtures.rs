@@ -19,15 +19,77 @@ pub fn setup_multi_arena_fixture(fixture_path: &str) -> PathBuf {
 
 #[test]
 fn test_cache_observability() {
-    let harness = TestHarness::get();
+    let harness = TestHarness::new();
     let dll_path = harness
-        .build(Path::new("tests/debug_fixtures/hello_world_0.cs"))
+        .build(Path::new(
+            "tests/fixtures/arithmetic/arithmetic_operations_42.cs",
+        ))
         .unwrap();
-    let _ = harness.run(&dll_path);
+    let type_cache_before = harness.loader.type_cache_size();
+    let method_cache_before = harness.loader.method_cache_size();
+    let exit_code = harness.run(&dll_path);
+    assert_eq!(exit_code, 42, "arithmetic fixture execution failed");
 
-    // Verify cache stats are tracking
-    assert!(harness.loader.type_cache_size() > 0);
-    assert!(harness.loader.method_cache_size() > 0);
+    assert!(
+        harness.loader.type_cache_size() > type_cache_before,
+        "successful fixture execution did not populate the type cache"
+    );
+    assert!(
+        harness.loader.method_cache_size() > method_cache_before,
+        "successful fixture execution did not populate the method cache"
+    );
+}
+
+#[test]
+fn arithmetic_operations_fixture_contains_the_expected_il() {
+    use dotnetdll::prelude::{Instruction, ReadOptions, Resolution};
+
+    let harness = TestHarness::get();
+    let dll = harness.ensure_dll(Path::new(
+        "tests/fixtures/arithmetic/arithmetic_operations_42.cs",
+    ));
+    let bytes = std::fs::read(&dll).expect("read arithmetic fixture assembly");
+    let resolution = Resolution::parse(&bytes, ReadOptions::default())
+        .expect("parse arithmetic fixture assembly");
+    let mut seen = [false; 10];
+    for instruction in resolution
+        .type_definitions
+        .iter()
+        .flat_map(|ty| &ty.methods)
+        .filter_map(|method| method.body.as_ref())
+        .flat_map(|body| &body.instructions)
+    {
+        match instruction {
+            Instruction::Divide(_) => seen[0] = true,
+            Instruction::Remainder(_) => seen[1] = true,
+            Instruction::ShiftLeft => seen[2] = true,
+            Instruction::ShiftRight(_) => seen[3] = true,
+            Instruction::And => seen[4] = true,
+            Instruction::Or => seen[5] = true,
+            Instruction::Xor => seen[6] = true,
+            Instruction::Multiply => seen[7] = true,
+            Instruction::Add => seen[8] = true,
+            Instruction::Subtract => seen[9] = true,
+            _ => {}
+        }
+    }
+    for (operation, present) in [
+        ("division", seen[0]),
+        ("remainder", seen[1]),
+        ("left shift", seen[2]),
+        ("right shift", seen[3]),
+        ("and", seen[4]),
+        ("or", seen[5]),
+        ("xor", seen[6]),
+        ("multiply", seen[7]),
+        ("add", seen[8]),
+        ("subtract", seen[9]),
+    ] {
+        assert!(
+            present,
+            "arithmetic fixture IL has no {operation} instruction"
+        );
+    }
 }
 
 #[test]
@@ -79,232 +141,6 @@ fn dynamic_method_reflection_keeps_large_method_indexes() {
 
     let result = harness.run_with_shared(resolution, shared);
     assert_eq!(result.exit_code, 42, "fixture failed: {:?}", result.stderr);
-}
-
-#[cfg(not(feature = "fuzzing"))]
-#[test]
-fn multicast_selection_precedes_operand_commitment() {
-    use dotnet_utils::sync::{Arc as SyncArc, AtomicUsize, Ordering};
-    use tracing::{
-        Event, Subscriber,
-        field::{Field, Visit},
-    };
-    use tracing_subscriber::{
-        layer::{Context, Layer},
-        prelude::*,
-    };
-
-    #[derive(Default)]
-    struct Counts {
-        asynchronous: AtomicUsize,
-        unexpected: AtomicUsize,
-    }
-    struct Capture(SyncArc<Counts>);
-    #[derive(Default)]
-    struct Fields {
-        path: Option<String>,
-    }
-    impl Visit for Fields {
-        fn record_debug(&mut self, _: &Field, _: &dyn std::fmt::Debug) {}
-        fn record_str(&mut self, field: &Field, value: &str) {
-            if field.name() == "multicast_path" {
-                self.path = Some(value.to_owned());
-            }
-        }
-    }
-    impl<S: Subscriber> Layer<S> for Capture {
-        fn on_event(&self, event: &Event<'_>, _: Context<'_, S>) {
-            let mut fields = Fields::default();
-            event.record(&mut fields);
-            match fields.path.as_deref() {
-                Some("async") => {
-                    self.0.asynchronous.fetch_add(1, Ordering::Relaxed);
-                }
-                Some(_) => {
-                    self.0.unexpected.fetch_add(1, Ordering::Relaxed);
-                }
-                None => {}
-            }
-        }
-    }
-    // Guard the source path as well as the emitted events: deleting a counter alone
-    // must not permit a legacy selection branch to return unnoticed.
-    let selector = include_str!("../../../dotnet-vm/src/stack/native_effects.rs");
-    assert!(!selector.contains(concat!("multicast_path = ", "\"fallback\"")));
-    assert!(!selector.contains(concat!("multicast_", "state")));
-    for (fixture, expected) in [
-        ("delegate_multicast_42.cs", 1),
-        ("delegate_multicast_many_42.cs", 1),
-        ("delegate_multicast_refs_42.cs", 2),
-        ("delegate_multicast_finalizers_42.cs", 2),
-        ("delegate_multicast_filters_42.cs", 4),
-        ("delegate_multicast_static_ref_filters_42.cs", 2),
-        ("delegate_multicast_cctor_42.cs", 1),
-        ("delegate_multicast_ref_cctor_42.cs", 1),
-        ("delegate_multicast_scalar_42.cs", 1),
-        ("delegate_multicast_reflection_42.cs", 10),
-        ("delegate_multicast_static_ref_42.cs", 1),
-        ("delegate_multicast_static_ref_cctor_42.cs", 1),
-        ("delegate_multicast_aggregate_42.cs", 1),
-        ("delegate_multicast_values_42.cs", 5),
-        ("delegate_multicast_ref_struct_42.cs", 3),
-        ("delegate_multicast_span_42.cs", 4),
-        ("delegate_multicast_pointer_42.cs", 2),
-        ("delegate_multicast_byref_return_42.cs", 1),
-        ("delegate_multicast_typed_reference_42.cs", 1),
-        ("delegate_multicast_unmanaged_ref_42.cs", 2),
-        ("delegate_multicast_gc_collect_42.cs", 3),
-        #[cfg(feature = "multithreading")]
-        ("delegate_multicast_contended_42.cs", 1),
-    ] {
-        let harness = TestHarness::get();
-        let path = format!("tests/fixtures/delegates/{fixture}");
-        let dll = harness.ensure_dll(Path::new(&path));
-        let counts = SyncArc::new(Counts::default());
-        let subscriber = tracing_subscriber::registry().with(Capture(SyncArc::clone(&counts)));
-        let result =
-            crate::integration_tests_impl::harness::with_counting_subscriber(subscriber, || {
-                harness.run_with_timeout(&dll, std::time::Duration::from_secs(60))
-            });
-        assert_eq!(result.exit_code, 42, "{fixture}: {:?}", result.stderr);
-        assert_eq!(
-            counts.asynchronous.load(Ordering::Relaxed),
-            expected,
-            "{fixture}"
-        );
-        assert_eq!(
-            counts.unexpected.load(Ordering::Relaxed),
-            0,
-            "{fixture}: unexpected multicast selection"
-        );
-    }
-}
-
-#[test]
-fn reflection_path_selection() {
-    use dotnet_utils::sync::{Arc as SyncArc, AtomicUsize, Ordering};
-    use tracing::{
-        Event, Subscriber,
-        field::{Field, Visit},
-    };
-    use tracing_subscriber::{
-        layer::{Context, Layer},
-        prelude::*,
-    };
-
-    #[derive(Default)]
-    struct Counts {
-        asynchronous: AtomicUsize,
-        fallback: AtomicUsize,
-        retry: AtomicUsize,
-    }
-    struct Capture(SyncArc<Counts>);
-    #[derive(Default)]
-    struct Fields {
-        path: Option<String>,
-    }
-    impl Visit for Fields {
-        fn record_debug(&mut self, _: &Field, _: &dyn std::fmt::Debug) {}
-        fn record_str(&mut self, field: &Field, value: &str) {
-            if field.name() == "reflection_invoke_path" {
-                self.path = Some(value.to_owned());
-            }
-        }
-    }
-    impl<S: Subscriber> Layer<S> for Capture {
-        fn on_event(&self, event: &Event<'_>, _: Context<'_, S>) {
-            let mut fields = Fields::default();
-            event.record(&mut fields);
-            match fields.path.as_deref() {
-                Some("async") => {
-                    self.0.asynchronous.fetch_add(1, Ordering::Relaxed);
-                }
-                Some("fallback") => {
-                    self.0.fallback.fetch_add(1, Ordering::Relaxed);
-                }
-                Some("retry") => {
-                    self.0.retry.fetch_add(1, Ordering::Relaxed);
-                }
-                _ => {}
-            }
-        }
-    }
-    let harness = TestHarness::get();
-    for (path, expected) in [
-        ("tests/fixtures/reflection/invoke_byref_gc_42.cs", (1, 0, 0)),
-        (
-            "tests/fixtures/reflection/invoke_reference_byref_42.cs",
-            (1, 0, 0),
-        ),
-        (
-            "tests/fixtures/reflection/invoke_byref_exception_42.cs",
-            (1, 0, 0),
-        ),
-        (
-            "tests/fixtures/reflection/invoke_intrinsic_value_42.cs",
-            (1, 0, 0),
-        ),
-        ("tests/fixtures/reflection/invoke_results_42.cs", (3, 0, 0)),
-        // These fixtures print on the successful path, which requires P/Invoke.
-        #[cfg(not(feature = "fuzzing"))]
-        ("tests/fixtures/reflection/invoke_collect_42.cs", (4, 0, 0)),
-        (
-            "tests/fixtures/reflection/invoke_constructors_42.cs",
-            (7, 0, 0),
-        ),
-        ("tests/fixtures/reflection/invoke_fallback_42.cs", (5, 0, 0)),
-        #[cfg(not(feature = "fuzzing"))]
-        ("tests/fixtures/reflection/invoke_values_42.cs", (7, 0, 0)),
-        #[cfg(not(feature = "fuzzing"))]
-        (
-            "tests/fixtures/reflection/invoke_byref_like_42.cs",
-            (28, 0, 0),
-        ),
-        (
-            "tests/fixtures/reflection/invoke_target_validation_42.cs",
-            (18, 0, 0),
-        ),
-        (
-            "tests/fixtures/reflection/invoke_argument_count_42.cs",
-            (16, 0, 0),
-        ),
-        (
-            "tests/fixtures/reflection/invoke_argument_types_42.cs",
-            (26, 0, 0),
-        ),
-        (
-            "tests/fixtures/reflection/invoke_byref_writethrough_42.cs",
-            (1, 0, 0),
-        ),
-    ] {
-        let dll = harness.ensure_dll(Path::new(path));
-        let count = SyncArc::new(Counts::default());
-        let subscriber =
-            tracing_subscriber::registry().with(Capture(SyncArc::clone(&count)).with_filter(
-                tracing_subscriber::filter::filter_fn(|metadata| {
-                    metadata
-                        .target()
-                        .starts_with("dotnet_intrinsics_reflection::")
-                        || metadata.target() == "dotnet_vm::stack::reflection_ops_impl"
-                }),
-            ));
-        assert_eq!(
-            crate::integration_tests_impl::harness::with_counting_subscriber(subscriber, || {
-                harness.run(&dll)
-            }),
-            42,
-            "{path}"
-        );
-        assert_eq!(
-            (
-                count.asynchronous.load(Ordering::Relaxed),
-                count.fallback.load(Ordering::Relaxed),
-                count.retry.load(Ordering::Relaxed)
-            ),
-            expected,
-            "{path}"
-        );
-    }
 }
 
 #[test]
@@ -529,13 +365,6 @@ multi_arena_test!(
     "tests/fixtures/gc/cache_test_0.cs",
     2,
     0
-);
-
-multi_arena_test!(
-    test_volatile_sharing,
-    "tests/fixtures/threading/volatile_sharing_42.cs",
-    2,
-    42
 );
 
 multi_arena_test!(

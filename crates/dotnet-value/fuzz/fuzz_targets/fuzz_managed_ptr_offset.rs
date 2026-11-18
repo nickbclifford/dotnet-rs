@@ -35,13 +35,16 @@ fuzz_target!(|input: OffsetInput| {
     let Some(new_offset) = initial_offset.checked_add_signed(offset_delta) else {
         return;
     };
-    // Keep the whole operation within this live allocation. This makes the
-    // provenance assertion below meaningful without dereferencing the result.
+    // Keep the whole operation within this live allocation so the returned
+    // pointer can be checked with an actual read below.
     if new_offset >= STORAGE_LEN {
         return;
     }
 
     let mut storage = [0u8; STORAGE_LEN];
+    for (index, byte) in storage.iter_mut().enumerate() {
+        *byte = (index % 251) as u8;
+    }
     let base = NonNull::new(storage.as_mut_ptr()).expect("array pointers are non-null");
     let address = NonNull::new(base.as_ptr().wrapping_add(initial_offset))
         .expect("in-bounds array offset is non-null");
@@ -89,21 +92,23 @@ fuzz_target!(|input: OffsetInput| {
         "Offset mismatch"
     );
 
-    let expected_addr = original_ptr
+    let expected_addr = base.as_ptr().wrapping_add(new_offset).addr();
+    let expected_byte = storage[new_offset];
+    let result_address = new_ptr
         .into_info()
         .address
-        .expect("fixture pointer has an address")
-        .as_ptr()
-        .wrapping_offset(offset_delta)
-        .addr();
+        .expect("offset pointer has an address");
     assert_eq!(
-        new_ptr
-            .into_info()
-            .address
-            .expect("offset pointer has an address")
-            .as_ptr()
-            .addr(),
+        result_address.as_ptr().addr(),
         expected_addr,
-        "Offset must retain the live allocation's address provenance"
+        "Offset must produce the expected address within the live allocation"
+    );
+    // SAFETY: F10.RawMemoryAccessValid — the target bounded `new_offset` to the
+    // live `storage` array and `result_address` is the in-bounds result of
+    // offsetting a pointer derived from that array.
+    let actual_byte = unsafe { *result_address.as_ptr() };
+    assert_eq!(
+        actual_byte, expected_byte,
+        "offset result must read live storage"
     );
 });

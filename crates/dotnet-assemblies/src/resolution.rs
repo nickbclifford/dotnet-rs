@@ -439,7 +439,7 @@ impl AssemblyLoader {
         sig_res: ResolutionS,
         generics: &GenericLookup,
         allow_variance: bool,
-    ) -> Option<MethodDescription> {
+    ) -> Result<Option<MethodDescription>, TypeResolutionError> {
         tracing::debug!(
             "find_method_in_type_with_substitution: desc={}, name={}, generics={:?}",
             desc.type_name(),
@@ -466,7 +466,7 @@ impl AssemblyLoader {
         sig_generics: Option<&GenericLookup>,
         type_generics: Option<&GenericLookup>,
         allow_variance: bool,
-    ) -> Option<MethodDescription> {
+    ) -> Result<Option<MethodDescription>, TypeResolutionError> {
         self.comparer().find_method_in_type_internal(
             desc,
             name,
@@ -557,13 +557,17 @@ impl AssemblyLoader {
         method_ref_idx: MethodRefIndex,
         resolution: ResolutionS,
         lookup: &GenericLookup,
-    ) -> Option<MethodDescription> {
-        let corelib_res = self.get_assembly("System.Private.CoreLib").ok()?;
-        let corelib_parent = self.try_find_in_assembly(corelib_res, &parent_type.type_name())?;
-        let sig = resolution
-            .definition()
-            .method_ref_signature(method_ref_idx)
-            .ok()?;
+    ) -> Result<Option<MethodDescription>, TypeResolutionError> {
+        let Some(corelib_res) = self.get_assembly("System.Private.CoreLib").ok() else {
+            return Ok(None);
+        };
+        let Some(corelib_parent) = self.try_find_in_assembly(corelib_res, &parent_type.type_name())
+        else {
+            return Ok(None);
+        };
+        let Ok(sig) = resolution.definition().method_ref_signature(method_ref_idx) else {
+            return Ok(None);
+        };
         self.find_method_in_type_with_substitution(
             corelib_parent,
             &method_ref.name,
@@ -640,7 +644,7 @@ impl AssemblyLoader {
                         resolution.clone(),
                         generic_inst,
                         false,
-                    )
+                    )?
                     && (should_redirect_array_copy || {
                         // Has IL: method bodies may be decoded lazily, so `body` can't be used.
                         let m = stub_method.method();
@@ -730,7 +734,7 @@ impl AssemblyLoader {
                             resolution.clone(),
                             &lookup_for_substitution,
                             false,
-                        ) {
+                        )? {
                             None => {
                                 // Some framework references resolve to facade assemblies where
                                 // the referenced type exists but method bodies/signatures are
@@ -744,7 +748,7 @@ impl AssemblyLoader {
                                         r,
                                         resolution.clone(),
                                         &lookup_for_substitution,
-                                    )
+                                    )?
                                 {
                                     method.parent_generics = parent_generics;
                                     return Ok(method);

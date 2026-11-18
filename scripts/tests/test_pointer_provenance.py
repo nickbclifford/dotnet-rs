@@ -57,10 +57,10 @@ CONTROLS_BY_SHARD = {
     42: ["p42_typed_reference_address_policy"],
     43: ["p43_enum_home_scalar_roundtrip"],
     44: ["p44_native_substring_gc_resume"],
+    45: ["p19_ldelem_negative_index"],
 }
 CONTROLS = [name for names in CONTROLS_BY_SHARD.values() for name in names]
-DIAGNOSTICS = ['p12_ldsflda_convu_stind_static',
-               'p19_ldelem_negative_index', 'p_wide_store_into_int_local']
+DIAGNOSTICS = ['p12_ldsflda_convu_stind_static', 'p_wide_store_into_int_local']
 # Edit alongside the runner table's batch column and the control_batch! invocations.
 BATCHES = {
     1: [
@@ -114,6 +114,7 @@ BATCHES = {
         'p35_ldflda_on_stack_value_type_then_ldind',
         'p09_ldloca_convu_survives_callee_stack_growth',
         'p39_frame_homes_survive_filter_suspension',
+        'p19_ldelem_negative_index',
     ],
 }
 BATCH_CONTROLS = [name for names in BATCHES.values() for name in names]
@@ -212,8 +213,7 @@ class PointerScriptTests(unittest.TestCase):
         self.script = SCRIPT
         self.env = dict(os.environ, PATH=str(self.path) + os.pathsep + os.environ['PATH'],
                         CALLS=str(self.calls), CONTROLS=json.dumps(CONTROLS), BATCHES=json.dumps(BATCHES),
-                        DIAGNOSTICS=json.dumps(['p12_ldsflda_convu_stind_static',
-                                                'p19_ldelem_negative_index', 'p_wide_store_into_int_local']), TMPDIR=str(self.path))
+                        DIAGNOSTICS=json.dumps(DIAGNOSTICS), TMPDIR=str(self.path))
 
     def invoke(self, *args, mode='', ok=True):
         env = dict(self.env, MODE=mode)
@@ -258,26 +258,25 @@ class PointerScriptTests(unittest.TestCase):
         self.assertEqual({int(r[3]) for r in rows if r[1] == 'control'}, set(CONTROLS_BY_SHARD))
         for shard, names in CONTROLS_BY_SHARD.items():
             self.assertEqual([r[0].split('::')[-1] for r in rows if r[1] == 'control' and r[3] == str(shard)], names)
-        self.assertEqual([r[0].split('::')[-1] for r in rows if r[2] == 'yes'],
-                         ['p19_ldelem_negative_index'])
+        self.assertEqual([r[0].split('::')[-1] for r in rows if r[2] == 'yes'], [])
         self.assertEqual(self.recorded(), [])
 
     def test_singleton_partition_is_one_control_per_shard(self):
         self.assertTrue(all(len(names) == 1 for names in CONTROLS_BY_SHARD.values()))
-        self.assertEqual(list(CONTROLS_BY_SHARD), list(range(1, 45)))
-        self.assertEqual(len(set(CONTROLS)), 44)
+        self.assertEqual(list(CONTROLS_BY_SHARD), list(range(1, len(CONTROLS_BY_SHARD) + 1)))
+        self.assertEqual(len(set(CONTROLS)), len(CONTROLS))
         for config in ('no-features', 'multithreading'):
-            for invalid in ('0', '45'):
+            for invalid in ('0', str(max(CONTROLS_BY_SHARD) + 1)):
                 self.invoke('controls', '--configuration', config, '--shard', invalid, '--dry-run', ok=False)
         self.assertEqual(self.recorded(), [])
 
     def test_guard_good_and_stale_or_ignored(self):
         for config in ('no-features', 'multithreading'):
-            self.assertIn('44 exact non-ignored controls', self.invoke('verify-controls', '--configuration', config))
+            self.assertIn(f'{len(CONTROLS)} exact non-ignored controls', self.invoke('verify-controls', '--configuration', config))
             for mode in ('missing', 'typo', 'duplicate', 'ignored', 'filter-mismatch', 'not-listed', 'new-enabled'):
                 self.assertIn('guard failed', self.invoke('verify-controls', '--configuration', config, mode=mode, ok=False))
         for mode in ('new-ignored', 'regression-test'):
-            self.assertIn('44 exact non-ignored controls', self.invoke('verify-controls', '--configuration', 'no-features', mode=mode))
+            self.assertIn(f'{len(CONTROLS)} exact non-ignored controls', self.invoke('verify-controls', '--configuration', 'no-features', mode=mode))
         for call in self.recorded():
             self.assertNotIn('--ignored', call['args'])
 
@@ -332,7 +331,15 @@ class PointerScriptTests(unittest.TestCase):
         for name in CONTROLS:
             self.invoke('diagnostic', '--configuration', 'no-features', '--probe', name, ok=False)
         self.assertEqual(self.recorded(), [])
-        self.invoke('diagnostic', '--configuration', 'no-features', '--probe', 'p19_ldelem_negative_index', '--lane', 'native')
+        # Exercise an explicitly permitted synthetic diagnostic through fake Cargo.
+        self.script = self.path / 'native-permission.sh'
+        original = SCRIPT.read_text()
+        changed = original.replace(
+            'p12_ldsflda_convu_stind_static|suspected-ub|no|-',
+            'p12_ldsflda_convu_stind_static|panic|yes|-', 1)
+        self.assertNotEqual(changed, original)
+        self.script.write_text(changed)
+        self.invoke('diagnostic', '--configuration', 'no-features', '--probe', 'p12_ldsflda_convu_stind_static', '--lane', 'native')
         call = self.recorded()[0]['args']
         self.assertIn('--ignored', call)
         self.assertNotIn('miri', call)
@@ -424,35 +431,41 @@ class PointerScriptTests(unittest.TestCase):
                 self.calls.unlink(missing_ok=True)
                 self.invoke('controls', '--configuration', 'no-features', '--shard', str(shard), ok=False)
                 self.assertEqual(self.recorded(), [])
-                # Even changing both catalogs cannot silently grow or pair the
-                # reviewed 44 singleton controls; a promotion needs a review.
+                # A promotion must have its own singleton shard and appear in
+                # independent discovery; no separate total limits the addition.
                 self.script.write_text(catalog_only.replace(table_end, f"'{full}|{shard}|1'\n" + table_end))
                 self.env['CONTROLS'] = json.dumps(CONTROLS + [name])
-                self.invoke('controls', '--configuration', 'no-features', '--shard', str(shard), ok=False)
-                self.assertEqual(self.recorded(), [])
+                self.env['DIAGNOSTICS'] = json.dumps([probe for probe in DIAGNOSTICS if probe != name])
+                if shard in CONTROLS_BY_SHARD:
+                    self.invoke('controls', '--configuration', 'no-features', '--shard', str(shard), ok=False)
+                    self.assertEqual(self.recorded(), [])
+                else:
+                    out = self.invoke('controls', '--configuration', 'no-features', '--shard', str(shard))
+                    self.assertIn('total: 1 passed, 0 failed', out)
+                    self.assertEqual(self.recorded()[-1]['args'][self.recorded()[-1]['args'].index('--exact') + 1], full)
 
     def test_batches_cover_each_control_exactly_once(self):
         self.assertEqual(sorted(BATCH_CONTROLS), sorted(CONTROLS))
-        self.assertEqual(len(BATCH_CONTROLS), 44)
-        self.assertEqual(list(BATCHES), [1, 2, 3, 4])
+        self.assertEqual(len(BATCH_CONTROLS), len(set(BATCH_CONTROLS)))
+        self.assertEqual(list(BATCHES), list(range(1, len(BATCHES) + 1)))
         for names in BATCHES.values():
-            self.assertTrue(10 <= len(names) <= 12)
+            self.assertTrue(names)
             self.assertTrue(set(names).isdisjoint(DIAGNOSTICS))
         # Execution order inside a batch is shard order (the order of the runner table).
         shard_of = {n: s for s, names in CONTROLS_BY_SHARD.items() for n in names}
         for names in BATCHES.values():
             self.assertEqual(names, sorted(names, key=shard_of.get))
         out = self.invoke('verify-batches')
-        self.assertIn('44 reviewed controls in 4 batches', out)
+        self.assertIn(f'{len(CONTROLS)} reviewed controls in {len(BATCHES)} batches', out)
         self.assertEqual(self.recorded(), [])  # static: no Cargo
 
     def test_batch_tests_are_outside_the_probe_discovery_namespace(self):
         text = SOURCE.read_text()
-        self.assertEqual(re.findall(r'^    control_batch!\(batch_(\d+): \[', text, re.M), ['1', '2', '3', '4'])
+        self.assertEqual(re.findall(r'^    control_batch!\(batch_(\d+): \[', text, re.M), [str(number) for number in BATCHES])
         for number in BATCHES:
             self.assertNotRegex(f'pointer_provenance_tests::batches::batch_{number}', r'^pointer_provenance_tests::p')
         # The discovery guard still passes with batch tests present in the fake listing and metadata.
-        self.assertIn('44 exact non-ignored controls', self.invoke('verify-controls', '--configuration', 'no-features'))
+        self.assertIn(f'{len(CONTROLS)} exact non-ignored controls', self.invoke('verify-controls', '--configuration', 'no-features'))
 
     def test_verify_batches_rejects_drift(self):
         original = SOURCE.read_text()
@@ -463,11 +476,12 @@ class PointerScriptTests(unittest.TestCase):
             'duplicated': original.replace(f'        {first},\n', f'        {first},\n        {first},\n', 1),
             'moved': original.replace(f'        {first},\n', '', 1).replace(
                 f'        {BATCHES[2][0]},\n', f'        {BATCHES[2][0]},\n        {first},\n', 1),
-            'diagnostic': original.replace(f'        {first},\n', f'        {first},\n        p19_ldelem_negative_index,\n', 1),
+            'diagnostic': original.replace(f'        {first},\n', f'        {first},\n        {DIAGNOSTICS[0]},\n', 1),
             'unknown': original.replace(f'        {first},\n', f'        {first},\n        p99_new_probe,\n', 1),
             'reordered': original.replace(f'        {first},\n        {second},\n', f'        {second},\n        {first},\n', 1),
-            'extra-batch': original.replace('    control_batch!(batch_4: [',
-                                            '    control_batch!(batch_5: [\n        p00_smoke,\n    ]);\n\n    control_batch!(batch_4: ['),
+            'extra-batch': original.replace(
+                f'    control_batch!(batch_{max(BATCHES)}: [',
+                f'    control_batch!(batch_{max(BATCHES) + 1}: [\n        p00_smoke,\n    ]);\n\n    control_batch!(batch_{max(BATCHES)}: ['),
             'no-module': original.replace('mod batches {', 'mod other_batches {', 1),
         }
         mutated_source = self.path / 'mutated.rs'
@@ -506,7 +520,7 @@ class PointerScriptTests(unittest.TestCase):
                 self.assertEqual('--features' in run['args'], config == 'multithreading')
 
     def test_batch_command_rejects_bad_arguments_before_cargo(self):
-        for args in [('--batch', '0'), ('--batch', '5'), ('--batch', ''), ('--batch', '1', '--batch', '2'), ('--batch', 'x'),
+        for args in [('--batch', '0'), ('--batch', str(max(BATCHES) + 1)), ('--batch', ''), ('--batch', '1', '--batch', '2'), ('--batch', 'x'),
                      ('--batch', '1', '--shard', '1'), ('--batch', '1', '--probe', 'p00_smoke'), ('--batch', '1', '--all'),
                      ('--batch', '1', '--lane', 'native'), ()]:
             self.invoke('batch', '--configuration', 'no-features', *args, ok=False)

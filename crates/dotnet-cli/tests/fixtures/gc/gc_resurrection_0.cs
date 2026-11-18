@@ -15,6 +15,7 @@ public class Finalizable {
 
 public class Resurrectable {
     public static Resurrectable? Instance;
+    public static int FinalizationCount = 0;
     public string Name;
     public bool ShouldResurrect = true;
 
@@ -23,6 +24,7 @@ public class Resurrectable {
     }
 
     ~Resurrectable() {
+        FinalizationCount++;
         if (ShouldResurrect) {
             Instance = this;
         }
@@ -47,10 +49,13 @@ public class Program {
         CreateObjects();
         GC.Collect();
         GC.WaitForPendingFinalizers();
+        if (Finalizable.FinalizedCount != 2) return 1;
 
         CreateResurrectable();
         GC.Collect();
         GC.WaitForPendingFinalizers();
+
+        if (Resurrectable.Instance == null || Resurrectable.FinalizationCount != 1) return 2;
         
         if (Resurrectable.Instance != null) {
             Resurrectable.Instance.ShouldResurrect = false;
@@ -60,6 +65,8 @@ public class Program {
 
         GC.Collect();
         GC.WaitForPendingFinalizers();
+
+        if (Resurrectable.Instance != null || Resurrectable.FinalizationCount != 2) return 3;
 
         return 0;
     }

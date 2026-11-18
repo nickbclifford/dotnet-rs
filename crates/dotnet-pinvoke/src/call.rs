@@ -1423,20 +1423,28 @@ mod tests {
     }
 
     #[test]
-    fn by_ref_write_back_raw_destination_copies_bytes() {
+    fn by_ref_write_back_sends_managed_bytes_and_offset_to_writer() {
         let temp_buffers = vec![TempBuffer::Bytes(vec![9, 8, 7, 6])];
-        let mut destination = vec![0u8; 4];
-        let dest_ptr = NonNull::new(destination.as_mut_ptr()).expect("destination ptr is non-null");
-        let write_backs = vec![(WriteBackSource::Raw(dest_ptr), 0usize, 4usize)];
+        let origin = PointerOrigin::Unmanaged;
+        let offset = ByteOffset::new(12);
+        let write_backs = vec![(
+            WriteBackSource::Managed(origin.clone(), offset),
+            0usize,
+            4usize,
+        )];
+        let mut observed = None;
 
         apply_write_backs_with(
             &write_backs,
             &temp_buffers,
-            |_origin, _offset, _data| Ok(()),
+            |actual_origin, actual_offset, data| {
+                observed = Some((actual_origin.clone(), actual_offset, data.to_vec()));
+                Ok(())
+            },
         )
-        .expect("raw write-back copy should succeed");
+        .expect("managed write-back should reach the writer");
 
-        assert_eq!(destination, vec![9, 8, 7, 6]);
+        assert_eq!(observed, Some((origin, offset, vec![9, 8, 7, 6])));
     }
 
     #[test]

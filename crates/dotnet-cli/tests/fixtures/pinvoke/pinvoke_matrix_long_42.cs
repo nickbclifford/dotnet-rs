@@ -10,6 +10,6 @@ public class Program {
         if (result == 42L) {
             return 42;
         }
-        return (int)result;
+        return 1;
     }
 }

@@ -1,10 +1,17 @@
 using System;
 
 public class Program {
+    static double One() => 1.0;
+    static double NegativeOne() => -1.0;
+    static double Zero() => 0.0;
+
     public static int Main() {
         // Infinity
-        if (!double.IsPositiveInfinity(1.0 / 0.0)) return 1;
-        if (!double.IsNegativeInfinity(-1.0 / 0.0)) return 2;
+        double one = One();
+        double negativeOne = NegativeOne();
+        double zero = Zero();
+        if (!double.IsPositiveInfinity(one / zero)) return 1;
+        if (!double.IsNegativeInfinity(negativeOne / zero)) return 2;
 
         // NaN propagation
         double nan = double.NaN;

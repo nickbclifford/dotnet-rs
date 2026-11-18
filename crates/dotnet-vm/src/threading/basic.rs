@@ -56,6 +56,7 @@ pub(crate) fn spawn_thread_start(
 #[cfg(test)]
 thread_local! {
     static REGISTER_WAIT_TEST_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = std::cell::RefCell::new(None);
+    static STW_COORDINATION_WAIT_TEST_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = std::cell::RefCell::new(None);
 }
 
 #[cfg(debug_assertions)]
@@ -543,6 +544,13 @@ impl super::ThreadManagerBackend for ThreadManager {
                 );
                 break g;
             }
+
+            #[cfg(test)]
+            STW_COORDINATION_WAIT_TEST_HOOK.with(|hook| {
+                if let Some(callback) = hook.borrow_mut().take() {
+                    callback();
+                }
+            });
 
             // Another initiator holding the coordination lock is waiting for this thread to
             // park. A registering thread holds it only briefly, and parking for it would
@@ -1196,12 +1204,16 @@ mod tests {
         let initiator_coordinator = Arc::clone(&coordinator);
         let (registered_tx, registered_rx) = mpsc::channel();
         let (locked_tx, locked_rx) = mpsc::channel::<()>();
+        let (contended_tx, contended_rx) = mpsc::channel();
         let (stopped_tx, stopped_rx) = mpsc::channel();
         let initiator = thread::spawn(move || {
             let id = initiator_manager.register_thread();
             initiator_coordinator.register_arena(dotnet_utils::gc::ArenaHandle::new(id));
             registered_tx.send(()).unwrap();
             locked_rx.recv().unwrap();
+            STW_COORDINATION_WAIT_TEST_HOOK.with(|hook| {
+                *hook.borrow_mut() = Some(Box::new(move || contended_tx.send(()).unwrap()));
+            });
             drop(initiator_manager.request_stop_the_world());
             stopped_tx.send(()).unwrap();
             initiator_coordinator.unregister_arena(id);
@@ -1211,7 +1223,9 @@ mod tests {
         // Stands in for another thread's `register_thread` holding the coordination lock.
         let registration = manager.gc_coordination.try_lock().unwrap();
         locked_tx.send(()).unwrap();
-        thread::sleep(Duration::from_millis(50));
+        contended_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("registered initiator must observe the held coordination lock");
         drop(registration);
 
         let stopped = stopped_rx.recv_timeout(Duration::from_secs(5));
@@ -1229,11 +1243,17 @@ mod tests {
         let manager = ThreadManager::new(Arc::new(AtomicBool::new(false)));
         let first_guard = manager.request_stop_the_world();
         let second_manager = Arc::clone(&manager);
+        let (contended_tx, contended_rx) = mpsc::channel();
         let second = thread::spawn(move || {
+            STW_COORDINATION_WAIT_TEST_HOOK.with(|hook| {
+                *hook.borrow_mut() = Some(Box::new(move || contended_tx.send(()).unwrap()));
+            });
             let _guard = second_manager.request_stop_the_world();
             second_manager.is_gc_stop_requested()
         });
-        thread::sleep(Duration::from_millis(50));
+        contended_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("second initiator must contend on the coordination lock");
         drop(first_guard);
         assert!(
             second.join().unwrap(),

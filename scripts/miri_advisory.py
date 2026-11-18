@@ -16,9 +16,9 @@ import sys
 MANIFEST = Path(__file__).with_name("miri_advisory_manifest.json")
 TOOLCHAIN = "+nightly-2026-05-27"
 CONFIGS = {
-    "default-features": ("dotnet-assemblies", [], "A", 38, []),
-    "no-features": ("dotnet-vm", ["--no-default-features"], "V", 8, ["jmp_tests", "tail_calls", "fault_tests"]),
-    "multithreading": ("dotnet-vm", ["--no-default-features", "--features", "multithreading"], "V", 8, ["jmp_tests", "tail_calls", "fault_tests"]),
+    "default-features": ("dotnet-assemblies", [], "A", []),
+    "no-features": ("dotnet-vm", ["--no-default-features"], "V", ["jmp_tests", "tail_calls", "fault_tests"]),
+    "multithreading": ("dotnet-vm", ["--no-default-features", "--features", "multithreading"], "V", ["jmp_tests", "tail_calls", "fault_tests"]),
 }
 NAME = re.compile(r"[A-Za-z0-9_]+(?:::[A-Za-z0-9_]+)*\Z")
 SUMMARY = re.compile(r"(\d+) tests?, (\d+) benchmarks?\Z")
@@ -34,12 +34,19 @@ def manifest(path=MANIFEST):
             data[key] = value
         return data
     data = json.loads(Path(path).read_text(), object_pairs_hook=pairs)
-    expected = {f"{prefix}{i:02d}" for prefix, n in (("A", 38), ("V", 8)) for i in range(1, n + 1)}
-    if not isinstance(data, dict) or set(data) != expected:
-        raise ValueError("manifest must contain exactly A01..A38 and V01..V08")
+    prefixes = {config[2] for config in CONFIGS.values()}
+    if not isinstance(data, dict) or not data:
+        raise ValueError("manifest must contain named singleton shards")
+    for shard in data:
+        match = re.fullmatch(r"([A-Z])(\d+)", shard)
+        if (match is None or match[1] not in prefixes or int(match[2]) == 0
+                or shard != f"{match[1]}{int(match[2]):02d}"):
+            raise ValueError(f"invalid shard identity: {shard}")
+    if {key[0] for key in data} != prefixes:
+        raise ValueError("manifest must cover every configured selector family")
     if any(not isinstance(name, str) or not NAME.fullmatch(name) for name in data.values()):
         raise ValueError("invalid test selector")
-    for prefix in ("A", "V"):
+    for prefix in prefixes:
         names = [name for key, name in data.items() if key.startswith(prefix)]
         if len(names) != len(set(names)):
             raise ValueError(f"duplicate {prefix} selector")
@@ -48,8 +55,8 @@ def manifest(path=MANIFEST):
 
 def rows(data):
     return [{"crate": crate, "configuration": config, "shard": key}
-            for config, (crate, _, prefix, _, _) in CONFIGS.items()
-            for key in sorted(data) if key.startswith(prefix)]
+            for config, (crate, _, prefix, _) in CONFIGS.items()
+            for key in sorted(data, key=lambda key: (key[0], int(key[1:]))) if key.startswith(prefix)]
 
 
 def parse_list(text):
@@ -75,7 +82,7 @@ def parse_list(text):
 
 
 def verify_lists(config, data, listed, ignored):
-    _, _, prefix, count, _ = CONFIGS[config]
+    _, _, prefix, _ = CONFIGS[config]
     actual = parse_list(listed)
     ignored_sections = parse_list(ignored)
     # Original cargo command includes lib and doctests, and VM's integration binary.
@@ -85,7 +92,8 @@ def verify_lists(config, data, listed, ignored):
     if any(actual[1:]) or any(ignored_sections):
         raise ValueError("original ancillary selection gained tests, or selection contains ignored tests")
     expected = [name for shard, name in data.items() if shard.startswith(prefix)]
-    if len(actual[0]) != count or Counter(actual[0]) != Counter(expected):
+    count = len(expected)
+    if Counter(actual[0]) != Counter(expected):
         raise ValueError(f"original Miri listing differs from {count}-selector shard union; "
                          f"missing={list((Counter(expected)-Counter(actual[0])).elements())}, "
                          f"unexpected={list((Counter(actual[0])-Counter(expected)).elements())}")
@@ -94,12 +102,12 @@ def verify_lists(config, data, listed, ignored):
 
 
 def cargo_base(config):
-    crate, args, _, _, _ = CONFIGS[config]
+    crate, args, _, _ = CONFIGS[config]
     return ["cargo", TOOLCHAIN, "miri", "test", "-p", crate, *args]
 
 
 def listing(config, ignored):
-    filters = CONFIGS[config][4]
+    filters = CONFIGS[config][3]
     cmd = [*cargo_base(config), "--", "--list", *(["--ignored"] if ignored else []), *filters]
     print("+ " + shlex.join(cmd), flush=True)
     result = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)

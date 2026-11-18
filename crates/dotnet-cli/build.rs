@@ -218,9 +218,14 @@ fn main() {
         let uses_console_in_fuzzing = is_fuzzing_enabled
             && (test_name.starts_with("delegates_delegate_multicast_")
                 || test_name.starts_with("exceptions_nested_filter_")
+                || test_name.starts_with("reflection_dynamic_method_")
                 || matches!(
                     test_name.as_str(),
-                    "basic_stdout_before_internal_error_42"
+                    "arithmetic_math_extern_42"
+                        | "arrays_jagged_interface_cast_42"
+                        | "basic_stdout_before_internal_error_42"
+                        | "delegates_delegate_invocation_list_42"
+                        | "delegates_open_instance_delegate_42"
                         | "statics_cctor_filter_42"
                         | "statics_cctor_filter_call_42"
                         | "statics_cctor_filter_delegate_42"
@@ -235,9 +240,26 @@ fn main() {
                         | "reflection_invoke_byref_like_42"
                         | "reflection_invoke_collect_42"
                         | "reflection_invoke_values_42"
+                        | "expressions_object_array_delegate_shapes_42"
+                        | "expressions_expression_custom_delegate_42"
+                        | "expressions_expression_byref_wide_42"
+                        | "expressions_expression_compile_many_params_42"
                         | "strings_substring_fallback_42"
                         | "strings_substring_chunks_42"
                         | "gc_weak_reference_liveness_42"
+                        | "generics_constrained_context_42"
+                        | "generics_intrinsic_generic_context_42"
+                        | "generics_resumed_intrinsic_context_42"
+                        | "memory_span_static_storage_bulk_42"
+                        | "reflection_activator_create_instance_binding_flags_42"
+                        | "reflection_is_byref_like_42"
+                        | "reflection_is_generic_parameter_42"
+                        | "reflection_type_names_42"
+                        | "strings_ctor_char_array_range_42"
+                        | "strings_string_hash_span_parity_42"
+                        | "unsafe_byref_negative_offset_42"
+                        | "unsafe_span_clear_42"
+                        | "memory_span_copyto_overlap_42"
                 ))
             && std::fs::read_to_string(&path)
                 .expect("fixture source must be readable")
@@ -257,10 +279,14 @@ fn main() {
                         | "reflection_json_serializer_numbers_42"
                         | "reflection_json_serializer_poco_42"
                         | "reflection_dynamic_method_unmanaged_calli_42"
+                        | "generics_non_generic_call_in_generic_method_42"
+                        | "generics_non_generic_callee_paths_in_generic_method_42"
+                        | "pointers_static_pointer_fields_42"
+                        | "memory_unmanaged_memory_stream_read_42"
                 ))
         {
             // Fuzzing mode hardens native interop paths by denying P/Invoke, so
-            // fixtures that rely on libc/libm entry points (and console code paths
+            // fixtures that rely on libc/libm or NativeMemory entry points (and console code paths
             // that transitively use them, e.g. Console.WriteLine -> SystemNative_SetErrNo)
             // are expected to fail. JsonSerializer's options cache hashes through
             // System.HashCode, whose static constructor seeds itself via
@@ -315,6 +341,7 @@ fn main() {
             || file_name == "async_task_when_any_timeout_42"
             || file_name == "threading_timer_callback_pool_thread_42"
             || file_name == "threading_timer_idle_background_exit_42"
+            || file_name == "volatile_sharing_42"
             || file_name == "lock_contended_42"
             || file_name == "dynamic_method_concurrent_42"
             || file_name == "thread_identity_start_42"
@@ -347,6 +374,8 @@ fn main() {
             // This fixture intentionally deadlocks two type initializers unless both roles
             // run concurrently. Use 2 executors to ensure each role gets a worker thread.
             "circular_init_mt_42" => Some(2),
+            // The writer and reader roles are assigned with Interlocked and both are required.
+            "volatile_sharing_42" => Some(2),
             _ => None,
         };
 
@@ -377,7 +406,8 @@ fn main() {
         {
             writeln!(
                 f,
-                "#[cfg(feature = \"multithreading\")] multi_arena_test!({}, {:?}, {}, {}, {:?});",
+                "multi_arena_test!({} {}, {:?}, {}, {}, {:?});",
+                ignore_prefix,
                 test_name,
                 dll_path.to_str().unwrap(),
                 thread_count,

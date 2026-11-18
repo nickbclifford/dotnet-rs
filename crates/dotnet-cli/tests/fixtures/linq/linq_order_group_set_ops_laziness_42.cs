@@ -36,12 +36,15 @@ public static class Program
             .Sum();
         if (zipSum != 69) return 4;
 
-        int orderedChecksum = Values()
+        int[] ordered = Values()
             .Select((value, index) => value * 10 + index)
             .OrderBy(item => item / 10)
             .ThenBy(item => item % 10)
-            .Sum();
-        if (orderedChecksum != 195) return 5;
+            .ToArray();
+        int[] expectedOrder = { 12, 24, 31, 33, 45, 50 };
+        if (ordered.Length != expectedOrder.Length) return 5;
+        for (int i = 0; i < expectedOrder.Length; i++)
+            if (ordered[i] != expectedOrder[i]) return 5;
 
         int[] groupedSums = Values()
             .GroupBy(value => value % 2)

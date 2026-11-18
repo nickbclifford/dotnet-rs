@@ -9,6 +9,7 @@ use crate::ReflectionIntrinsicHost;
 use dotnet_types::{
     TypeDescription,
     comparer::decompose_type_source,
+    error::{TypeResolutionError, VmError},
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
 };
@@ -257,9 +258,11 @@ pub(crate) fn nullable_inner(concrete: &ConcreteType) -> Option<ConcreteType> {
 fn heap_concrete<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &T,
     object: ObjectRef<'gc>,
-) -> Option<ConcreteType> {
-    object.0?;
-    let described = object.as_heap_storage(|storage| match storage {
+) -> Result<Option<ConcreteType>, TypeResolutionError> {
+    if object.0.is_none() {
+        return Ok(None);
+    }
+    let Some(described) = object.as_heap_storage(|storage| match storage {
         HeapStorage::Obj(o) | HeapStorage::Boxed(o) => {
             let arity = o.description.definition().generic_parameters.len();
             let args: Vec<_> = o
@@ -287,8 +290,13 @@ fn heap_concrete<'gc, T: ReflectionIntrinsicHost<'gc>>(
         // Strings carry no generics, so the heap description is the whole type.
         HeapStorage::Str(_) => Some(None),
         HeapStorage::Vec(_) => None,
-    })?;
-    described.or_else(|| ctx.get_heap_description(object).ok().map(Into::into))
+    }) else {
+        return Ok(None);
+    };
+    match described {
+        Some(concrete) => Ok(Some(concrete)),
+        None => Ok(Some(ctx.get_heap_description(object)?.into())),
+    }
 }
 
 /// The declaring type of `method`, with the generic arguments of `lookup`.
@@ -318,9 +326,9 @@ fn reference_fits<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &T,
     object: ObjectRef<'gc>,
     target: &ConcreteType,
-) -> bool {
+) -> Result<bool, TypeResolutionError> {
     if object.0.is_none() || matches!(target.get(), BaseType::Object) {
-        return true;
+        return Ok(true);
     }
     if let Some(result) = object.as_heap_storage(|storage| match storage {
         HeapStorage::Vec(v) => Some(
@@ -332,18 +340,16 @@ fn reference_fits<'gc, T: ReflectionIntrinsicHost<'gc>>(
         ),
         _ => None,
     }) {
-        if result {
-            return true;
+        if result? {
+            return Ok(true);
         }
-        return ctx
-            .get_heap_description(object)
-            .ok()
-            .is_some_and(|td| ctx.is_a(td.into(), target.clone()).unwrap_or(false));
+        let td = ctx.get_heap_description(object)?;
+        return ctx.is_a(td.into(), target.clone());
     }
-    let Some(source) = heap_concrete(ctx, object) else {
-        return true;
+    let Some(source) = heap_concrete(ctx, object)? else {
+        return Ok(true);
     };
-    ctx.is_a(source, target.clone()).unwrap_or(false)
+    ctx.is_a(source, target.clone())
 }
 
 /// Whether `receiver` is an acceptable `this` for an instance `method`.
@@ -352,7 +358,7 @@ pub(crate) fn receiver_fits<'gc, T: ReflectionIntrinsicHost<'gc>>(
     method: &MethodDescription,
     lookup: &GenericLookup,
     receiver: ObjectRef<'gc>,
-) -> bool {
+) -> Result<bool, TypeResolutionError> {
     reference_fits(ctx, receiver, &declaring_concrete(method, lookup))
 }
 
@@ -361,43 +367,43 @@ pub(crate) fn plan_argument<'gc, T: ReflectionIntrinsicHost<'gc>>(
     arg: ObjectRef<'gc>,
     shape: &ParamShape,
     byref: bool,
-) -> ArgPlan {
+) -> Result<ArgPlan, TypeResolutionError> {
     if !shape.value_type {
-        return if reference_fits(ctx, arg, &shape.concrete) {
+        return Ok(if reference_fits(ctx, arg, &shape.concrete)? {
             ArgPlan::Reference
         } else {
             ArgPlan::Reject
-        };
+        });
     }
     if arg.0.is_none() {
-        return ArgPlan::Default;
+        return Ok(ArgPlan::Default);
     }
     let Some(boxed) = arg.as_heap_storage(|storage| match storage {
         HeapStorage::Boxed(o) => Some(o.description.clone()),
         _ => None,
     }) else {
-        return ArgPlan::Reject;
+        return Ok(ArgPlan::Reject);
     };
     if boxed == shape.td {
-        return ArgPlan::Exact;
+        return Ok(ArgPlan::Exact);
     }
     if byref {
-        return ArgPlan::Reject;
+        return Ok(ArgPlan::Reject);
     }
     if is_nullable(&shape.td) {
         let fits = nullable_inner(&shape.concrete)
             .and_then(|inner| ctx.loader().find_concrete_type(inner).ok())
             .is_some_and(|inner| inner == boxed);
-        return if fits {
+        return Ok(if fits {
             ArgPlan::NullableSome
         } else {
             ArgPlan::Reject
-        };
+        });
     }
-    match (Prim::of_type(&boxed), Prim::of_type(&shape.td)) {
+    Ok(match (Prim::of_type(&boxed), Prim::of_type(&shape.td)) {
         (Some(from), Some(to)) if from.can_widen_to(to) => ArgPlan::Widen { from, to },
         _ => ArgPlan::Reject,
-    }
+    })
 }
 
 /// Convert the boxed primitive or enum in `arg` to the primitive kind `to`.
@@ -473,9 +479,9 @@ pub(crate) fn type_fit<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &T,
     wanted: &dotnet_types::runtime::RuntimeType,
     declared: &dotnet_types::runtime::RuntimeType,
-) -> TypeFit {
+) -> Result<TypeFit, VmError> {
     if wanted == declared {
-        return TypeFit::Exact;
+        return Ok(TypeFit::Exact);
     }
     let loader = ctx.loader();
     let (wanted, declared) = (
@@ -487,16 +493,28 @@ pub(crate) fn type_fit<'gc, T: ReflectionIntrinsicHost<'gc>>(
         loader.find_concrete_type(declared.clone()),
     ) && let (Some(from), Some(to)) = (Prim::of_type(&from), Prim::of_type(&to))
     {
-        return if from.can_widen_to(to) {
+        return Ok(if from.can_widen_to(to) {
             TypeFit::Convertible
         } else {
             TypeFit::No
-        };
+        });
     }
-    if ctx.is_a(wanted, declared).unwrap_or(false) {
-        TypeFit::Convertible
+    reference_type_fit(wanted, declared, |wanted, declared| {
+        ctx.is_a(wanted, declared)
+    })
+}
+
+/// Classify the reference-conversion part of `type_fit`, preserving metadata failures as host VM
+/// errors so constructor selection cannot mistake an unresolved type for an ordinary mismatch.
+fn reference_type_fit(
+    wanted: ConcreteType,
+    declared: ConcreteType,
+    is_a: impl FnOnce(ConcreteType, ConcreteType) -> Result<bool, TypeResolutionError>,
+) -> Result<TypeFit, VmError> {
+    if is_a(wanted, declared)? {
+        Ok(TypeFit::Convertible)
     } else {
-        TypeFit::No
+        Ok(TypeFit::No)
     }
 }
 
@@ -506,7 +524,7 @@ pub(crate) fn constructor_more_specific<'gc, T: ReflectionIntrinsicHost<'gc>>(
     a: &MethodDescription,
     b: &MethodDescription,
     lookup: &GenericLookup,
-) -> bool {
+) -> Result<bool, VmError> {
     let mut better = false;
     for (a_param, b_param) in a
         .signature()
@@ -516,17 +534,23 @@ pub(crate) fn constructor_more_specific<'gc, T: ReflectionIntrinsicHost<'gc>>(
     {
         let (ParameterType::Value(a_ty), ParameterType::Value(b_ty)) = (&a_param.1, &b_param.1)
         else {
-            return false;
+            return Ok(false);
         };
         let a_ty = ctx.reflection_make_runtime_type_for_method(a.clone(), lookup, a_ty);
         let b_ty = ctx.reflection_make_runtime_type_for_method(b.clone(), lookup, b_ty);
-        match type_fit(ctx, &a_ty, &b_ty) {
+        match type_fit(ctx, &a_ty, &b_ty)? {
             TypeFit::Exact => {}
             TypeFit::Convertible => better = true,
-            TypeFit::No => return false,
+            TypeFit::No => return Ok(false),
         }
     }
-    better
+    Ok(better)
+}
+
+#[derive(Debug)]
+pub(crate) enum ConstructorSelectionError {
+    Ambiguous,
+    Resolution(VmError),
 }
 
 /// Choose the public instance constructor of `td` that `args` bind to, as the default binder does
@@ -537,7 +561,7 @@ pub(crate) fn select_constructor<'gc, T: ReflectionIntrinsicHost<'gc>>(
     td: &TypeDescription,
     lookup: &GenericLookup,
     args: &[ObjectRef<'gc>],
-) -> Result<Option<MethodDescription>, ()> {
+) -> Result<Option<MethodDescription>, ConstructorSelectionError> {
     let mut best: Option<(usize, MethodDescription)> = None;
     let mut ambiguous = false;
     for (index, method) in td.definition().methods.iter().enumerate() {
@@ -555,34 +579,39 @@ pub(crate) fn select_constructor<'gc, T: ReflectionIntrinsicHost<'gc>>(
             MethodMemberIndex::Method(index),
         );
         let mut conversions = 0;
-        let fits = candidate
-            .signature()
-            .parameters
-            .iter()
-            .zip(args)
-            .all(|(parameter, arg)| {
-                let (ty, byref) = match &parameter.1 {
-                    ParameterType::Value(ty) => (ty, false),
-                    ParameterType::Ref(ty) => (ty, true),
-                    ParameterType::TypedReference => return false,
-                };
-                let Ok(shape) = param_shape(ctx, &candidate, lookup, ty) else {
-                    return false;
-                };
-                match plan_argument(ctx, *arg, &shape, byref) {
-                    ArgPlan::Reject => false,
-                    // The binder only lets `null` stand for a reference or `Nullable<T>`.
-                    ArgPlan::Default => {
-                        conversions += 1;
-                        !shape.value_type || is_nullable(&shape.td)
-                    }
-                    ArgPlan::Widen { .. } | ArgPlan::NullableSome => {
-                        conversions += 1;
-                        true
-                    }
-                    ArgPlan::Reference | ArgPlan::Exact => true,
+        let mut fits = true;
+        for (parameter, arg) in candidate.signature().parameters.iter().zip(args) {
+            let (ty, byref) = match &parameter.1 {
+                ParameterType::Value(ty) => (ty, false),
+                ParameterType::Ref(ty) => (ty, true),
+                ParameterType::TypedReference => {
+                    fits = false;
+                    break;
                 }
-            });
+            };
+            let Ok(shape) = param_shape(ctx, &candidate, lookup, ty) else {
+                fits = false;
+                break;
+            };
+            match plan_argument(ctx, *arg, &shape, byref)
+                .map_err(|error| ConstructorSelectionError::Resolution(error.into()))?
+            {
+                ArgPlan::Reject => {
+                    fits = false;
+                    break;
+                }
+                // The binder only lets `null` stand for a reference or `Nullable<T>`.
+                ArgPlan::Default => {
+                    conversions += 1;
+                    if shape.value_type && !is_nullable(&shape.td) {
+                        fits = false;
+                        break;
+                    }
+                }
+                ArgPlan::Widen { .. } | ArgPlan::NullableSome => conversions += 1,
+                ArgPlan::Reference | ArgPlan::Exact => {}
+            }
+        }
         if fits {
             match best.as_ref() {
                 None => best = Some((conversions, candidate)),
@@ -591,10 +620,14 @@ pub(crate) fn select_constructor<'gc, T: ReflectionIntrinsicHost<'gc>>(
                     ambiguous = false;
                 }
                 Some((score, current)) if conversions == *score => {
-                    if constructor_more_specific(ctx, &candidate, current, lookup) {
+                    if constructor_more_specific(ctx, &candidate, current, lookup)
+                        .map_err(ConstructorSelectionError::Resolution)?
+                    {
                         best = Some((conversions, candidate));
                         ambiguous = false;
-                    } else if !constructor_more_specific(ctx, current, &candidate, lookup) {
+                    } else if !constructor_more_specific(ctx, current, &candidate, lookup)
+                        .map_err(ConstructorSelectionError::Resolution)?
+                    {
                         ambiguous = true;
                     }
                 }
@@ -603,8 +636,97 @@ pub(crate) fn select_constructor<'gc, T: ReflectionIntrinsicHost<'gc>>(
         }
     }
     if ambiguous {
-        Err(())
+        Err(ConstructorSelectionError::Ambiguous)
     } else {
         Ok(best.map(|(_, method)| method))
+    }
+}
+
+#[cfg(test)]
+mod type_fit_error_tests {
+    use super::*;
+    use dotnet_types::{
+        TypeResolver, comparer::TypeComparer, error::TypeResolutionError, resolution::ResolutionS,
+    };
+    use dotnetdll::prelude::{Module, Resolution, TypeDefinition};
+
+    struct ResolutionFailingResolver;
+
+    impl TypeResolver for ResolutionFailingResolver {
+        fn corlib_type(&self, name: &str) -> Result<TypeDescription, TypeResolutionError> {
+            Err(TypeResolutionError::TypeNotFound(name.into()))
+        }
+
+        fn locate_type(
+            &self,
+            _resolution: ResolutionS,
+            _handle: UserType,
+        ) -> Result<TypeDescription, TypeResolutionError> {
+            Err(TypeResolutionError::TypeNotFound(
+                "synthetic missing comparison type".into(),
+            ))
+        }
+
+        fn find_concrete_type(
+            &self,
+            _ty: ConcreteType,
+        ) -> Result<TypeDescription, TypeResolutionError> {
+            Err(TypeResolutionError::TypeNotFound(
+                "synthetic missing comparison type".into(),
+            ))
+        }
+    }
+
+    #[test]
+    fn reference_type_fit_preserves_resolution_errors_as_host_vm_errors() {
+        let resolver = ResolutionFailingResolver;
+        let comparer = TypeComparer::new(&resolver);
+
+        assert_eq!(
+            reference_type_fit(
+                ConcreteType::new(ResolutionS::NULL, BaseType::String),
+                ConcreteType::new(ResolutionS::NULL, BaseType::Object),
+                |wanted, declared| comparer.is_assignable_to(&wanted, &declared),
+            ),
+            Ok(TypeFit::Convertible),
+            "a successful reference assignment remains a conversion"
+        );
+        assert_eq!(
+            reference_type_fit(
+                ConcreteType::new(ResolutionS::NULL, BaseType::Int32),
+                ConcreteType::new(ResolutionS::NULL, BaseType::Int64),
+                |wanted, declared| comparer.is_assignable_to(&wanted, &declared),
+            ),
+            Ok(TypeFit::No),
+            "an ordinary type mismatch remains a no-match result"
+        );
+
+        // Distinct metadata references force the comparer to resolve both definitions. The
+        // synthetic resolver fails there, exercising the production comparison error path.
+        let mut resolution = Resolution::new(Module::new("reflection-fit-errors.dll"));
+        let wanted_index =
+            resolution.push_type_definition(TypeDefinition::new(None, "MissingWanted"));
+        let declared_index =
+            resolution.push_type_definition(TypeDefinition::new(None, "MissingDeclared"));
+        let user_type = |index| {
+            ConcreteType::new(
+                ResolutionS::NULL,
+                BaseType::Type {
+                    source: TypeSource::User(UserType::Definition(index)),
+                    value_kind: None,
+                },
+            )
+        };
+        assert_eq!(
+            reference_type_fit(
+                user_type(wanted_index),
+                user_type(declared_index),
+                |wanted, declared| { comparer.is_assignable_to(&wanted, &declared) }
+            ),
+            Err(VmError::TypeResolution(TypeResolutionError::TypeNotFound(
+                "synthetic missing comparison type".into(),
+            ))),
+            "a comparer resolution failure must cross the constructor-selection helper as a host VmError"
+        );
     }
 }

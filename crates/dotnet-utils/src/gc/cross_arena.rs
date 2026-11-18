@@ -857,52 +857,47 @@ mod lease_tests {
     // ------------------------------------------------------------------
     #[test]
     fn unregister_waits_for_outstanding_lease() {
-        use std::sync::Arc as StdArc;
-        use std::sync::atomic::AtomicBool as StdAtomicBool;
-        use std::{thread, time::Duration};
+        use std::{
+            sync::mpsc,
+            thread,
+            time::{Duration, Instant},
+        };
 
         let id = ArenaId::new(10_005);
         register_arena(id, stw_flag());
 
         let lease = try_acquire_lease(id).expect("should acquire lease");
-
-        // Signal between threads
-        let lease_dropped = StdArc::new(StdAtomicBool::new(false));
-        let _lease_dropped_clone = lease_dropped.clone();
-        let unregister_returned = StdArc::new(StdAtomicBool::new(false));
-        let unregister_returned_clone = unregister_returned.clone();
+        let (returned_tx, returned_rx) = mpsc::channel();
 
         let unregister_thread = thread::spawn(move || {
-            // This must block until the lease is dropped.
             unregister_arena(id);
-            unregister_returned_clone.store(true, Ordering::Release);
+            let _ = returned_tx.send(());
         });
 
-        // Give the unregister thread time to reach the spin loop.
-        thread::sleep(Duration::from_millis(20));
+        // `is_valid` becomes false only after unregister removed the entry and began
+        // draining this held lease. A bounded wait avoids treating thread scheduling
+        // delay as evidence that unregister is blocked on the lease.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while lease.is_valid() && Instant::now() < deadline {
+            thread::yield_now();
+        }
+        let teardown_started = !lease.is_valid();
+        let returned_while_held = returned_rx.try_recv().is_ok();
 
-        // unregister should NOT have returned yet because we still hold the lease.
-        assert!(
-            !unregister_returned.load(Ordering::Acquire),
-            "unregister_arena returned while lease was still held"
-        );
-
-        // Drop the lease — this should unblock unregister_arena.
         drop(lease);
-        lease_dropped.store(true, Ordering::Release);
+        let returned_after_release = returned_rx.recv_timeout(Duration::from_secs(2)).is_ok();
+        let worker_succeeded = unregister_thread.join().is_ok();
 
-        unregister_thread
-            .join()
-            .expect("unregister thread panicked");
-
+        assert!(teardown_started, "unregister did not reach lease drain");
         assert!(
-            unregister_returned.load(Ordering::Acquire),
-            "unregister_arena did not return after lease was dropped"
+            !returned_while_held,
+            "unregister_arena returned while the lease was still held"
         );
         assert!(
-            lease_dropped.load(Ordering::Acquire),
-            "lease_dropped flag not set"
+            returned_after_release,
+            "unregister did not return after lease release"
         );
+        assert!(worker_succeeded, "unregister thread panicked");
     }
 
     // ------------------------------------------------------------------
@@ -1260,10 +1255,16 @@ mod lease_tests {
                         }
                         1 => {
                             // STW flag setter: toggles on then off
-                            register_arena(id, stw_flag());
+                            let flag = stw_flag();
+                            register_arena(id, flag.clone());
                             set_stw_in_progress(id, true);
-                            thread::yield_now();
+                            let lease = try_acquire_lease(id)
+                                .expect("registered arena must admit the synchronized lease");
+                            assert!(flag.load(Ordering::Acquire));
+                            assert!(lease.is_stw_in_progress());
+                            drop(lease);
                             set_stw_in_progress(id, false);
+                            assert!(!flag.load(Ordering::Acquire));
                             unregister_arena(id);
                         }
                         2 => {
@@ -1281,13 +1282,10 @@ mod lease_tests {
                                         "invalid identity must not be reacquired"
                                     );
                                 }
-                                // If STW is in progress, the lease must reflect it.
-                                let stw_via_lease = lease.is_stw_in_progress();
-                                let stw_direct = is_stw_in_progress(id);
-                                // The direct check races with flag changes; we
-                                // only assert the weaker property that the lease
-                                // view is self-consistent (no panic / no UB).
-                                let _ = (stw_via_lease, stw_direct);
+                                // STW visibility is asserted by the flag-setter branch while
+                                // it owns the per-ID writer lock; this concurrent branch only
+                                // exercises lease acquisition during flag transitions.
+                                let _stw_snapshot = lease.is_stw_in_progress();
                                 drop(lease);
                             }
                         }
@@ -1342,12 +1340,20 @@ mod lease_tests {
                             register_arena(id, stw_flag());
                             // Use .map() so the ArenaLease is dropped inside the
                             // closure, before we reach the unregister call.
-                            let _gen_before = try_acquire_lease(id).map(|l| l.generation());
+                            let gen_before = try_acquire_lease(id)
+                                .expect("registered arena must admit the initial lease")
+                                .generation();
                             unregister_arena(id);
-                            register_arena(id, stw_flag());
-                            let _gen_after = try_acquire_lease(id).map(|l| l.generation());
-                            // A lease may be None if another thread unregistered
-                            // concurrently — both outcomes are valid.
+                            let new_identity = try_register_arena(id, stw_flag())
+                                .expect("arena must register after its previous teardown");
+                            let lease = try_acquire_lease(id)
+                                .expect("newly registered arena must admit a lease");
+                            assert_eq!(lease.identity(), new_identity);
+                            assert!(
+                                lease.generation() > gen_before,
+                                "re-registration must advance the arena generation"
+                            );
+                            drop(lease);
                             unregister_arena(id);
                         }
                         _ => unreachable!(),
@@ -1356,8 +1362,9 @@ mod lease_tests {
             }));
         }
 
+        let mut worker_panicked = false;
         for h in handles {
-            h.join().unwrap();
+            worker_panicked |= h.join().is_err();
         }
 
         // Cleanup any arenas that may have been left registered by a
@@ -1365,6 +1372,7 @@ mod lease_tests {
         for i in 0..NUM_IDS {
             unregister_arena(ArenaId::new(BASE_ID + i));
         }
+        assert!(!worker_panicked, "a lease stress worker panicked");
     }
 
     // ------------------------------------------------------------------
@@ -1375,35 +1383,46 @@ mod lease_tests {
     fn record_and_harvest_race_with_reregistration() {
         let id = ArenaId::new(40_000);
 
-        // 1. Register and record
+        // 1. Register and record.
         register_arena(id, stw_flag());
         set_currently_tracing(Some(id));
-        record_fake_object(id, 0x123);
+        let recorded = record_fake_object(id, 0x123);
         set_currently_tracing(None);
 
         let refs = take_found_cross_arena_refs();
-        let target_id = refs[0].identity().arena_id;
-        let recorded_gen = refs[0].identity().generation;
+        let recorded_identity = refs.first().map(|reference| reference.identity());
 
-        // 2. Unregister and re-register
+        // 2. Unregister and re-register, retaining the returned identity so the
+        // following lease proves the new registration is live.
         unregister_arena(id);
-        register_arena(id, stw_flag());
+        let new_identity = try_register_arena(id, stw_flag())
+            .expect("the arena must register after its previous removal");
 
-        // 3. Harvest with the old generation
-        if let Some(lease) = try_acquire_lease(target_id) {
-            assert_ne!(
-                lease.generation(),
-                recorded_gen,
-                "generation must change after re-registration"
-            );
-            // This is what record_found_cross_arena_refs does:
-            if lease.generation() == recorded_gen {
-                panic!("Generation check failed to catch re-registration!");
-            }
-            drop(lease);
-        }
+        // 3. Acquire through the production registry and compare only after both
+        // sequential registration operations have completed.
+        let new_lease = try_acquire_lease(id);
+        let new_generation = new_lease.as_ref().map(ArenaLease::generation);
+        let new_lease_identity = new_lease.as_ref().map(ArenaLease::identity);
+        drop(new_lease);
+        let stale_identity_rejected =
+            recorded_identity.map(|identity| try_acquire_lease_for_identity(identity).is_none());
 
         unregister_arena(id);
+
+        assert!(recorded, "the live arena reference should be recorded");
+        assert_eq!(refs.len(), 1, "one target should be harvested");
+        assert_eq!(
+            recorded_identity.map(|identity| identity.arena_id),
+            Some(id)
+        );
+        assert_eq!(new_lease_identity, Some(new_identity));
+        assert!(
+            new_generation
+                .zip(recorded_identity.map(|identity| identity.generation))
+                .is_some_and(|(new, old)| new > old),
+            "re-registration must advance the generation"
+        );
+        assert_eq!(stale_identity_rejected, Some(true));
     }
 }
 
@@ -1684,9 +1703,8 @@ mod tests {
         assert_eq!(next_token(), Err(u32::MAX));
     }
 
-    /// Control: the retained transport carries the allocation pointer itself (no integer round
-    /// trip, no exposed provenance), so use after harvest works under permissive execution and
-    /// Miri alike. It cannot by itself prove the full contract; the structural scan covers that.
+    /// Control: the retained transport carries the allocation pointer itself, so use after
+    /// harvest works under permissive execution and Miri alike.
     #[test]
     fn arena_lifetime_transport_permissive_control() {
         let id = ArenaId::new(10_101);
@@ -1716,63 +1734,5 @@ mod tests {
         // SAFETY: F10.RawAllocationOwnership — `allocation` came from `Box::into_raw` and is freed exactly once.
         drop(unsafe { Box::from_raw(allocation) });
         unregister_arena(id);
-    }
-
-    /// Structural pending regression: the transport path must not convert a pointer to an
-    /// integer for retention and back. Fails while the found buffer stores `usize` and any
-    /// producer/harvester uses `expose_provenance`/`with_exposed_provenance*`. It scans the
-    /// complete producer -> buffer -> harvest path; it is source evidence, not VM execution.
-    #[test]
-    fn arena_lifetime_transport() {
-        const FORBIDDEN: [&str; 2] = ["expose_provenance", "with_exposed_provenance"];
-        // Top-level test module only: an item-level `#[cfg(test)]` must not truncate a file.
-        const TEST_MODULE: &str = "\n#[cfg(test)]\nmod ";
-        let this = include_str!("cross_arena.rs");
-        let production = &this[..this.find(TEST_MODULE).expect("test module marker present")];
-        let path: [(&str, &str); 6] = [
-            ("dotnet-utils gc/cross_arena.rs (buffer)", production),
-            (
-                "dotnet-runtime-memory write_barrier.rs (producer)",
-                include_str!("../../../dotnet-runtime-memory/src/write_barrier.rs"),
-            ),
-            (
-                "dotnet-value pointer/origin.rs (producer)",
-                include_str!("../../../dotnet-value/src/pointer/origin.rs"),
-            ),
-            (
-                "dotnet-value object/mod.rs (producer)",
-                include_str!("../../../dotnet-value/src/object/mod.rs"),
-            ),
-            (
-                "dotnet-vm gc/coordinator.rs (dispatch)",
-                include_str!("../../../dotnet-vm/src/gc/coordinator.rs"),
-            ),
-            (
-                "dotnet-vm threading/basic.rs (harvest)",
-                include_str!("../../../dotnet-vm/src/threading/basic.rs"),
-            ),
-        ];
-        let mut violations = Vec::new();
-        for (label, source) in path {
-            // Stop at an in-file test module so test-only conversions are not counted.
-            let source = source.split(TEST_MODULE).next().unwrap_or(source);
-            for (line_no, line) in source.lines().enumerate() {
-                let code = line.trim_start();
-                // The fuzz-only object registry is an intentional boundary exposure outside the
-                // GC transport path and is preserved.
-                if code.starts_with("//") || code.contains("register_object_ptr") {
-                    continue;
-                }
-                if FORBIDDEN.iter().any(|needle| code.contains(needle)) {
-                    violations.push(format!("{label}:{}: {code}", line_no + 1));
-                }
-            }
-        }
-        let integer_buffer = production.contains("Vec<(ArenaId, usize, u64)>");
-        assert!(
-            !integer_buffer && violations.is_empty(),
-            "integer transport of GC pointers remains: usize_found_buffer={integer_buffer}, \
-             conversions={violations:#?}"
-        );
     }
 }

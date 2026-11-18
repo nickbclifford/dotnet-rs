@@ -60,6 +60,20 @@ on the path, record it under "Not yet planned" in the plans README, refute it, o
   constraint, the spec rule (cite the ECMA-335 section). They do not record which plan or step
   produced the code or reference planning files.
 
+## Tests
+
+Test an intended guest behavior or a justified internal, safety, lifecycle or performance contract.
+Use independently reasoned expected values and exercise the production path responsible for the
+claim. Setup must not supply the missing behavior, and an expected failure must distinguish the
+intended error from unrelated setup or execution failures. Compile-fail tests need a compiling
+positive control and diagnostic checks when the rejection reason is the contract.
+
+Keep assertions tolerant of implementation changes that preserve the contract. Preserve distinct
+edge cases and feature configurations when merging tests. Counts should measure required behavior
+or verify the named selection actually ran; derive execution totals from that selection. Do not
+impose suite-size quotas, reduction targets or independent reviewed-count thresholds. A new named
+case should require its coverage registration, without unrelated counter edits.
+
 ## Feature gating and synchronization
 
 Gate `multithreading`-only code at module or item boundaries rather than scattering `#[cfg]`

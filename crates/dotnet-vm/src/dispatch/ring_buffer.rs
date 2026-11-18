@@ -43,14 +43,35 @@ mod tests {
     fn test_ring_buffer_wrapping() {
         let mut buffer = InstructionRingBuffer::new();
         for i in 0..15 {
-            buffer.push(i, "Add");
+            let name = if i % 2 == 0 { "Add" } else { "Subtract" };
+            buffer.push(i, name);
         }
 
         let dump = buffer.dump();
         let lines: Vec<_> = dump.lines().collect();
         assert_eq!(lines.len(), 10);
-        for line in lines {
-            assert!(line.contains("Add"));
+        for (line, expected_ip) in lines.iter().zip(5..15) {
+            assert!(
+                line.starts_with(&format!("[{expected_ip:04x}] ")),
+                "recent instruction IPs must be ordered: {line}"
+            );
+            let expected_name = if expected_ip % 2 == 0 {
+                "Add"
+            } else {
+                "Subtract"
+            };
+            assert!(
+                line.ends_with(expected_name),
+                "wrong opcode at {expected_ip}: {line}"
+            );
         }
+
+        let mut partly_filled = InstructionRingBuffer::new();
+        partly_filled.push(31, "LoadConstantInt32");
+        partly_filled.push(32, "Return");
+        assert_eq!(
+            partly_filled.dump(),
+            "[001f] LoadConstantInt32\n[0020] Return\n"
+        );
     }
 }

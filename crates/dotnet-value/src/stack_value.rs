@@ -149,6 +149,13 @@ pub enum StackValue<'gc> {
     UninitializedTypedRef,
 }
 
+// Evaluation-stack values are moved through interpreter operations. Keep their payload within
+// the current largest (validation-tagged) footprint while allowing any smaller representation.
+#[cfg(all(not(loom), target_pointer_width = "64"))]
+const STACK_VALUE_SIZE_LIMIT: usize = 120;
+#[cfg(all(not(loom), target_pointer_width = "64"))]
+const _: () = assert!(std::mem::size_of::<StackValue<'static>>() <= STACK_VALUE_SIZE_LIMIT);
+
 #[cfg(feature = "fuzzing")]
 impl<'a, 'gc> Arbitrary<'a> for StackValue<'gc> {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {

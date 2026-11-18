@@ -241,12 +241,6 @@ mod tests {
     fn assert_sync<T: Sync>() {}
 
     #[test]
-    fn test_null_exists() {
-        let _ = TypeDescription::NULL;
-        let _ = ResolutionS::NULL;
-    }
-
-    #[test]
     fn test_send_sync_traits() {
         assert_send::<Resolution<'static>>();
         assert_sync::<Resolution<'static>>();

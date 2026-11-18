@@ -17,7 +17,7 @@
 #![cfg(not(miri))]
 
 use std::{
-    fs,
+    fs, io,
     path::{Path, PathBuf},
 };
 
@@ -49,21 +49,20 @@ fn violations(label: &str, source: &str, is_stack_value_file: bool) -> Vec<Strin
     out
 }
 
-fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
+fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) -> io::Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
         let path = entry.path();
         let name = entry.file_name();
-        if path.is_dir() {
+        if entry.file_type()?.is_dir() {
             if name != "target" && name != ".git" {
-                rust_files(&path, out);
+                rust_files(&path, out)?;
             }
         } else if path.extension().is_some_and(|e| e == "rs") {
             out.push(path);
         }
     }
+    Ok(())
 }
 
 #[test]
@@ -95,16 +94,18 @@ fn scanner_distinguishes_origin_from_retired_stack_variant() {
 }
 
 #[test]
+fn scanner_fails_when_an_inventory_root_cannot_be_read() {
+    let mut files = Vec::new();
+    let regular_file = Path::new(env!("CARGO_MANIFEST_DIR")).join(file!());
+    assert!(rust_files(&regular_file, &mut files).is_err());
+}
+
+#[test]
 fn stack_value_cross_arena_object_ref_stays_retired() {
     let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     let this_file = Path::new(file!()).file_name().unwrap().to_owned();
     let mut files = Vec::new();
-    rust_files(&crates, &mut files);
-    assert!(
-        files.len() > 100,
-        "workspace scan found too few files: {}",
-        files.len()
-    );
+    rust_files(&crates, &mut files).expect("all crate source directories must be traversable");
     let mut found = Vec::new();
     let mut saw_stack_value = false;
     for path in files {

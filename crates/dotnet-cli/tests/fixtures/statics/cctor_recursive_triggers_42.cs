@@ -23,6 +23,8 @@ public class Program
     {
         // Entering A starts B, whose A.Get/delegate calls recurse into A on the same thread.
         int x = A.Get();
-        return x == 2 && B.Y == 1 ? 42 : x * 10 + B.Y;
+        if (x != 2) return 1;
+        if (B.Y != 1) return 2;
+        return 42;
     }
 }

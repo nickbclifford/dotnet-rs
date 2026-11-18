@@ -307,7 +307,7 @@ mod method_description_eq_hash_tests {
     use crate::{TypeDescription, generics::GenericLookup, resolution::ResolutionS};
     use dotnetdll::prelude::{MethodMemberIndex, TypeIndex};
     use std::{
-        collections::hash_map::DefaultHasher,
+        collections::{HashMap, hash_map::DefaultHasher},
         hash::{Hash, Hasher},
         mem::size_of,
     };
@@ -366,11 +366,24 @@ mod method_description_eq_hash_tests {
         );
     }
 
-    /// The same two descriptors must also hash differently, ensuring
-    /// `HashMap<MethodDescription, _>` and `HashSet<MethodDescription>`
-    /// cannot alias entries from different declaring types.
+    #[derive(Default)]
+    struct CollidingHasher;
+
+    impl Hasher for CollidingHasher {
+        fn finish(&self) -> u64 {
+            0
+        }
+
+        fn write(&mut self, _bytes: &[u8]) {}
+    }
+
+    /// Unequal keys remain independently retrievable even when their hashes collide.
+    #[allow(
+        clippy::mutable_key_type,
+        reason = "MethodDescription hashing and equality use descriptor identity fields; the metadata arena's mutex is not inspected"
+    )]
     #[test]
-    fn method_descriptions_with_different_parents_produce_different_hashes() {
+    fn method_descriptions_with_different_parents_remain_distinct_on_hash_collision() {
         let parent_a = TypeDescription::new(ResolutionS::NULL, make_type_index(0));
         let parent_b = TypeDescription::new(ResolutionS::NULL, make_type_index(1));
         assert_ne!(parent_a, parent_b, "precondition: parents must differ");
@@ -388,12 +401,27 @@ mod method_description_eq_hash_tests {
             MethodMemberIndex::Method(0),
         );
 
-        assert_ne!(
-            hash_of(&method_a),
-            hash_of(&method_b),
-            "MethodDescription::hash must include `parent`; \
-             methods from different declaring types must produce different hashes"
+        let mut methods =
+            HashMap::with_hasher(std::hash::BuildHasherDefault::<CollidingHasher>::default());
+        methods.insert(method_a.clone(), "first");
+        methods.insert(method_b.clone(), "second");
+
+        assert_eq!(methods.len(), 2);
+        assert_eq!(methods.get(&method_a), Some(&"first"));
+        assert_eq!(methods.get(&method_b), Some(&"second"));
+    }
+
+    #[test]
+    fn equal_method_descriptions_hash_equally() {
+        let method = MethodDescription::new(
+            TypeDescription::new(ResolutionS::NULL, make_type_index(3)),
+            GenericLookup::default(),
+            ResolutionS::NULL,
+            MethodMemberIndex::Method(2),
         );
+        let same = method.clone();
+        assert_eq!(method, same);
+        assert_eq!(hash_of(&method), hash_of(&same));
     }
 }
 

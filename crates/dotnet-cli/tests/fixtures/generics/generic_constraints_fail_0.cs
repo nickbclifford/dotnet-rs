@@ -11,16 +11,24 @@ public class BaseClassConstraint<T> where T : BaseClass { }
 public class NoDefaultCtor {
     public NoDefaultCtor(int x) { }
 }
+public class ValidImpl : IInterface { }
 
 public class Program {
     public static int Main() {
         // These will compile, but should fail at runtime when MakeGenericType is called
         // if the VM validates constraints.
-        try { FailClass(); return 1; } catch (Exception) { }
-        try { FailStruct(); return 1; } catch (Exception) { }
-        try { FailNew(); return 1; } catch (Exception) { }
-        try { FailInterface(); return 1; } catch (Exception) { }
-        try { FailBase(); return 1; } catch (Exception) { }
+        try { FailClass(); return 1; } catch (ArgumentException) { }
+        try { FailStruct(); return 1; } catch (ArgumentException) { }
+        try { FailNew(); return 1; } catch (ArgumentException) { }
+        try { FailInterface(); return 1; } catch (ArgumentException) { }
+        try { FailBase(); return 1; } catch (ArgumentException) { }
+
+        try {
+            var valid = typeof(InterfaceConstraint<>).MakeGenericType(typeof(ValidImpl));
+            if (valid.GetGenericArguments()[0] != typeof(ValidImpl)) return 2;
+        } catch (Exception) {
+            return 3;
+        }
         
         return 0; // Success if all caught
     }

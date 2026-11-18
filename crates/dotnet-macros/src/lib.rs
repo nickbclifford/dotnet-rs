@@ -299,47 +299,25 @@ mod tests {
     use dotnet_macros_core::FieldMapping;
     use syn::{Ident, punctuated::Punctuated};
 
-    fn expand_intrinsic_to_file(signature: &str, handler_name: &str) -> syn::File {
-        let parsed: ParsedSignature =
-            syn::parse_str(signature).expect("signature should parse for intrinsic test");
-        let ident = Ident::new(handler_name, proc_macro2::Span::call_site());
-        let handler_fn: ItemFn = syn::parse_quote! {
-            fn #ident() {}
+    fn primitive_variant(type_name: &str) -> Option<String> {
+        let tokens = match_primitive(type_name)?;
+        let syn::Expr::Path(expression) = syn::parse2::<syn::Expr>(tokens).ok()? else {
+            return None;
         };
-        let filter_fn = generate_intrinsic_filter_fn(&ident, &parsed);
-
-        syn::parse2(quote! {
-            #handler_fn
-            #filter_fn
-        })
-        .expect("generated intrinsic expansion should parse as a file")
-    }
-
-    fn find_filter_fn<'a>(file: &'a syn::File, handler_name: &str) -> &'a syn::ItemFn {
-        let filter_prefix = format!("{}_filter_", handler_name);
-        file.items
-            .iter()
-            .find_map(|item| match item {
-                syn::Item::Fn(function)
-                    if function.sig.ident.to_string().starts_with(&filter_prefix) =>
-                {
-                    Some(function)
-                }
-                _ => None,
-            })
-            .expect("expanded intrinsic should contain generated filter function")
-    }
-
-    fn assert_filter_tail_is_true(filter: &syn::ItemFn) {
-        match filter.block.stmts.last() {
-            Some(syn::Stmt::Expr(syn::Expr::Lit(expr), _)) => match &expr.lit {
-                syn::Lit::Bool(value) => {
-                    assert!(value.value, "filter tail should evaluate to true")
-                }
-                _ => panic!("expected filter tail literal to be a bool"),
-            },
-            _ => panic!("expected filter tail statement to be a literal expression"),
+        let segments: Vec<_> = expression.path.segments.iter().collect();
+        let [base_type, variant] = segments.as_slice() else {
+            return None;
+        };
+        if base_type.ident != "BaseType"
+            || !matches!(
+                &base_type.arguments,
+                syn::PathArguments::AngleBracketed(arguments)
+                    if matches!(arguments.args.first(), Some(syn::GenericArgument::Type(syn::Type::Path(path))) if path.path.is_ident("MethodType"))
+            )
+        {
+            return None;
         }
+        Some(variant.ident.to_string())
     }
 
     #[test]
@@ -687,56 +665,36 @@ mod tests {
     }
 
     #[test]
-    fn intrinsic_filter_checks_only_primitive_parameter_shapes() {
-        let file = expand_intrinsic_to_file(
-            "static void DotnetRs.MacroBoundary::Mixed(int, T, T[], T&)",
-            "mixed_boundary_handler",
-        );
-        let filter = find_filter_fn(&file, "mixed_boundary_handler");
-
-        // One primitive parameter (`int`) emits one check block, and the rest are
-        // intentionally left to runtime handler validation.
-        assert_eq!(
-            filter.block.stmts.len(),
-            2,
-            "expected one generated primitive check plus final true tail"
-        );
-        assert_filter_tail_is_true(filter);
-    }
-
-    #[test]
-    fn intrinsic_filter_is_true_only_when_all_parameters_are_non_primitive_shapes() {
-        let file = expand_intrinsic_to_file(
-            "static void DotnetRs.MacroBoundary::NonPrimitiveOnly(T, T[], T&, System.Type)",
-            "non_primitive_boundary_handler",
-        );
-        let filter = find_filter_fn(&file, "non_primitive_boundary_handler");
-
-        assert_eq!(
-            filter.block.stmts.len(),
-            1,
-            "non-primitive signature shapes should not emit macro checks"
-        );
-        assert_filter_tail_is_true(filter);
-    }
-
-    #[test]
-    fn intrinsic_filter_checks_every_normalized_primitive_keyword() {
-        // `ParsedSignature` rewrites keywords such as `byte` to `UInt8`; each rewritten name must
-        // still produce a check, or the handler would match any overload of the same arity.
-        for keyword in [
-            "bool", "byte", "sbyte", "char", "short", "ushort", "int", "uint", "long", "ulong",
-            "float", "double", "string", "object", "nint", "nuint",
+    fn intrinsic_filter_normalizes_keywords_to_the_expected_base_type() {
+        // The executable VM registry tests cover matching and mismatching generated filters for
+        // runtime-provided int/long/array shapes. This table protects every parser-normalized
+        // primitive mapping without freezing the emitted Rust statement syntax.
+        for (keyword, normalized, base_type) in [
+            ("bool", "Boolean", "Boolean"),
+            ("byte", "UInt8", "UInt8"),
+            ("sbyte", "Int8", "Int8"),
+            ("char", "Char", "Char"),
+            ("short", "Int16", "Int16"),
+            ("ushort", "UInt16", "UInt16"),
+            ("int", "Int32", "Int32"),
+            ("uint", "UInt32", "UInt32"),
+            ("long", "Int64", "Int64"),
+            ("ulong", "UInt64", "UInt64"),
+            ("float", "Float32", "Float32"),
+            ("double", "Float64", "Float64"),
+            ("string", "String", "String"),
+            ("object", "Object", "Object"),
+            ("nint", "IntPtr", "IntPtr"),
+            ("nuint", "UIntPtr", "UIntPtr"),
         ] {
-            let file = expand_intrinsic_to_file(
-                &format!("static void DotnetRs.MacroBoundary::One({keyword})"),
-                "keyword_handler",
-            );
-            let filter = find_filter_fn(&file, "keyword_handler");
+            let signature = format!("static void DotnetRs.MacroBoundary::One({keyword})");
+            let parsed: ParsedSignature =
+                syn::parse_str(&signature).expect("primitive signature should parse");
+            assert_eq!(parsed.parameters, [normalized], "{keyword} normalization");
             assert_eq!(
-                filter.block.stmts.len(),
-                2,
-                "`{keyword}` parameter emitted no generated check"
+                primitive_variant(&parsed.parameters[0]).as_deref(),
+                Some(base_type),
+                "{keyword} BaseType mapping"
             );
         }
     }

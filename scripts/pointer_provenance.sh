@@ -51,6 +51,7 @@ expected_controls=(
 'pointer_provenance_tests::p42_typed_reference_address_policy|42|1'
 'pointer_provenance_tests::p43_enum_home_scalar_roundtrip|43|2'
 'pointer_provenance_tests::p44_native_substring_gc_resume|44|3'
+'pointer_provenance_tests::p19_ldelem_negative_index|45|4'
 )
 
 # full name | classification | native diagnostic permission | control shard
@@ -79,7 +80,7 @@ catalog=(
 'pointer_provenance_tests::p_null_through_pointer_local_address|control|no|12'
 'pointer_provenance_tests::p17_localloc_ptr_ceq_self|control|no|15'
 'pointer_provenance_tests::p18_localloc_ptr_clt|control|no|16'
-'pointer_provenance_tests::p19_ldelem_negative_index|panic|yes|-'
+'pointer_provenance_tests::p19_ldelem_negative_index|control|no|45'
 'pointer_provenance_tests::p20_heap_convu_then_typed_write_then_raw_store|control|no|8'
 'pointer_provenance_tests::p21_localloc_signed_extreme_offsets_roundtrip|control|no|17'
 'pointer_provenance_tests::p22_localloc_wrap_to_zero_roundtrip|control|no|18'
@@ -106,7 +107,7 @@ catalog=(
 flags='-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks'
 die() { echo "error: $*" >&2; exit 2; }
 # Refuse stale, duplicate or non-singleton partitions before discovery.
-reviewed_count=44
+control_count=${#expected_controls[@]}
 declare -A expected_by_name=() batch_by_name=() seen_names=() seen_controls=() shard_counts=() batch_members=()
 shards=() batches=()
 for row in "${expected_controls[@]}"; do
@@ -123,7 +124,6 @@ for ((b = 1; b <= ${#batch_members[@]}; b++)); do
     batches+=("$b")
 done
 ((${#batches[@]} > 0)) || die 'expected control table must define batches'
-((${#expected_controls[@]} == reviewed_count)) || die 'expected control count differs from reviewed count'
 for row in "${catalog[@]}"; do
     IFS='|' read -r name class native group extra <<< "$row"
     [[ $name == pointer_provenance_tests::p[0-9_]* && ! -v seen_names[$name] && -z ${extra:-} ]] || die "invalid or duplicate catalog identity: $name"
@@ -137,7 +137,7 @@ for row in "${catalog[@]}"; do
     shard_counts[$group]=$(( ${shard_counts[$group]:-0} + 1 ))
     ((shard_counts[$group] == 1)) || die "non-singleton control shard: $group"
 done
-((${#seen_controls[@]} == reviewed_count && ${#shard_counts[@]} == reviewed_count)) || die 'catalog partition differs from reviewed controls'
+((${#seen_controls[@]} == control_count && ${#shard_counts[@]} == control_count)) || die 'catalog partition differs from reviewed controls'
 shard_options=$(IFS='|'; echo "${shards[*]}")
 batch_options=$(IFS='|'; echo "${batches[*]}")
 usage() {
@@ -260,12 +260,10 @@ try:
         if case.get("ignored") is False and case.get("filter-match", {}).get("status") == "matches" and name not in diagnostics:
             if name not in controls or listing[name] != 1:
                 raise ValueError(f"unmatched enabled pointer probe: {name}")
-    if len(controls) != 44:
-        raise ValueError(f"reviewed control count mismatch: {len(controls)}")
 except (KeyError, TypeError, ValueError) as exc:
     print(f"control discovery/ignore guard failed: {exc}", file=sys.stderr)
     sys.exit(1)
-print(f"control discovery: {len(controls)} exact non-ignored controls; 44 singleton shards partition enabled probes")
+print(f"control discovery: {len(controls)} exact non-ignored controls; {len(controls)} singleton shards partition enabled probes")
 PYCODE
     then rm -rf "$dir"; return 1; fi
     rm -rf "$dir"

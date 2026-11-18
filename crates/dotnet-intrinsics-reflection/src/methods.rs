@@ -878,7 +878,7 @@ fn resolve_base_method_definition<'gc, T: ReflectionIntrinsicHost<'gc>>(
             Some(&signature_lookup),
             Some(&parent_lookup),
             false,
-        ) && parent_method.method().virtual_member
+        )? && parent_method.method().virtual_member
         {
             base_method = parent_method;
             base_lookup = parent_lookup.clone();
@@ -1088,7 +1088,9 @@ fn unbox_param_to_stack_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
         ParameterType::Value(t) => {
             let shape =
                 param_shape(ctx, method, lookup, t).map_err(|e| StepResult::Error(e.into()))?;
-            let stack_value = match plan_argument(ctx, arg, &shape, false) {
+            let stack_value = match plan_argument(ctx, arg, &shape, false)
+                .map_err(|e| StepResult::Error(e.into()))?
+            {
                 ArgPlan::Reject => return Err(argument_mismatch(ctx, arg, &shape)),
                 ArgPlan::Reference => StackValue::ObjectRef(arg),
                 ArgPlan::Exact => {
@@ -1134,7 +1136,9 @@ fn unbox_param_to_stack_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
         ParameterType::Ref(t) => {
             let shape =
                 param_shape(ctx, method, lookup, t).map_err(|e| StepResult::Error(e.into()))?;
-            if plan_argument(ctx, arg, &shape, true) == ArgPlan::Reject {
+            if plan_argument(ctx, arg, &shape, true).map_err(|e| StepResult::Error(e.into()))?
+                == ArgPlan::Reject
+            {
                 return Err(argument_mismatch(ctx, arg, &shape));
             }
             let ParamShape {
@@ -1263,7 +1267,7 @@ pub fn validate_invoke_target<'gc, T: ReflectionIntrinsicHost<'gc>>(
             "Non-static method requires a target.",
         ));
     }
-    if receiver_fits(ctx, method, lookup, receiver) {
+    if receiver_fits(ctx, method, lookup, receiver).map_err(|e| StepResult::Error(e.into()))? {
         Ok(())
     } else {
         Err(ctx.throw_by_name_with_message(

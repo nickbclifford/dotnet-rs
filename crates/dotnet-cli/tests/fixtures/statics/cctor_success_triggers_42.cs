@@ -13,20 +13,19 @@ public class Program
 {
     public static int Main()
     {
-        int total = 0;
-        total += new ByNew(10).I;                       // 11
-        total += ByCall.Add(1, 2);                      // 5
+        if (new ByNew(10).I != 11) return 1;
+        if (ByCall.Add(1, 2) != 5) return 2;
         Func<int, int> f = ByDelegate.Add;
-        total += f(20);                                 // 24
+        if (f(20) != 24) return 3;
         Func<int, int> g = new ByDelegate().Inst;
-        total += g(1);                                  // 8
+        if (g(1) != 8) return 4;
         Action a = ByMulticast.Bump;
         a += ByMulticast.Bump;
         a();
-        total += ByMulticast.Count;                     // 102
-        total += (int)typeof(ByReflection).GetMethod("Get").Invoke(null, new object[] { 5 }); // 11
+        if (ByMulticast.Count != 102) return 5;
+        if ((int)typeof(ByReflection).GetMethod("Get").Invoke(null, new object[] { 5 }) != 11) return 6;
         ByValue v = default; v.X = 1;
-        total += v.Get();                               // 8
-        return total == 169 ? 42 : total;
+        if (v.Get() != 8) return 7;
+        return 42;
     }
 }

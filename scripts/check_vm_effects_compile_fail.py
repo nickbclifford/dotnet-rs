@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check that each effects facade compile-fail example fails for its expected reason."""
+"""Check native effects and FieldType compile-fail contracts against rustc diagnostics."""
 
 import json
 import os
@@ -43,10 +43,15 @@ def compiler_errors(stdout):
 
 
 def main():
-    if sys.argv[1:] not in ([], ["multithreading"]):
-        raise SystemExit("usage: check_vm_effects_compile_fail.py [multithreading]")
-    feature = 'features = ["multithreading"]' if sys.argv[1:] else ""
-    text = SOURCE.read_text()
+    arguments = sys.argv[1:]
+    field_types = arguments[:1] == ["field-types"]
+    if field_types:
+        arguments = arguments[1:]
+    if arguments not in ([], ["multithreading"]):
+        raise SystemExit("usage: check_vm_effects_compile_fail.py [field-types] [multithreading]")
+    feature = 'features = ["multithreading"]' if arguments else ""
+    source = ROOT / "crates/dotnet-value/src/layout.rs" if field_types else SOURCE
+    text = source.read_text()
     blocks = list(COMPILE_FAIL_FENCE.finditer(text))
     if not blocks:
         raise SystemExit("found no compile-fail examples")
@@ -74,6 +79,15 @@ use dotnet_vm_ops::effects::{NativeFuture, VmEffects};
 fn use_effects(_: Option<VmEffects>) {}
 fn use_future(_: Option<NativeFuture>) {}
 """
+        if field_types:
+            positive_control = """\
+use dotnet_value::{ObjectRef, layout::FieldType};
+
+fn permitted_read(bytes: &[u8]) -> ObjectRef<'static> {
+    unsafe { <ObjectRef<'static> as FieldType>::read_from(bytes) }
+}
+fn builtin_write(value: i32, bytes: &mut [u8]) { value.write_to(bytes); }
+"""
         result = compile_project(project, positive_control, env)
         if result.returncode != 0:
             print("positive control: expected the facade types to compile", file=sys.stderr)
@@ -86,6 +100,9 @@ fn use_future(_: Option<NativeFuture>) {}
                 line.removeprefix("/// ").removeprefix("///")
                 for line in block["code"].splitlines()
             )
+            if field_types:
+                # Match rustdoc's item/statement context for these standalone examples.
+                code = "fn main() {\n" + code + "\n}\n"
             result = compile_project(project, code, env)
             errors = compiler_errors(result.stdout)
             annotated_codes = {
@@ -93,6 +110,8 @@ fn use_future(_: Option<NativeFuture>) {}
                 for annotation in block["annotations"].split(",")
                 if re.fullmatch(r"E\d{4}", annotation)
             }
+            if field_types and not annotated_codes:
+                raise SystemExit(f"FieldType example {index} must name its expected diagnostic")
 
             def is_borrow_error(error):
                 code = error.get("code")
@@ -102,7 +121,7 @@ fn use_future(_: Option<NativeFuture>) {}
 
             if annotated_codes:
                 actual_codes = {
-                    error.get("code", {}).get("code") for error in errors
+                    (error.get("code") or {}).get("code") for error in errors
                 }
                 expected_errors = (
                     result.returncode != 0

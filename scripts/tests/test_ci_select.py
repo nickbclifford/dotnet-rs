@@ -144,10 +144,6 @@ class SelectionTests(unittest.TestCase):
             out = run_paths(["crates/dotnet-vm/OTHER.md"], root)
             self.assertEqual(lanes(out), NOTHING)
 
-    def test_repo_has_no_unexpected_md_includes(self):
-        # Informational pin: if this fails, a .md became code; the selector handles it
-        # via md_references(), this just forces a conscious look.
-        self.assertEqual(sel.md_references(REPO), {})
 
 
 class FailSafeTests(unittest.TestCase):

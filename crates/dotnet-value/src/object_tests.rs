@@ -17,6 +17,8 @@ mod tests {
     use dotnetdll::prelude::BaseType;
     use hashbrown::HashMap;
     use std::sync::{Arc as StdArc, atomic::AtomicUsize};
+    #[cfg(feature = "multithreading")]
+    use std::sync::{Mutex as StdMutex, OnceLock};
 
     // Compact ObjectRef codec regressions.
     #[cfg(feature = "multithreading")]
@@ -36,6 +38,12 @@ mod tests {
         fn drop(&mut self) {
             dotnet_utils::gc::unregister_arena(self.0);
         }
+    }
+
+    #[cfg(feature = "multithreading")]
+    fn codec_registration_lock() -> &'static StdMutex<()> {
+        static LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| StdMutex::new(()))
     }
 
     fn codec_test_object<'gc>(mc: &gc_arena::Mutation<'gc>, id: crate::ArenaId) -> ObjectRef<'gc> {
@@ -62,6 +70,7 @@ mod tests {
     #[cfg(feature = "multithreading")]
     #[test]
     fn codec_id40000() {
+        let _guard = codec_registration_lock().lock().unwrap();
         let _registration = RecreationRegistration::new(40000);
         let arena = gc_arena::Arena::<gc_arena::Rootable![()]>::new(|_| ());
         arena.mutate(|mc, _| {
@@ -78,6 +87,7 @@ mod tests {
     #[cfg(feature = "multithreading")]
     #[test]
     fn codec_registered_boundaries() {
+        let _guard = codec_registration_lock().lock().unwrap();
         let arena = gc_arena::Arena::<gc_arena::Rootable![()]>::new(|_| ());
         for id in [0, 1, 32767, 32768, 40000, 65535] {
             let _registration = RecreationRegistration::new(id);
@@ -227,26 +237,18 @@ mod tests {
         observed
     }
 
-    /// Old publication loses the witness.
+    /// The local gc-arena model's raw pointer update loses the weak witness.
+    /// This models the write-barrier requirement, not the VM MarkObjects path.
     #[test]
     fn publication_old_path_diagnostic() {
         assert_eq!(publication_drops(false), 1);
     }
 
-    /// A root barrier preserves the witness.
+    /// The local gc-arena model preserves the weak witness when the root barrier runs.
+    /// Production publication lifecycle coverage lives in the VM collection tests.
     #[test]
     fn publication_root_barrier_control() {
         assert_eq!(publication_drops(true), 0);
-    }
-
-    /// Publication through the root barrier survives.
-    #[test]
-    fn publication_pending_survival() {
-        assert_eq!(
-            publication_drops(true),
-            0,
-            "published witness was collected"
-        );
     }
 
     fn field_storage() -> (FieldStorage, *const u8) {

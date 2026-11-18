@@ -653,7 +653,7 @@ mod vector_object_ref_tests {
         clippy::mutable_key_type,
         reason = "TypeDescription is the runtime layout key; this regression uses the null descriptor only as a field-map key"
     )]
-    fn tracing_a_value_type_vector_keeps_embedded_object_refs_alive() {
+    fn tracing_a_value_type_vector_visits_embedded_object_refs() {
         with_test_gc_context(|gc| {
             let mut gc_desc = GcDesc::default();
             gc_desc.set_offset(0);
@@ -693,7 +693,7 @@ mod vector_object_ref_tests {
             vector.trace(&mut trace);
             assert_eq!(
                 trace.0, 1,
-                "embedded ObjectRef was not traced from vector storage"
+                "Vector::trace must visit the embedded ObjectRef field"
             );
         });
     }

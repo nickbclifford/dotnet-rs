@@ -198,6 +198,7 @@ fn run_tail_chain_and_measure_max_depth(tail_call: bool, chain_len: usize) -> us
     });
 
     let mut max_depth = 0usize;
+    let mut returned = false;
     for _ in 0..(chain_len.saturating_mul(5) + 10_000) {
         let step_res = arena.mutate_root(|gc, engine| {
             let gc_handle = GCHandle::new(
@@ -216,7 +217,10 @@ fn run_tail_chain_and_measure_max_depth(tail_call: bool, chain_len: usize) -> us
         });
 
         match step_res {
-            StepResult::Return => break,
+            StepResult::Return => {
+                returned = true;
+                break;
+            }
             StepResult::Error(e) => panic!(
                 "Execution error: {e}\nLast instructions:\n{}",
                 shared.last_instructions.lock().dump()
@@ -229,6 +233,10 @@ fn run_tail_chain_and_measure_max_depth(tail_call: bool, chain_len: usize) -> us
         }
     }
 
+    assert!(
+        returned,
+        "tail_call={tail_call} chain of length {chain_len} did not return within its step bound"
+    );
     max_depth
 }
 

@@ -583,7 +583,7 @@ mod sealed {
 /// let value = <ObjectRef<'static> as FieldType>::read_from(&[0; 8]);
 /// ```
 /// Implementations are sealed:
-/// ```compile_fail
+/// ```compile_fail,E0277
 /// use dotnet_value::layout::{FieldType, Scalar};
 /// struct Forged;
 /// impl FieldType for Forged {

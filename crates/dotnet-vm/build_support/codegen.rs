@@ -118,13 +118,14 @@ pub fn generate_intrinsic_phf(out_dir: &OsStr, entries: &[IntrinsicEntry]) {
         .iter()
         .filter(|entry| entry.is_async)
         .collect();
-    dispatch_code.push_str("#[cfg(test)]\n#[allow(clippy::type_complexity)]\nconst ASYNC_INTRINSIC_SIGNATURES: &[(&str, &str, bool, bool, &str, &[&str])] = &[\n");
+    dispatch_code.push_str("#[cfg(test)]\n#[allow(clippy::type_complexity)]\nconst ASYNC_INTRINSIC_SIGNATURES: &[(&str, &str, &str, bool, bool, &str, &[&str])] = &[\n");
     for entry in &async_entries {
         let (result, parameters) = entry.signature.as_ref().expect("method signature");
         dispatch_code.push_str(&format!(
-            "({:?}, {:?}, {}, {}, {:?}, &{:?}),\n",
+            "({:?}, {:?}, {:?}, {}, {}, {:?}, &{:?}),\n",
             entry.variant_name,
             entry.type_name,
+            entry.member_name,
             entry.is_static,
             entry.fallback.is_some(),
             result,

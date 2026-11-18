@@ -141,11 +141,11 @@ pub fn intrinsic_assembly_get_custom_attributes<'gc, T: ReflectionIntrinsicHost<
         let argument_type = dotnet_vm_ops::vm_try!(ctx.get_heap_description(assembly_obj));
         let argument_concrete = RuntimeType::Type(argument_type).to_concrete(ctx.loader().as_ref());
 
-        if !ctx
-            .loader()
-            .comparer()
-            .is_assignable_to(&argument_concrete, &assembly_base_concrete)
-        {
+        if !dotnet_vm_ops::vm_try!(
+            ctx.loader()
+                .comparer()
+                .is_assignable_to(&argument_concrete, &assembly_base_concrete)
+        ) {
             return populate_reflection_array(ctx, Vec::new(), element_type);
         }
     }
@@ -521,9 +521,7 @@ fn materialize_custom_attribute<'gc, T: ReflectionIntrinsicHost<'gc>>(
 
     if let Some(filter_type) = attribute_filter {
         let is_match = attribute_type == *filter_type
-            || ctx
-                .is_a(attribute_type.clone().into(), filter_type.clone().into())
-                .unwrap_or(false);
+            || ctx.is_a(attribute_type.clone().into(), filter_type.clone().into())?;
         if !is_match {
             return Ok(None);
         }
@@ -1209,7 +1207,10 @@ pub fn handle_get_constructor_impl<'gc, T: ReflectionIntrinsicHost<'gc>>(
                         td.resolution.clone(),
                         MethodMemberIndex::Method(idx),
                     );
-                    constructor_type_fit(ctx, &candidate, &lookup, wanted)
+                    match constructor_type_fit(ctx, &candidate, &lookup, wanted) {
+                        Ok(fit) => fit,
+                        Err(error) => return StepResult::Error(error),
+                    }
                 }
             };
             if fit != TypeFit::No {
@@ -1232,15 +1233,27 @@ pub fn handle_get_constructor_impl<'gc, T: ReflectionIntrinsicHost<'gc>>(
                             td.resolution.clone(),
                             MethodMemberIndex::Method(current),
                         );
-                        if crate::invoke_args::constructor_more_specific(
-                            ctx, &candidate, &previous, &lookup,
-                        ) {
+                        let candidate_more_specific =
+                            match crate::invoke_args::constructor_more_specific(
+                                ctx, &candidate, &previous, &lookup,
+                            ) {
+                                Ok(result) => result,
+                                Err(error) => return StepResult::Error(error),
+                            };
+                        if candidate_more_specific {
                             found_constructor = Some((fit, idx));
                             ambiguous = false;
-                        } else if !crate::invoke_args::constructor_more_specific(
-                            ctx, &previous, &candidate, &lookup,
-                        ) {
-                            ambiguous = true;
+                        } else {
+                            let previous_more_specific =
+                                match crate::invoke_args::constructor_more_specific(
+                                    ctx, &previous, &candidate, &lookup,
+                                ) {
+                                    Ok(result) => result,
+                                    Err(error) => return StepResult::Error(error),
+                                };
+                            if !previous_more_specific {
+                                ambiguous = true;
+                            }
                         }
                     }
                     _ => {}
@@ -1270,10 +1283,10 @@ fn constructor_type_fit<'gc, T: ReflectionIntrinsicHost<'gc>>(
     constructor: &MethodDescription,
     lookup: &GenericLookup,
     wanted: &[RuntimeType],
-) -> TypeFit {
+) -> Result<TypeFit, VmError> {
     let parameters = &constructor.signature().parameters;
     if parameters.len() != wanted.len() {
-        return TypeFit::No;
+        return Ok(TypeFit::No);
     }
     let mut overall = TypeFit::Exact;
     for (parameter, wanted) in parameters.iter().zip(wanted) {
@@ -1284,14 +1297,14 @@ fn constructor_type_fit<'gc, T: ReflectionIntrinsicHost<'gc>>(
             ParameterType::Ref(t) => RuntimeType::ByRef(Box::new(
                 ctx.reflection_make_runtime_type_for_method(constructor.clone(), lookup, t),
             )),
-            _ => return TypeFit::No,
+            _ => return Ok(TypeFit::No),
         };
-        match crate::invoke_args::type_fit(ctx, wanted, &declared) {
-            TypeFit::No => return TypeFit::No,
+        match crate::invoke_args::type_fit(ctx, wanted, &declared)? {
+            TypeFit::No => return Ok(TypeFit::No),
             fit => overall = overall.max(fit),
         }
     }
-    overall
+    Ok(overall)
 }
 
 fn member_name_matches(name_filter: Option<&str>, candidate: &str, ignore_case: bool) -> bool {

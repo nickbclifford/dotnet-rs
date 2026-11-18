@@ -12,5 +12,7 @@ name = "generate_structured_corpus"
 path = "generate_structured_corpus.rs"
 
 [dependencies]
+arbitrary = "1.3"
+dotnet-vm = { path = "../..", features = ["fuzzing"] }
 dotnetdll = "0.4.0"
 walkdir = "2.5"

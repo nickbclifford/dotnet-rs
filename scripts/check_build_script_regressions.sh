@@ -77,15 +77,32 @@ assert_generated_support_slot_artifacts() {
         || fail "generated C# slot IDs have unexpected contents in $csharp_slots"
 }
 
+assert_no_dotnet_invocations() (
+    local log_file="$1"
+    shift
+    local guard_dir status=0
+    guard_dir="$(mktemp -d)"
+    trap 'rm -rf -- "$guard_dir"' EXIT
+    cat > "$guard_dir/dotnet" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$DOTNET_INVOCATION_LOG"
+exit 86
+EOF
+    chmod +x "$guard_dir/dotnet"
+    PATH="$guard_dir:$PATH" DOTNET_INVOCATION_LOG="$guard_dir/invocations" \
+        "$@" 2>&1 | tee "$log_file" || status=$?
+    if [[ -f "$guard_dir/invocations" ]]; then
+        cat "$guard_dir/invocations" >&2
+        fail "unexpected dotnet invocation during guarded build (see $log_file)"
+    fi
+    [[ $status == 0 ]] || fail "guarded build exited $status (see $log_file)"
+)
+
 assert_clippy_skips_dotnet() {
     local log_file="$LOG_DIR/clippy-clean.log"
     log_step "Probe 1/4: clean clippy should skip dotnet/MSBuild invocation paths"
     cargo clean
-    cargo clippy --workspace --all-targets 2>&1 | tee "$log_file"
-
-    if rg -n -i 'dotnet (build|restore)|msbuild|csproj' "$log_file" >/dev/null; then
-        fail "detected dotnet/MSBuild invocation markers during clean clippy (see $log_file)"
-    fi
+    assert_no_dotnet_invocations "$log_file" cargo clippy --workspace --all-targets
 }
 
 assert_skip_toggle_invalidates_support_build() {
@@ -382,4 +399,6 @@ main() {
     log_step "Build-script regression probes passed"
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

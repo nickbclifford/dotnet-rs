@@ -13,6 +13,14 @@ use dotnetdll::prelude::*;
 use gc_arena::{Collect, collect::Trace};
 use std::sync::OnceLock;
 
+#[cfg(all(test, feature = "fuzzing"))]
+thread_local! {
+    pub(crate) static FUZZ_ENTRYPOINT_TRACE_TARGET: std::cell::RefCell<Option<crate::MethodDescription>> = const { std::cell::RefCell::new(None) };
+    pub(crate) static FUZZ_EXECUTED_INSTRUCTION_IPS: std::cell::RefCell<Vec<usize>> = const { std::cell::RefCell::new(Vec::new()) };
+    pub(crate) static FUZZ_CAPTURE_ALL_METHOD_IPS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    pub(crate) static FUZZ_DISPATCHED_METHOD_IPS: std::cell::RefCell<Vec<(String, String, usize)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 #[cfg(feature = "bench-instrumentation")]
 use dotnet_metrics::OpcodeCategory;
 
@@ -289,6 +297,28 @@ impl<'gc> ExecutionEngine<'gc> {
             return invalid_ip_step_result(ip);
         }
         let i = &instructions[ip];
+
+        #[cfg(all(test, feature = "fuzzing"))]
+        {
+            let source = &self.stack.state().info_handle.source;
+            if FUZZ_CAPTURE_ALL_METHOD_IPS.with(std::cell::Cell::get) {
+                FUZZ_DISPATCHED_METHOD_IPS.with(|events| {
+                    events.borrow_mut().push((
+                        source.parent.definition().name.to_string(),
+                        source.method().name.to_string(),
+                        ip,
+                    ));
+                });
+            }
+            if FUZZ_ENTRYPOINT_TRACE_TARGET.with(|target| {
+                target
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|target| target == source)
+            }) {
+                FUZZ_EXECUTED_INSTRUCTION_IPS.with(|ips| ips.borrow_mut().push(ip));
+            }
+        }
 
         // Synchronize original IP and stack height for suspension/retry logic (e.g. Yield)
         self.stack.execution.original_ip = ip;

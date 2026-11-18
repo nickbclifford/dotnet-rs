@@ -1,6 +1,6 @@
 # Consolidate tests around intended contracts
 
-**Status:** Not started
+**Status:** Complete
 **Outcome:** The actionable test-quality findings from [27a](27a-test-audit.md) are resolved, with
 intended behavior and safety coverage preserved and verified through the relevant production paths.
 
@@ -62,10 +62,11 @@ findings, not another open-ended audit. Prioritize defects in the evidence befor
 | 7 | Contract tolerance and redundant models: CLI-2, CLI-4, CLI-15, VI-3, LIB-5, LIB-8, LIB-12, LIB-15, LIB-19, TOOLS-7 | Preserve behavioral/safety assertions while relaxing incidental event counts, diagnostic prose, hash inequality and footprint snapshots; check compile-fail reasons; retain one justified positive/negative model and use an overlap-guaranteeing API for overlap workloads |
 | 8 | Count/registry maintenance: TOOLS-1–TOOLS-4, LIB-4, LIB-13 | Permit fully registered additions without unrelated counter edits; preserve named required identities, old ABI IDs, uniqueness, discovery and exactly-once execution checks |
 
-LIB-6 is a separate production-policy investigation, tracked in the plans README. Preserve its
-test until the resolution-error/type-identity policy is decided; change implementation and test
-together under that decision. Do not silently delete the test or declare the underlying behavior
-correct. This dependency does not block unrelated cleanup, but prevents closing that finding.
+LIB-6 follows the maintainer's clarified policy: resolution failure is a typed error, distinct
+from a successful comparison yielding false. Propagate `TypeResolutionError` through concrete
+comparison and dependent assignability to the VM's existing `VmError::TypeResolution` boundary,
+with regressions distinguishing errors, ordinary inequality and valid identity. Update production
+and tests together; do not hide failures behind `false`, a panic or equality of error payloads.
 
 Within batch 7, retain each exact size requirement justified by ABI, serialization or safety;
 use a documented footprint bound only where that is the actual performance requirement. Retain
@@ -98,6 +99,19 @@ tests; any that prevent verification remain blockers. Intended contract coverage
 deletion/merge, changed tests run in their required configurations, and relevant checks pass.
 Unavailable required checks are reported as outstanding. No suite-size cap or reduction target
 is introduced, and no finding is closed merely by raising a counter.
+
+## Implementation record
+
+The [shared ledger](27-test-audit-ledger.md#combined-cleanup-verification) links the CLI, library,
+VM and tooling dispositions and combined verification. Strengthened tests also exposed element
+stride overflow before array bounds handling and the wrong managed exception at
+`Type.MakeGenericType`; the directly related production fixes retain the intended managed
+exceptions and propagate genuine resolution failures as host errors. The negative-index case
+is an enabled, named control with derived execution accounting.
+
+The plans README separately tracks negative GC-generation validation and legacy boolean
+metadata classifiers/optional reflection probes. The cleanup records state the remaining
+model, stress-scheduling and representative overload-coverage limits.
 
 ## Ask the maintainer only if
 

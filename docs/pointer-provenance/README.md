@@ -77,10 +77,15 @@ Independent pre-repair recreations showed native Transient owner-liveness and cl
 
 A controlled multithreading cross-arena teardown produced a pre-repair Miri use-after-free; post-repair Miri tests passed for rejection after unregister and for an in-flight closure protected by a lease. The byte Fill fast path was repaired after a controlled reproduction of its observation-to-access gap; end-to-end reachability is unconfirmed. A one-byte direct-static p36 access after forced collection passed in both configurations, refuting that particular allocation-lifetime hypothesis only. p12 instead hit a four-byte alignment `debug_assert` in both configurations: not Miri UB and not a teardown proof. p35 passed post-repair in both configurations; its pre-repair exception type-resolution failure was not a Miri UB report, and its snapshot read does not show stack-home write-through.
 
-The catalog has **41 entries: 37 blocking controls and 4 diagnostic-only probes** (see the [inventory](INVENTORY.md#probe-catalog)). At M1d, all 33 controls of that time passed in both configurations in the paired-shard pinned-Miri sweep. The current lane layout is described in [CI](../CI.md#blocking-miri-pointer-controls-lane). See the [M1d inventory](INVENTORY.md#m1d-baseline-and-outcomes) for commands, counts and times.
+The [runner catalog](../../scripts/pointer_provenance.sh) names the blocking controls and
+diagnostic-only probes; the [inventory](INVENTORY.md#probe-catalog) records their contracts and
+evidence. The current lane layout is described in
+[CI](../CI.md#blocking-miri-pointer-controls-lane). Historical commands and outcomes remain in the
+[M1d inventory](INVENTORY.md#m1d-baseline-and-outcomes).
 
 ## Executable records
 
-- [`INVENTORY.md`](INVENTORY.md) records outcomes and limits, the finding map, all 39 catalog entries and control results.
+- [`INVENTORY.md`](INVENTORY.md) records outcomes and limits, the finding map, catalog entries and control results.
 - [`pointer_provenance_tests.rs`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) is the owning VM test source; [`pointer_provenance.sh`](../../scripts/pointer_provenance.sh) owns catalog discovery, guarded control shards and bounded diagnostics.
-- Only p19 is permitted for native diagnostics. Never run known-UB probes natively or ignored tests outside the runner's diagnostic entrypoint.
+- Native diagnostic permissions come from the runner catalog. The remaining diagnostic-only
+  probes use Miri through the runner's diagnostic entrypoint.

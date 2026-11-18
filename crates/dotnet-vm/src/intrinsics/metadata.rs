@@ -389,109 +389,53 @@ mod tests {
     }
 
     #[test]
-    fn test_intrinsic_kind_categories() {
-        // Test that we have the three expected categories
-        assert_ne!(IntrinsicKind::Static, IntrinsicKind::VirtualOverride);
-        assert_ne!(IntrinsicKind::Static, IntrinsicKind::DirectIntercept);
-        assert_ne!(
-            IntrinsicKind::VirtualOverride,
-            IntrinsicKind::DirectIntercept
-        );
-    }
-
-    #[test]
     fn test_metadata_constructors() {
-        // Create a dummy handler for testing
-        let dummy_handler = MethodIntrinsicId::Missing;
+        use crate::intrinsics::StaticIntrinsicHandler;
 
-        // Test static constructor
-        let static_meta = IntrinsicMetadata::static_intrinsic(dummy_handler, "test reason");
-        assert_eq!(static_meta.kind, IntrinsicKind::Static);
-        assert_eq!(static_meta.reason, "test reason");
-        assert_eq!(static_meta.handler, dummy_handler);
+        let registered_handler = crate::intrinsics::INTRINSIC_ENTRIES
+            .iter()
+            .find_map(|entry| match entry.handler {
+                StaticIntrinsicHandler::Method(handler)
+                    if handler != MethodIntrinsicId::Missing =>
+                {
+                    Some(handler)
+                }
+                _ => None,
+            })
+            .expect("generated table contains executable method handlers");
+        let missing_handler = MethodIntrinsicId::Missing;
 
-        // Test virtual override constructor
-        let virtual_meta = IntrinsicMetadata::virtual_override(dummy_handler, "virtual reason");
-        assert_eq!(virtual_meta.kind, IntrinsicKind::VirtualOverride);
-        assert_eq!(virtual_meta.reason, "virtual reason");
-
-        // Test direct intercept constructor
-        let intercept_meta = IntrinsicMetadata::direct_intercept(dummy_handler, "intercept reason");
-        assert_eq!(intercept_meta.kind, IntrinsicKind::DirectIntercept);
-        assert_eq!(intercept_meta.reason, "intercept reason");
-    }
-
-    #[test]
-    fn test_intrinsic_classification_categories() {
-        // This test verifies that the three intrinsic categories are clearly distinguished
-        // in the IntrinsicKind enum. Each category has a specific purpose:
-        //
-        // 1. DirectIntercept: Must bypass BCL for correctness
-        //    - Example: String.get_Length (VM's internal representation differs)
-        //    - Example: Unsafe memory operations (must respect VM GC)
-        //
-        // 2. Static: VM-only implementation (no BCL equivalent)
-        //    - Example: GC.Collect (VM-specific functionality)
-        //    - Example: Threading primitives (VM-managed)
-        //
-        // 3. VirtualOverride: Runtime type determines dispatch
-        //    - Example: RuntimeType overriding System.Type methods
-        //    - Tested via virtual dispatch integration
-
-        // Verify that the three categories are distinct
-        assert_ne!(IntrinsicKind::DirectIntercept, IntrinsicKind::Static);
-        assert_ne!(
-            IntrinsicKind::DirectIntercept,
-            IntrinsicKind::VirtualOverride
+        let static_meta = IntrinsicMetadata::static_intrinsic(
+            registered_handler,
+            "VM implementation without a managed fallback",
         );
-        assert_ne!(IntrinsicKind::Static, IntrinsicKind::VirtualOverride);
-
-        // Note: More comprehensive testing of classification logic would require
-        // mocking MethodDescription objects with static references, which is
-        // complex for unit tests. The actual classification is tested via
-        // integration tests that exercise real intrinsic methods.
-    }
-
-    #[test]
-    fn test_intrinsic_metadata_reason_field() {
-        // Verify that metadata includes human-readable reasons for intrinsics
-        let dummy_handler = MethodIntrinsicId::Missing;
-
-        // Test that each constructor creates metadata with the correct reason
-        let direct_meta = IntrinsicMetadata::direct_intercept(
-            dummy_handler,
-            "Must bypass BCL for memory layout correctness",
-        );
-        assert_eq!(direct_meta.kind, IntrinsicKind::DirectIntercept);
-        assert_eq!(
-            direct_meta.reason,
-            "Must bypass BCL for memory layout correctness"
-        );
-
-        let static_meta =
-            IntrinsicMetadata::static_intrinsic(dummy_handler, "VM-only implementation");
-        assert_eq!(static_meta.kind, IntrinsicKind::Static);
-        assert_eq!(static_meta.reason, "VM-only implementation");
-
         let virtual_meta = IntrinsicMetadata::virtual_override(
-            dummy_handler,
-            "Runtime type-specific implementation",
+            missing_handler,
+            "Runtime-type handler is resolved separately",
+        );
+        let intercept_meta = IntrinsicMetadata::direct_intercept(
+            registered_handler,
+            "VM representation differs from the managed implementation",
+        );
+
+        assert_eq!(static_meta.kind, IntrinsicKind::Static);
+        assert_eq!(static_meta.handler, registered_handler);
+        assert_eq!(
+            static_meta.reason,
+            "VM implementation without a managed fallback"
         );
         assert_eq!(virtual_meta.kind, IntrinsicKind::VirtualOverride);
-        assert_eq!(virtual_meta.reason, "Runtime type-specific implementation");
-    }
-
-    #[test]
-    fn test_intrinsic_metadata_handler_storage() {
-        // Verify that metadata correctly stores handler IDs
-        let handler1 = MethodIntrinsicId::Missing;
-        let handler2 = MethodIntrinsicId::Missing; // Since we only have Missing for now in unit tests
-
-        let meta1 = IntrinsicMetadata::static_intrinsic(handler1, "test1");
-        let meta2 = IntrinsicMetadata::static_intrinsic(handler2, "test2");
-
-        // Handler IDs should be stored correctly
-        assert_eq!(meta1.handler, handler1, "Handler should match original");
-        assert_eq!(meta2.handler, handler2, "Handler should match original");
+        assert_eq!(virtual_meta.handler, missing_handler);
+        assert_eq!(
+            virtual_meta.reason,
+            "Runtime-type handler is resolved separately"
+        );
+        assert_eq!(intercept_meta.kind, IntrinsicKind::DirectIntercept);
+        assert_eq!(intercept_meta.handler, registered_handler);
+        assert_eq!(
+            intercept_meta.reason,
+            "VM representation differs from the managed implementation"
+        );
+        assert_ne!(static_meta.handler, virtual_meta.handler);
     }
 }

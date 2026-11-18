@@ -92,6 +92,7 @@ fn non_null_at(bytes: &mut [u8], offset: usize) -> NonNull<u8> {
 #[derive(Copy, Clone)]
 struct BenchmarkManagedPtrResolver {
     base: NonNull<u8>,
+    len: usize,
 }
 
 impl<'gc> ManagedPtrResolver<'gc> for BenchmarkManagedPtrResolver {
@@ -99,7 +100,7 @@ impl<'gc> ManagedPtrResolver<'gc> for BenchmarkManagedPtrResolver {
         &self,
         _: dotnet_value::pointer::FrameHomeSerial,
     ) -> Option<(NonNull<u8>, usize)> {
-        Some((self.base, usize::MAX))
+        Some((self.base, self.len))
     }
 
     fn static_storage_base(&self, _metadata: &StaticMetadata) -> Option<NonNull<u8>> {
@@ -142,6 +143,7 @@ fn bench_managed_ptr_serde(c: &mut Criterion) {
         let mut backing = vec![0u8; 64];
         let resolver = BenchmarkManagedPtrResolver {
             base: non_null_at(&mut backing, 0),
+            len: backing.len(),
         };
         let unmanaged_ptr = non_null_at(&mut backing, 0);
         let stack_ptr = non_null_at(&mut backing, 8);
@@ -253,6 +255,21 @@ fn bench_managed_ptr_serde(c: &mut Criterion) {
         for (origin, ptr) in &cases {
             let mut source = ManagedPtr::serialization_buffer();
             ptr.write(&mut source);
+            // SAFETY: F10.RawMemoryAccessValid — each fixture and its resolver storage
+            // remain live, and source was just serialized from that fixture.
+            let decoded = unsafe { ManagedPtr::read_resolved_unchecked(&source, &resolver) };
+            if *origin == "transient" {
+                assert!(matches!(
+                    decoded,
+                    Err(dotnet_types::error::PointerDeserializationError::UnknownSubtag(2))
+                ));
+            } else {
+                assert_eq!(
+                    decoded.expect("benchmark fixture must decode before timing"),
+                    ptr.clone().into_info(),
+                    "{origin} benchmark must measure the intended pointer"
+                );
+            }
             read_group.bench_function(*origin, |b| {
                 b.iter(|| {
                     // SAFETY: F10.RawMemoryAccessValid — `source` was produced by `ManagedPtr::write` from a live benchmark
@@ -303,7 +320,25 @@ fn bench_managed_ptr_serde(c: &mut Criterion) {
         heap_miss_ptr.write(&mut heap_miss_source);
 
         let mut cache_hit = HeapManagedPtrDecodeCache::default();
-        assert!(read_cached_heap_handle(&heap_source, &resolver, &mut cache_hit).is_some());
+        let heap_expected = cases
+            .iter()
+            .find(|(origin, _)| *origin == "heap")
+            .unwrap()
+            .1
+            .clone()
+            .into_info();
+        assert_eq!(
+            read_cached_heap_handle(&heap_source, &resolver, &mut cache_hit),
+            Some(heap_expected.clone())
+        );
+        assert_eq!(
+            read_cached_heap_handle(&heap_miss_source, &resolver, &mut cache_hit),
+            Some(heap_miss_ptr.clone().into_info())
+        );
+        assert_eq!(
+            read_cached_heap_handle(&heap_source, &resolver, &mut cache_hit),
+            Some(heap_expected)
+        );
 
         c.bench_function(
             "ManagedPtr::read_resolved_with_heap_cache_unchecked/heap_hit",

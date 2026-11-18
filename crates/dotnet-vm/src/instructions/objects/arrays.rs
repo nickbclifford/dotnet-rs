@@ -67,6 +67,18 @@ macro_rules! check_array_obj {
     }};
 }
 
+macro_rules! checked_array_element_offset {
+    ($ctx:expr, $layout:expr, $index:expr) => {{
+        let Some(offset) = ($layout).size().as_usize().checked_mul($index) else {
+            return $ctx.throw_by_name_with_message(
+                "System.IndexOutOfRangeException",
+                INDEX_OUT_OF_RANGE_MSG,
+            );
+        };
+        ByteOffset::new(offset)
+    }};
+}
+
 #[dotnet_instruction(LoadElement { param0 })]
 pub fn ldelem<
     'gc,
@@ -89,7 +101,7 @@ pub fn ldelem<
     let load_type = dotnet_vm_ops::vm_try!(res_ctx.make_concrete(param0));
     let layout = dotnet_vm_ops::vm_try!(type_layout(load_type.clone(), &res_ctx));
     let target_type = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(load_type));
-    let offset = layout.size() * index;
+    let offset = checked_array_element_offset!(ctx, layout, index);
 
     // SAFETY: F10.RawMemoryAccessValid — the origin is the array `obj` itself; heap-origin reads bounds-check `offset` and check `layout` against the array's element layout, so a bad index or element type returns `Err` (thrown below) without reading.
     let value = match unsafe {
@@ -138,7 +150,7 @@ pub fn ldelem_primitive<
         LoadType::Object => Scalar::ObjectRef,
     };
     let layout = LayoutManager::Scalar(layout);
-    let offset = layout.size() * index;
+    let offset = checked_array_element_offset!(ctx, layout, index);
 
     // SAFETY: F10.RawMemoryAccessValid — the origin is the array `obj` itself; heap-origin reads bounds-check `offset` and check `layout` against the array's element layout, so a bad index or element type returns `Err` (thrown below) without reading.
     let value = match unsafe { ctx.read_unaligned(PointerOrigin::Heap(obj), offset, &layout, None) }
@@ -214,7 +226,7 @@ fn ldelema_internal<
     let concrete_t = dotnet_vm_ops::vm_try!(res_ctx.make_concrete(param0));
     let element_layout = dotnet_vm_ops::vm_try!(type_layout(concrete_t.clone(), &res_ctx));
 
-    let element_offset = (element_layout.size() * index).as_usize();
+    let element_offset = checked_array_element_offset!(ctx, element_layout, index);
     let result = dotnet_vm_ops::vm_try!(obj.try_as_vector(|v| {
         if index >= v.layout.length {
             return Err(());
@@ -224,7 +236,7 @@ fn ldelema_internal<
         // and the element stride place `element_offset` within the live Vec payload; `raw_data_ptr`
         // is the allocation base, not a slice-derived pointer. The `ManagedPtr` below separately
         // retains `obj` as its owner; this raw address alone is not a root or access right.
-        let ptr = unsafe { v.raw_data_ptr().add(element_offset) };
+        let ptr = unsafe { v.raw_data_ptr().add(element_offset.as_usize()) };
         Ok(ptr)
     }));
 
@@ -248,7 +260,7 @@ fn ldelema_internal<
             target_type,
             Some(obj),
             readonly,
-            Some(ByteOffset::new(element_offset)),
+            Some(element_offset),
         )
         .into(),
     ));
@@ -278,7 +290,7 @@ pub fn stelem<
     let res_ctx = ctx.current_context();
     let store_type = dotnet_vm_ops::vm_try!(res_ctx.make_concrete(param0));
     let layout = dotnet_vm_ops::vm_try!(type_layout(store_type, &res_ctx));
-    let offset = layout.size() * index;
+    let offset = checked_array_element_offset!(ctx, layout, index);
 
     // SAFETY: F10.RawMemoryAccessValid — the origin is the array `obj` itself; heap-origin writes bounds-check `offset`, check reference slots against the array's layout and apply write barriers, so a bad index returns `Err` (thrown below) without writing.
     match unsafe { ctx.write_unaligned(PointerOrigin::Heap(obj), offset, value, &layout) } {
@@ -318,7 +330,7 @@ pub fn stelem_primitive<
         StoreType::Object => Scalar::ObjectRef,
     };
     let layout = LayoutManager::Scalar(layout);
-    let offset = layout.size() * index;
+    let offset = checked_array_element_offset!(ctx, layout, index);
 
     // SAFETY: F10.RawMemoryAccessValid — the origin is the array `obj` itself; heap-origin writes bounds-check `offset`, check reference slots against the array's layout and apply write barriers, so a bad index returns `Err` (thrown below) without writing.
     match unsafe { ctx.write_unaligned(PointerOrigin::Heap(obj), offset, value, &layout) } {

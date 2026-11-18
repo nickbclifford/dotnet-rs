@@ -23,8 +23,9 @@ pub(super) fn check_object_assignability<
             HeapStorage::Vec(v) => {
                 vector_matches_array_type(ctx.loader().as_ref(), &v.element, &target_ct)
             }
-            _ => false,
+            _ => Ok(false),
         })
+        .map_err(|e| StepResult::Error(e.into()))?
         .map_err(|e| StepResult::Error(e.into()))?;
     if array_type_match {
         return Ok(true);

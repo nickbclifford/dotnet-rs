@@ -11,7 +11,14 @@ static NEXT_TEST_ARENA_ID: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(feature = "multithreading")]
 pub(crate) fn next_test_arena_id() -> crate::ArenaId {
-    crate::ArenaId::new(NEXT_TEST_ARENA_ID.fetch_add(1, Ordering::Relaxed))
+    loop {
+        let id = NEXT_TEST_ARENA_ID.fetch_add(1, Ordering::Relaxed);
+        // The ObjectRef codec tests register these compact-owner boundary IDs directly. Keep
+        // automatically assigned test arenas out of that namespace across parallel tests.
+        if !matches!(id, 0 | 1 | 32_767 | 32_768 | 40_000 | 65_535) {
+            return crate::ArenaId::new(id);
+        }
+    }
 }
 
 #[cfg(any(feature = "multithreading", feature = "memory-validation"))]

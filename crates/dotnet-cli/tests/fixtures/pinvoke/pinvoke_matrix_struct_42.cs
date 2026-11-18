@@ -17,6 +17,6 @@ public class Program {
         if (result.Quot == 33 && result.Rem == 1) {
             return 42;
         }
-        return result.Quot;
+        return 1;
     }
 }

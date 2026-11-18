@@ -28,13 +28,22 @@ public class Program {
                 byte* dst = destinationBase + dstSkew;
 
                 // Non-overlapping copy.
-                Unsafe.CopyBlock(dst, src, copyLength);
+                Unsafe.CopyBlockUnaligned(dst, src, copyLength);
+                if (dst[0] != src[0] || dst[copyLength - 1] != src[copyLength - 1])
+                    return 4;
 
                 // Targeted fill.
-                Unsafe.InitBlock(dst + ((i * 7) & 63), fill, 256);
+                int fillOffset = (i * 7) & 63;
+                Unsafe.InitBlockUnaligned(dst + fillOffset, fill, 256);
 
-                // Overlapping copy to stress memmove-compatible paths.
-                Unsafe.CopyBlock(dst + 5, dst, copyLength - 5);
+                // Span copying guarantees correct overlapping moves.
+                new ReadOnlySpan<byte>(dst, (int)copyLength - 5).CopyTo(new Span<byte>(dst + 5, (int)copyLength - 5));
+                int movedFill = fillOffset + 5;
+                if (dst[movedFill] != fill || dst[movedFill + 255] != fill)
+                    return 2;
+                int sourceProbe = (int)copyLength - 6;
+                if (dst[sourceProbe + 5] != source[srcSkew + sourceProbe])
+                    return 3;
 
                 int probeA = (i * 193 + 1) % (Length - 64);
                 int probeB = (i * 89 + 3) % (Length - 64);

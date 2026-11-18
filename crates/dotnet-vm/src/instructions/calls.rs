@@ -406,15 +406,17 @@ fn dispatch_constrained_virtual<'gc, T: VesOps<'gc>>(
             .is_value_type(&ctx.current_context())
     ) {
         // Value type: check for direct override first
-        if let Some(overriding_method) = ctx.loader().find_method_in_type_internal(
-            constraint_type.clone(),
-            &base_method.method().name,
-            base_method.signature(),
-            base_method.resolution(),
-            Some(&lookup),
-            Some(&constraint_lookup),
-            false,
-        ) {
+        if let Some(overriding_method) =
+            dotnet_vm_ops::vm_try!(ctx.loader().find_method_in_type_internal(
+                constraint_type.clone(),
+                &base_method.method().name,
+                base_method.signature(),
+                base_method.resolution(),
+                Some(&lookup),
+                Some(&constraint_lookup),
+                false,
+            ))
+        {
             // Value type has its own implementation: run it under the constraint
             // type's instantiation.
             (Ok(overriding_method), constraint_lookup.clone())

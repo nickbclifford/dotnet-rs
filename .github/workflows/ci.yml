@@ -117,6 +117,8 @@ jobs:
         run: python3 scripts/tests/test_ci_aggregates.py
       - name: Test cross-arena Miri manifest
         run: python3 scripts/tests/test_ci_cross_arena_manifest.py
+      - name: Test build invocation guard
+        run: python3 scripts/tests/test_build_script_guards.py
       - name: Check doc-to-code drift
         run: bash scripts/check_doc_drift.sh
       - name: Check intra-doc links
@@ -407,15 +409,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libffi-dev
 
-      - name: Check native effects compile-fail doctests
+      - name: Check native contract compile-fail doctests
         if: ${{ matrix.features == '' || matrix.features == 'multithreading' }}
         run: |
           if [ -z "${{ matrix.features }}" ]; then
             cargo test --doc -p dotnet-vm-ops --no-default-features
             python3 scripts/check_vm_effects_compile_fail.py
+            cargo test --doc -p dotnet-value --no-default-features
+            python3 scripts/check_vm_effects_compile_fail.py field-types
           else
             cargo test --doc -p dotnet-vm-ops --no-default-features --features multithreading
             python3 scripts/check_vm_effects_compile_fail.py multithreading
+            cargo test --doc -p dotnet-value --no-default-features --features multithreading
+            python3 scripts/check_vm_effects_compile_fail.py field-types multithreading
           fi
 
       - name: Build (${{ matrix.features || 'no features' }})
@@ -543,8 +549,24 @@ jobs:
             cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features pointer::tests::heap_access_ -- --test-threads=1
       - name: Miri pointer semantics regressions (no features)
         run: |
+          tests=(
+            ptr_arith_managed_ptr_offset_valid
+            ptr_arith_live_offset_preserves_provenance_strict_core
+            ptr_arith_managed_ptr_checked_offset_reports_errors
+            ptr_arith_unmanaged_ptr_null_contract
+            ptr_arith_unmanaged_offsets_wrap_and_round_trip_with_deref
+            ptr_arith_unmanaged_arithmetic_wraps_to_explicit_null
+            ptr_arith_min_signed_operands_do_not_overflow
+            ptr_arith_pointer_comparisons_are_value_bearing
+            ptr_arith_managed_ptr_far_oob_compare_and_difference
+            ptr_arith_managed_ptr_arithmetic_boundaries_report_explicit_errors
+          )
+          required=(--require "test result: ok. ${#tests[@]} passed; 0 failed; 0 ignored;")
+          for test in "${tests[@]}"; do
+            required+=(--require "test pointer::tests::$test ...")
+          done
           python3 scripts/ci_diagnostics.py run --phase execute --case value-m1b-no-features --features no-features --timeout 900 \
-            --require 'test result: ok. 8 passed; 0 failed; 0 ignored;' -- \
+            "${required[@]}" -- \
             cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features pointer::tests::ptr_arith_ -- --test-threads=1
       - name: Miri atomic access regressions (no features)
         run: |
@@ -903,10 +925,9 @@ jobs:
                 singleton codec-id-control dotnet-value object_tests::tests::codec_local_invalid_control
                 singleton codec-boundaries-control dotnet-value object::tests::codec_short_storage
               fi
-              singleton publication-model dotnet-value object_tests::tests::publication_pending_survival
+              singleton publication-model dotnet-value object_tests::tests::publication_root_barrier_control
               singleton origin-aba dotnet-value pointer::tests::arena_identity_origin_aba
               if [ '${{ matrix.configuration }}' = multithreading ]; then
-                singleton transport-structural dotnet-utils gc::cross_arena::tests::arena_lifetime_transport
                 singleton transport-runtime dotnet-utils gc::cross_arena::tests::arena_lifetime_transport_permissive_control
                 for name in duplicate fast_bit_transaction generation_exhaustion identity_token_reuse drain_reuse_control checked_counter_control; do
                   singleton "registry-$name" dotnet-utils "gc::cross_arena::tests::arena_identity_registry_$name"
@@ -927,6 +948,7 @@ jobs:
                 singleton collection dotnet-vm executor::executor_collection_tests::arena_lifetime_vm_collection_fixed_point_payload_and_reclamation
                 singleton collection-survival dotnet-vm executor::executor_collection_tests::arena_lifetime_vm_collection
                 singleton collection-negative dotnet-vm executor::executor_collection_tests::arena_lifetime_vm_collection_unrooted_negative_control
+                singleton collection-stale-mark dotnet-vm executor::executor_collection_tests::arena_lifetime_mark_command_rejects_stale_registration
               else
                 singleton collection-control dotnet-vm executor::executor_collection_tests::arena_lifetime_vm_collection
               fi
@@ -939,7 +961,7 @@ jobs:
               exit 1
               ;;
           esac
-      - name: Isolated strict-provenance transport core
+      - name: Isolated strict-provenance controls
         if: ${{ matrix.configuration == 'multithreading' && matrix.group == 'library' }}
         env:
           MIRIFLAGS: "-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks -Zmiri-strict-provenance"
@@ -947,6 +969,9 @@ jobs:
           python3 scripts/ci_diagnostics.py run --phase execute --case transport-strict-core --features multithreading --timeout 900 \
             --require 'test result: ok. 1 passed; 0 failed; 0 ignored;' -- \
             cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features --features multithreading pointer::tests::arena_lifetime_transport_strict_core -- --exact --test-threads=1
+          python3 scripts/ci_diagnostics.py run --phase execute --case offset-strict-core --features multithreading --timeout 900 \
+            --require 'test result: ok. 1 passed; 0 failed; 0 ignored;' -- \
+            cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features --features multithreading pointer::tests::ptr_arith_live_offset_preserves_provenance_strict_core -- --exact --test-threads=1
       - name: Summarize diagnostics
         if: always()
         run: |
@@ -1087,7 +1112,7 @@ jobs:
       fail-fast: false
       matrix:
         configuration: [no-features, multithreading]
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45]
     steps:
       - name: Start diagnostics budget
         run: |

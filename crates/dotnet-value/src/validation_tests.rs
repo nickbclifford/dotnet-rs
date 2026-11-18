@@ -7,29 +7,24 @@ mod tests {
     #[cfg(feature = "memory-validation")]
     use gc_arena::{Arena, Rootable};
     #[test]
-    #[cfg(feature = "memory-validation")]
+    #[cfg(all(feature = "memory-validation", not(feature = "multithreading")))]
     fn test_arena_mismatch_panics() {
-        #[cfg(feature = "multithreading")]
-        {}
-        #[cfg(not(feature = "multithreading"))]
-        {
-            type TestRoot = Rootable![()];
-            let arena = Arena::<TestRoot>::new(|_mc| ());
-            arena.mutate(|gc, _root| {
-                dotnet_utils::sync::MANAGED_THREAD_ID.with(|id| id.set(Some(ArenaId::new(1))));
-                let gc_handle = dotnet_utils::gc::GCHandle::new(gc, ArenaId::new(1));
-                let obj = ObjectRef::new(
-                    gc_handle,
-                    HeapStorage::Str(crate::string::CLRString::from("test")),
-                );
+        type TestRoot = Rootable![()];
+        let arena = Arena::<TestRoot>::new(|_mc| ());
+        arena.mutate(|gc, _root| {
+            dotnet_utils::sync::MANAGED_THREAD_ID.with(|id| id.set(Some(ArenaId::new(1))));
+            let gc_handle = dotnet_utils::gc::GCHandle::new(gc, ArenaId::new(1));
+            let obj = ObjectRef::new(
+                gc_handle,
+                HeapStorage::Str(crate::string::CLRString::from("test")),
+            );
+            obj.as_heap_storage(|_| ());
+            dotnet_utils::sync::MANAGED_THREAD_ID.with(|id| id.set(Some(ArenaId::new(2))));
+            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
                 obj.as_heap_storage(|_| ());
-                dotnet_utils::sync::MANAGED_THREAD_ID.with(|id| id.set(Some(ArenaId::new(2))));
-                let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-                    obj.as_heap_storage(|_| ());
-                }));
-                assert!(res.is_err(), "Access from wrong arena should panic");
-            });
-        }
+            }));
+            assert!(res.is_err(), "Access from wrong arena should panic");
+        });
     }
     #[test]
     #[cfg(all(feature = "memory-validation", feature = "multithreading"))]

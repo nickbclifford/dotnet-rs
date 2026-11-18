@@ -25,14 +25,18 @@ public class Program {
             for (int i = 0; i < Iterations; i++) {
                 // Non-overlapping copy.
                 Unsafe.CopyBlock(dst, src, (uint)Length);
+                if (dst[0] != src[0] || dst[Length - 1] != src[Length - 1])
+                    return 3;
 
                 // Clear then refill half to exercise init/fill throughput.
                 Unsafe.InitBlock(dst, 0, (uint)Length);
                 byte fill = (byte)((i * 13 + 9) & 0xFF);
                 Unsafe.InitBlock(dst + HalfLength, fill, (uint)HalfLength);
 
-                // Overlapping copy to stress memmove-compatible behavior.
-                Unsafe.CopyBlock(dst + 1, dst, (uint)(Length - 1));
+                // Span copying guarantees correct overlapping moves.
+                new ReadOnlySpan<byte>(dst, Length - 1).CopyTo(new Span<byte>(dst + 1, Length - 1));
+                if (dst[0] != 0 || dst[HalfLength] != 0 || dst[HalfLength + 1] != fill || dst[Length - 1] != fill)
+                    return 2;
 
                 checksum ^= dst[(i * 97) & (Length - 1)];
                 checksum += dst[(i * 53) & (HalfLength - 1)];

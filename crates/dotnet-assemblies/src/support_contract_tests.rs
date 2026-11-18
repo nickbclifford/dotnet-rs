@@ -22,24 +22,66 @@ fn bare_loader() -> AssemblyLoader {
         .expect("support assembly should satisfy its ABI contract")
 }
 
-#[test]
-fn test_registry_slot_count() {
-    let loader = bare_loader();
+// These semantic IDs are already part of the managed ABI. New slots may be appended, but every
+// existing ID must remain attached to its original name and numeric value.
+const EXISTING_SLOT_IDS: &[(i32, &str)] = &[
+    (1, "RuntimeTypeHandleValue"),
+    (2, "RuntimeFieldHandleValue"),
+    (3, "RuntimeMethodHandleValue"),
+    (4, "RuntimeTypeIndex"),
+    (5, "MethodInfoIndex"),
+    (6, "ConstructorInfoIndex"),
+    (7, "FieldInfoIndex"),
+    (8, "ParameterInfoMethodIndex"),
+    (9, "ParameterInfoPosition"),
+    (10, "PropertyInfoName"),
+    (11, "PropertyInfoGetter"),
+    (12, "PropertyInfoSetter"),
+    (13, "PropertyInfoDeclaringType"),
+    (14, "PropertyInfoPropertyType"),
+    (15, "DelegateTarget"),
+    (16, "DelegateMethodIndex"),
+    (17, "MulticastDelegateTargets"),
+    (18, "SpanReference"),
+    (19, "SpanLength"),
+    (20, "ReadOnlySpanReference"),
+    (21, "ReadOnlySpanLength"),
+];
 
-    // Keep this a literal census total so a deletion cannot be hidden by updating the generated
-    // definition at the same time.
-    assert_eq!(loader.support_slots().len(), 21);
+#[test]
+fn registered_slots_preserve_existing_ids_and_accept_appended_ids() {
+    let loader = bare_loader();
+    assert_eq!(loader.support_slots().len(), RUNTIME_SLOT_DESCRIPTORS.len());
+    for descriptor in RUNTIME_SLOT_DESCRIPTORS {
+        let owner = loader
+            .corlib_wkt(descriptor.declaring_well_known)
+            .expect("every slot owner must resolve");
+        assert_eq!(
+            loader.support_slot_id_for_field(&owner, descriptor.field_name),
+            Some(descriptor.id),
+            "{} must be present in the validated registry",
+            descriptor.semantic_name
+        );
+    }
 }
 
 #[test]
 fn generated_slot_descriptors_preserve_stable_ids_and_exact_shapes() {
-    assert_eq!(RuntimeSlotId::COUNT, 21);
-    assert_eq!(RUNTIME_SLOT_DESCRIPTORS.len(), 21);
+    assert_eq!(RuntimeSlotId::COUNT, RUNTIME_SLOT_DESCRIPTORS.len());
+    for (expected_id, expected_name) in EXISTING_SLOT_IDS {
+        let id = RuntimeSlotId::from_i32(*expected_id)
+            .unwrap_or_else(|| panic!("existing slot ID {expected_id} disappeared"));
+        assert_eq!(id.descriptor().semantic_name, *expected_name);
+        assert_eq!(id as i32, *expected_id);
+    }
+    for (index, descriptor) in RUNTIME_SLOT_DESCRIPTORS.iter().enumerate() {
+        assert_eq!(descriptor.id as usize, index + 1, "slot IDs stay dense");
+    }
     assert_eq!(
-        RuntimeSlotId::from_i32(1),
-        Some(RuntimeSlotId::RuntimeTypeHandleValue)
+        RuntimeSlotId::from_i32(RuntimeSlotId::COUNT as i32 + 1),
+        None,
+        "the first value beyond the current dense registry is unknown"
     );
-    assert_eq!(RuntimeSlotId::from_i32(22), None);
 
     let span_reference = RuntimeSlotId::SpanReference.descriptor();
     assert_eq!(span_reference.id as i32, 18);
@@ -93,13 +135,12 @@ fn handle_override_is_limited_to_the_support_descriptor() {
 }
 
 #[test]
-fn loaded_support_metadata_has_an_independent_literal_slot_census() {
+fn loaded_support_metadata_matches_the_registered_slot_ids() {
     let loader = bare_loader();
     let support = loader
         .get_assembly(SUPPORT_ASSEMBLY)
         .expect("embedded support assembly should be registered");
     let mut ids = std::collections::HashSet::new();
-    let mut count = 0;
 
     // Deliberately scan loaded metadata rather than the generated contract or registry. The
     // literal policy count catches a coordinated change to those Rust products.
@@ -128,7 +169,6 @@ fn loaded_support_metadata_has_an_independent_literal_slot_census() {
                 else {
                     panic!("RuntimeSlot attribute must contain one Int32 enum payload");
                 };
-                count += 1;
                 assert!(
                     ids.insert(*id),
                     "RuntimeSlot ID {id} is duplicated in metadata"
@@ -137,11 +177,20 @@ fn loaded_support_metadata_has_an_independent_literal_slot_census() {
         }
     }
 
+    let registered: std::collections::HashSet<_> = RUNTIME_SLOT_DESCRIPTORS
+        .iter()
+        .map(|descriptor| descriptor.id as i32)
+        .collect();
     assert_eq!(
-        count, 21,
-        "support metadata slot census is a fixed ABI policy"
+        ids, registered,
+        "metadata must declare every slot exactly once"
     );
-    assert_eq!(ids.len(), 21);
+    for (expected_id, expected_name) in EXISTING_SLOT_IDS {
+        assert!(
+            ids.contains(expected_id),
+            "existing slot {expected_name} (ID {expected_id}) must remain in metadata"
+        );
+    }
 }
 
 fn storage_for_slot(desc: TypeDescription, id: RuntimeSlotId) -> FieldStorage {

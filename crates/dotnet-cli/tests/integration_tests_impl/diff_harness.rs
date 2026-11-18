@@ -54,7 +54,10 @@ fn output_with_deadline(
 }
 
 #[cfg(not(feature = "fuzzing"))]
-fn fixture_output(command: &mut std::process::Command, runtime: &str) -> std::process::Output {
+pub(super) fn fixture_output(
+    command: &mut std::process::Command,
+    runtime: &str,
+) -> std::process::Output {
     let timeout = crate::integration_tests_impl::harness::get_test_timeout(120);
     let (output, timed_out) = output_with_deadline(command, timeout);
     assert!(
@@ -295,11 +298,10 @@ diff_test!(
 
 // Rejected candidates: structs/interlocked_misaligned_1 (intentional ECMA alignment
 // divergence);
-// exceptions/unhandled_exception_254 and stack_trace_*_254 (the in-process fixture oracle is
-// reserved code 254, while the unchanged subprocess behavior is real .NET exit 134 versus
-// dotnet-rs CLI exit 1 for unhandled exceptions); exceptions/intrinsic_trace_42 (rejected from
-// full stdout comparison for its GC.Collect mismatch, but covered by the qualified exit-code-only
-// differential test);
+// exceptions/unhandled_exception_254 (the in-process fixture oracle is reserved code 254, while
+// the unchanged subprocess behavior is real .NET exit 134 versus dotnet-rs CLI exit 1 for
+// unhandled exceptions); exceptions/gc_collect_negative_count_smoke_42 (kept exit-only because
+// the CLR rejects the argument while the VM's known behavior differs);
 // structs/explicit_layout_0 (real .NET exits 134); unsafe/managed_ptr_size_0 (fat pointer
 // representation); and threading/threading_*_0 (exit-code-only comparison has no signal).
 // The original expression-compilation case is retained while the canonical set expands coverage.
@@ -651,6 +653,21 @@ diff_test!(
     exceptions_nested_exceptions_42_matches_dotnet,
     "tests/fixtures/exceptions/nested_exceptions_42.cs"
 );
+
+diff_test!(
+    exceptions_stack_trace_no_params_matches_dotnet,
+    "tests/fixtures/exceptions/stack_trace_no_params_42.cs"
+);
+
+diff_test!(
+    exceptions_stack_trace_params_matches_dotnet,
+    "tests/fixtures/exceptions/stack_trace_params_42.cs"
+);
+
+diff_test!(
+    exceptions_stack_trace_generic_matches_dotnet,
+    "tests/fixtures/exceptions/stack_trace_generic_42.cs"
+);
 diff_test!(
     memory_nullable_boxing_42_matches_dotnet,
     "tests/fixtures/memory/nullable_boxing_42.cs"
@@ -664,8 +681,8 @@ diff_test!(
     "tests/fixtures/threading/volatile_intrinsics_42.cs"
 );
 diff_test_exit_code!(
-    exceptions_intrinsic_trace_42_matches_dotnet_exit_code,
-    "tests/fixtures/exceptions/intrinsic_trace_42.cs",
+    gc_collect_negative_count_smoke_42_matches_dotnet_exit_code,
+    "tests/fixtures/exceptions/gc_collect_negative_count_smoke_42.cs",
     42
 );
 
@@ -1051,10 +1068,7 @@ fn exceptions_fault_inside_finally_matches_dotnet() {
         fs::write(&dll, bytes).expect("write fault fixture");
         fs::write(dll.with_extension("runtimeconfig.json"), &runtime_config)
             .expect("write runtime configuration");
-        let clr = Command::new("dotnet")
-            .arg(&dll)
-            .output()
-            .expect("run CLR fixture");
+        let clr = fixture_output(Command::new("dotnet").arg(&dll), "CLR");
         let expected = if pending { 42 } else { 41 };
         assert_eq!(
             clr.status.code(),
@@ -1213,10 +1227,7 @@ fn monitor_transient_stack_value_il_is_rejected_by_clr() {
     let dll = TestHarness::get().ensure_dll(std::path::Path::new(
         "tests/debug_fixtures/monitor_transient_il_42.cs",
     ));
-    let output = std::process::Command::new("dotnet")
-        .arg(dll)
-        .output()
-        .unwrap();
+    let output = fixture_output(std::process::Command::new("dotnet").arg(dll), "CLR");
     assert_eq!(output.status.code(), Some(42));
     assert_eq!(output.stdout, b"rejected\n");
 }

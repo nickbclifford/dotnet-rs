@@ -2,7 +2,7 @@ using System;
 
 public class Program {
     static int result = 0;
-    public static int Main() {
+    static int ReturnFromCatch() {
         try {
             try {
                 throw new Exception();
@@ -16,6 +16,11 @@ public class Program {
             result = 100; // Should not be reached
         }
         
-        return result;
+        return 0;
+    }
+
+    public static int Main() {
+        int returned = ReturnFromCatch();
+        return returned == 42 && result == 42 ? 42 : 1;
     }
 }

@@ -12,8 +12,6 @@ use std::{
 
 pub(crate) enum WriteBackSource<'gc> {
     Managed(PointerOrigin<'gc>, ByteOffset),
-    #[cfg(test)]
-    Raw(NonNull<u8>),
 }
 
 /// Native, call-scoped representation of a `typedref` input parameter.
@@ -282,12 +280,6 @@ where
             WriteBackSource::Managed(origin, offset) => {
                 write_managed(origin, *offset, &buf[..*len])?;
             }
-            #[cfg(test)]
-            // SAFETY: F10.RawMemoryAccessValid — `dest_ptr` originates from validated argument marshalling for this call and
-            // we copy exactly `len` bytes from an owned temporary buffer.
-            WriteBackSource::Raw(dest_ptr) => unsafe {
-                std::ptr::copy_nonoverlapping(buf.as_ptr(), dest_ptr.as_ptr(), *len);
-            },
         }
     }
 

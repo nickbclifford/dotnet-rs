@@ -217,17 +217,17 @@ where
         // Bridge declaration identity across facade/CoreLib duplicates where
         // `MethodDescription` equality can miss due differing parent/resolution
         // identities despite equivalent canonical type + signature.
-        if let Some((_, impl_m)) = overrides.iter().find(|(decl, _)| {
+        for (decl, impl_m) in overrides.iter() {
             let decl_parent_name = decl.parent.type_name();
             let method_parent_name = method.parent.type_name();
             let canonical_decl = self.loader.canonical_type_name(&decl_parent_name);
             let canonical_method = self.loader.canonical_type_name(&method_parent_name);
             if canonical_decl != canonical_method || decl.method().name != method.method().name {
-                return false;
+                continue;
             }
 
             let comparer = self.loader.comparer();
-            if allow_variance {
+            let signatures_match = if allow_variance {
                 comparer.signatures_compatible_with_variance(
                     &method_for_lookup.method_resolution,
                     method_for_lookup.signature(),
@@ -235,7 +235,7 @@ where
                     &decl.method_resolution,
                     decl.signature(),
                     Some(&decl.parent_generics),
-                )
+                )?
             } else {
                 comparer.signatures_equal(
                     &method_for_lookup.method_resolution,
@@ -245,9 +245,10 @@ where
                     decl.signature(),
                     Some(&decl.parent_generics),
                 )
+            };
+            if signatures_match {
+                return Ok(Some(impl_m.clone()));
             }
-        }) {
-            return Ok(Some(impl_m.clone()));
         }
 
         Ok(None)
@@ -531,7 +532,7 @@ where
 
         let helper_type = self.loader.corlib_wkt(WellKnown::SupportSZArrayHelper1)?;
 
-        Ok(self.loader.find_method_in_type_internal(
+        self.loader.find_method_in_type_internal(
             helper_type,
             &base_method.method().name,
             base_method.signature(),
@@ -539,7 +540,7 @@ where
             Some(&signature_lookup),
             Some(&helper_generics),
             true,
-        ))
+        )
     }
 
     fn find_and_cache_method(
@@ -589,7 +590,7 @@ where
             Some(&signature_lookup),
             Some(generics),
             false,
-        ) {
+        )? {
             if allow_variance && !is_public_implicit_impl(&this_method) {
                 return Ok(None);
             }
@@ -617,7 +618,7 @@ where
                 Some(&signature_lookup),
                 Some(generics),
                 true,
-            )
+            )?
         {
             if !is_public_implicit_impl(&this_method) {
                 return Ok(None);
@@ -709,7 +710,7 @@ where
             Some(&declaration.parent_generics),
             Some(&constraint_lookup),
             false,
-        ) {
+        )? {
             return Ok(method);
         }
 
@@ -741,7 +742,7 @@ where
             Some(&signature_lookup),
             Some(&constraint_lookup),
             true,
-        ) {
+        )? {
             return Ok(method);
         }
 

@@ -198,11 +198,14 @@ fn concrete_types_match_corelib_definitions_to_support_stubs() {
         assert_ne!(raw, replacement);
         let raw = ConcreteType::from(raw);
         let replacement = ConcreteType::from(replacement);
-        assert!(comparer.concrete_types_equal(&raw, &replacement));
-        assert!(comparer.concrete_types_equal(&replacement, &raw));
+        assert_eq!(comparer.concrete_types_equal(&raw, &replacement), Ok(true));
+        assert_eq!(comparer.concrete_types_equal(&replacement, &raw), Ok(true));
         pairs.push((raw, replacement));
     }
-    assert!(!comparer.concrete_types_equal(&pairs[0].0, &pairs[1].1));
+    assert_eq!(
+        comparer.concrete_types_equal(&pairs[0].0, &pairs[1].1),
+        Ok(false)
+    );
 }
 
 #[test]

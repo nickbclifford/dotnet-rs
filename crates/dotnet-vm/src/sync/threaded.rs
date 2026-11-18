@@ -31,6 +31,7 @@ pub struct SyncBlock {
 #[cfg(test)]
 thread_local! {
     pub(crate) static WAIT_TEST_HOOK: std::cell::RefCell<Option<Box<dyn FnMut()>>> = std::cell::RefCell::new(None);
+    pub(crate) static ENTER_CONTENDED_TEST_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = std::cell::RefCell::new(None);
 }
 
 enum EnterState<'a> {
@@ -148,6 +149,13 @@ impl SyncBlockOps for SyncBlock {
             EnterState::Acquired => return true,
             EnterState::Contended(state) => state,
         };
+
+        #[cfg(test)]
+        ENTER_CONTENDED_TEST_HOOK.with(|hook| {
+            if let Some(callback) = hook.borrow_mut().take() {
+                callback();
+            }
+        });
 
         let deadline = Instant::now() + Duration::from_millis(timeout_ms);
         let start_wait = Instant::now();
@@ -356,16 +364,26 @@ mod tests {
 
     fn spawn_lock_holder(
         block: &StdArc<SyncBlock>,
-    ) -> (mpsc::Receiver<()>, thread::JoinHandle<()>) {
+    ) -> (
+        mpsc::Receiver<bool>,
+        mpsc::Sender<()>,
+        thread::JoinHandle<()>,
+    ) {
         let block = StdArc::clone(block);
-        let (tx, rx) = mpsc::channel::<()>();
+        let (acquired_tx, acquired_rx) = mpsc::channel::<bool>();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
         let handle = thread::spawn(move || {
-            block.enter_with_timeout(THREAD_A, 5000, &make_metrics());
-            let _ = tx.send(()); // signal: lock is held
-            thread::sleep(Duration::from_millis(20));
-            block.exit(THREAD_A);
+            let acquired = block.enter_with_timeout(THREAD_A, 5000, &make_metrics());
+            acquired_tx.send(acquired).unwrap();
+            if acquired {
+                release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                assert!(
+                    block.exit(THREAD_A),
+                    "holder must release its acquired lock"
+                );
+            }
         });
-        (rx, handle)
+        (acquired_rx, release_tx, handle)
     }
 
     // ===== enter_with_timeout tests =====
@@ -415,19 +433,36 @@ mod tests {
 
     #[test]
     fn enter_with_timeout_succeeds_after_lock_released_by_other_thread() {
-        // THREAD_A holds the lock briefly, then releases; THREAD_B acquires successfully
+        // THREAD_A holds the lock until THREAD_B reaches the real contended wait path.
         let block = StdArc::new(SyncBlock::new());
-        let (rx, handle) = spawn_lock_holder(&block);
-
-        rx.recv().unwrap(); // wait until thread A holds the lock
-
-        let result = block.enter_with_timeout(THREAD_B, 500, &make_metrics());
+        let (acquired_rx, release_holder, holder) = spawn_lock_holder(&block);
         assert!(
-            result,
-            "expected to acquire lock after thread A released it"
+            acquired_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            "THREAD_A must acquire the lock before THREAD_B starts"
         );
 
-        handle.join().unwrap();
+        let (contended_tx, contended_rx) = mpsc::channel();
+        let waiter_block = StdArc::clone(&block);
+        let waiter = thread::spawn(move || {
+            ENTER_CONTENDED_TEST_HOOK.with(|hook| {
+                *hook.borrow_mut() = Some(Box::new(move || contended_tx.send(()).unwrap()));
+            });
+            let acquired = waiter_block.enter_with_timeout(THREAD_B, 5000, &make_metrics());
+            if acquired {
+                assert!(waiter_block.exit(THREAD_B));
+            }
+            acquired
+        });
+
+        contended_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("THREAD_B must observe THREAD_A's held lock");
+        release_holder.send(()).unwrap();
+        holder.join().unwrap();
+        assert!(
+            waiter.join().unwrap(),
+            "THREAD_B must acquire the lock after THREAD_A releases it"
+        );
     }
 
     #[test]

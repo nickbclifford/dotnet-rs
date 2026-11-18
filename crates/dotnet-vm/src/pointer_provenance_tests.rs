@@ -123,6 +123,10 @@ fn corlib_resolution(module: &'static str, assembly: &'static str) -> Resolution
     invalid_cast.namespace = Some("System".into());
     invalid_cast.extends = Some(exception_idx.into());
     res.push_type_definition(invalid_cast);
+    let mut index_out_of_range = TypeDefinition::new(None, "IndexOutOfRangeException");
+    index_out_of_range.namespace = Some("System".into());
+    index_out_of_range.extends = Some(exception_idx.into());
+    res.push_type_definition(index_out_of_range);
     let mut vt = TypeDefinition::new(None, "ValueType");
     vt.namespace = Some("System".into());
     vt.extends = Some(obj_idx.into());
@@ -648,10 +652,14 @@ fn build_program(
 // shared Vec<StackValue> to reallocate; the integer address held by the caller dangles.
 #[test]
 fn p09_ldloca_convu_survives_callee_stack_growth() {
-    let r = run_program("P09", |res, type_idx| {
+    const GROWTH_PRESSURE: usize = 1024;
+    let (shared, entrypoint) = build_program("P09", |res, type_idx| {
+        let mut grow_instructions = vec![Instruction::LoadConstantInt32(0x55aa); GROWTH_PRESSURE];
+        grow_instructions.extend(std::iter::repeat_n(Instruction::Pop, GROWTH_PRESSURE));
+        grow_instructions.push(Instruction::Return);
         let helper_body = make_test_method!(
-            max_stack: 4096,
-            instructions: vec![Instruction::Return],
+            max_stack: GROWTH_PRESSURE,
+            instructions: grow_instructions,
         );
         let helper_idx = res.push_method(
             type_idx,
@@ -676,7 +684,28 @@ fn p09_ldloca_convu_survives_callee_stack_growth() {
             ],
         )
     });
-    assert_eq!(r, 7);
+    let mut initial_capacity = None;
+    let mut grew_during_callee = false;
+    let mut result = None;
+    run_entrypoint_observed(shared, entrypoint, |engine, step| {
+        let capacity = engine.stack.execution.evaluation_stack.stack.capacity();
+        let frames = &engine.stack.execution.frame_stack;
+        if frames.len() == 1 {
+            initial_capacity.get_or_insert(capacity);
+        } else if frames.len() >= 2 && initial_capacity.is_some_and(|initial| capacity > initial) {
+            grew_during_callee = true;
+        }
+        if matches!(step, StepResult::Return) {
+            result = Some(engine.stack.execution.evaluation_stack.pop().as_i32());
+            return Observe::Stop;
+        }
+        Observe::Continue
+    });
+    assert!(
+        grew_during_callee,
+        "callee must increase evaluation-stack capacity"
+    );
+    assert_eq!(result, Some(7));
 }
 
 // Heap array element address laundered through an integer: `fixed (int* p = &arr[1]) *p = 7`.
@@ -835,6 +864,13 @@ fn p35_ldflda_on_stack_value_type_then_ldind() {
                 ..new_static_field("F", BaseType::<MemberType>::Int32)
             },
         ));
+        let adjacent = FieldSource::Definition(res.push_field(
+            struct_idx,
+            Field {
+                static_member: false,
+                ..new_static_field("Adjacent", BaseType::<MemberType>::Int32)
+            },
+        ));
         let struct_ty = BaseType::Type {
             source: TypeSource::User(UserType::Definition(struct_idx)),
             value_kind: Some(ValueKind::ValueType),
@@ -843,6 +879,20 @@ fn p35_ldflda_on_stack_value_type_then_ldind() {
             2,
             vec![local(struct_ty)],
             vec![
+                Instruction::LoadLocalAddress(0),
+                Instruction::LoadConstantInt32(0x1357),
+                Instruction::StoreField {
+                    param0: field,
+                    unaligned: None,
+                    volatile: false,
+                },
+                Instruction::LoadLocalAddress(0),
+                Instruction::LoadConstantInt32(0x2468),
+                Instruction::StoreField {
+                    param0: adjacent,
+                    unaligned: None,
+                    volatile: false,
+                },
                 Instruction::LoadLocal(0),
                 Instruction::LoadFieldAddress(field),
                 ldind(LoadType::Int32),
@@ -850,7 +900,7 @@ fn p35_ldflda_on_stack_value_type_then_ldind() {
             ],
         )
     });
-    assert_eq!(r, 0);
+    assert_eq!(r, 0x1357);
 }
 
 /// Defines a value type `name` with one instance `Int32` field `F` (a `ref int` field when
@@ -1908,27 +1958,46 @@ fn p18_localloc_ptr_clt() {
     assert_eq!(r, 1, "p < p+8 must be true");
 }
 
-// Agent claim: negative array index -> host overflow panic instead of IndexOutOfRangeException.
+// ECMA-335 III.4.7: a negative array index must become the managed bounds exception, not a host panic.
 #[test]
-#[ignore = "reproduces a host panic/abort on a negative array index; run only via scripts/pointer_provenance.sh diagnostic"]
 fn p19_ldelem_negative_index() {
-    let r = run_il(
-        "P19",
-        4,
-        vec![local(BaseType::IntPtr)],
-        vec![
-            Instruction::LoadConstantInt32(4),
-            Instruction::NewArray(MethodType::Base(Box::new(BaseType::Int32))),
-            Instruction::LoadConstantInt32(-1),
-            Instruction::LoadElementPrimitive {
-                skip_range_check: false,
-                skip_null_check: false,
-                param0: LoadType::Int32,
-            },
-            Instruction::Return,
-        ],
-    );
-    let _ = r;
+    let (shared, entrypoint) = build_program("P19", |_res, _type_idx| {
+        (
+            4,
+            vec![local(BaseType::IntPtr)],
+            vec![
+                Instruction::LoadConstantInt32(4),
+                Instruction::NewArray(MethodType::Base(Box::new(BaseType::Int32))),
+                Instruction::LoadConstantInt32(-1),
+                Instruction::LoadElementPrimitive {
+                    skip_range_check: false,
+                    skip_null_check: false,
+                    param0: LoadType::Int32,
+                },
+                Instruction::Return,
+            ],
+        )
+    });
+    let mut outcome = None;
+    run_entrypoint_observed(shared, entrypoint, |_, step| match step {
+        StepResult::MethodThrew(exception) => {
+            outcome = Some(Ok(exception.type_name.clone()));
+            Observe::Stop
+        }
+        StepResult::Error(error) => {
+            outcome = Some(Err(error.to_string()));
+            Observe::Stop
+        }
+        StepResult::Return => panic!("negative array index returned normally"),
+        _ => Observe::Continue,
+    });
+    match outcome.expect("negative array access neither returned nor produced an outcome") {
+        Ok(name) => assert_eq!(
+            name, "System.IndexOutOfRangeException",
+            "negative indices produce the managed bounds exception"
+        ),
+        Err(error) => panic!("negative index failed with a host VM error: {error}"),
+    }
 }
 
 // Interleaving robustness: take the integer address, do an ordinary typed VM write to the same
@@ -2754,8 +2823,10 @@ fn p_wide_store_into_int_local() {
 #[test]
 fn p29_localloc_blocks_survive_growth_and_are_16_byte_aligned() {
     const SIZES: [i32; 7] = [1, 16, 17, 0, 4096, 65536, 15];
+    let alignment_local = SIZES.len() as u16;
 
     let mut instructions = Vec::new();
+    instructions.extend([I::LoadConstantInt32(1), I::StoreLocal(alignment_local)]);
     for (index, &size) in SIZES.iter().enumerate() {
         let local_index = index as u16;
         instructions.extend([
@@ -2768,32 +2839,35 @@ fn p29_localloc_blocks_survive_growth_and_are_16_byte_aligned() {
             I::And,
             I::LoadConstantInt32(0),
             I::CompareEqual,
+            I::LoadLocal(alignment_local),
+            I::And,
+            I::StoreLocal(alignment_local),
         ]);
-        if index != 0 {
-            instructions.push(I::And);
-        }
 
-        let first_value = 0x20 + index as i32;
-        instructions.extend([
-            I::LoadLocal(local_index),
-            I::LoadConstantInt32(first_value),
-            stind(StoreType::Int8),
-        ]);
-        if size > 1 {
-            let last_value = 0x90 + index as i32;
+        if size > 0 {
+            let first_value = 0x20 + index as i32;
             instructions.extend([
                 I::LoadLocal(local_index),
-                I::LoadConstantInt32(size - 1),
-                I::Add,
-                I::LoadConstantInt32(last_value),
+                I::LoadConstantInt32(first_value),
                 stind(StoreType::Int8),
             ]);
+            if size > 1 {
+                let last_value = 0x90 + index as i32;
+                instructions.extend([
+                    I::LoadLocal(local_index),
+                    I::LoadConstantInt32(size - 1),
+                    I::Add,
+                    I::LoadConstantInt32(last_value),
+                    stind(StoreType::Int8),
+                ]);
+            }
         }
-        // For size 0 the guaranteed one-byte backing block, like a one-byte request,
-        // has the same address for its first and last byte.
     }
 
     for (index, &size) in SIZES.iter().enumerate() {
+        if size == 0 {
+            continue;
+        }
         let local_index = index as u16;
         let first_value = 0x20 + index as i32;
         instructions.extend([
@@ -2801,31 +2875,36 @@ fn p29_localloc_blocks_survive_growth_and_are_16_byte_aligned() {
             ldind(LoadType::UInt8),
             I::LoadConstantInt32(first_value),
             I::CompareEqual,
+            I::LoadLocal(alignment_local),
             I::And,
+            I::StoreLocal(alignment_local),
         ]);
 
-        let last_offset = if size > 1 { size - 1 } else { 0 };
-        let last_value = if size > 1 {
-            0x90 + index as i32
-        } else {
-            first_value
-        };
-        instructions.extend([
-            I::LoadLocal(local_index),
-            I::LoadConstantInt32(last_offset),
-            I::Add,
-            ldind(LoadType::UInt8),
-            I::LoadConstantInt32(last_value),
-            I::CompareEqual,
-            I::And,
-        ]);
+        if size > 1 {
+            let last_value = 0x90 + index as i32;
+            instructions.extend([
+                I::LoadLocal(local_index),
+                I::LoadConstantInt32(size - 1),
+                I::Add,
+                ldind(LoadType::UInt8),
+                I::LoadConstantInt32(last_value),
+                I::CompareEqual,
+                I::LoadLocal(alignment_local),
+                I::And,
+                I::StoreLocal(alignment_local),
+            ]);
+        }
     }
+    instructions.push(I::LoadLocal(alignment_local));
     instructions.push(I::Return);
 
     let r = run_il(
         "LocallocBlocksGrowthAlignment",
         4,
-        (0..SIZES.len()).map(|_| local(BaseType::IntPtr)).collect(),
+        (0..SIZES.len())
+            .map(|_| local(BaseType::IntPtr))
+            .chain(std::iter::once(local(BaseType::Int32)))
+            .collect(),
         instructions,
     );
     assert_eq!(r, 1);
@@ -3918,6 +3997,7 @@ mod batches {
         p35_ldflda_on_stack_value_type_then_ldind,
         p09_ldloca_convu_survives_callee_stack_growth,
         p39_frame_homes_survive_filter_suspension,
+        p19_ldelem_negative_index,
     ]);
 }
 
@@ -3963,6 +4043,7 @@ fn addressed_byref_local_preserves_origin_through_indirect_access() {
 
 #[test]
 fn p41_constructor_receiver_survives_nested_growth() {
+    const GROWTH_PRESSURE: usize = 1024;
     for jump in [false, true] {
         let (shared, entrypoint) = build_program(
             if jump {
@@ -3980,9 +4061,13 @@ fn p41_constructor_receiver_survives_nested_growth() {
                         ..new_static_field("Root", BaseType::<MemberType>::Object)
                     },
                 ));
+                let mut grow_instructions =
+                    vec![Instruction::LoadConstantInt32(0x55aa); GROWTH_PRESSURE];
+                grow_instructions.extend(std::iter::repeat_n(Instruction::Pop, GROWTH_PRESSURE));
+                grow_instructions.push(Instruction::Return);
                 let grow = res.push_method(type_idx, Method::new(
                     Accessibility::Public, void_sig(), "Grow",
-                    Some(make_test_method!(max_stack: 4096, instructions: vec![Instruction::Return])),
+                    Some(make_test_method!(max_stack: GROWTH_PRESSURE, instructions: grow_instructions)),
                 ));
                 let signature = MethodSignature {
                     instance: true,
@@ -4050,9 +4135,20 @@ fn p41_constructor_receiver_survives_nested_growth() {
                 )
             },
         );
+        let mut initial_capacity = None;
+        let mut grew_during_nested_call = false;
         let mut collected = false;
         let mut result = None;
         run_entrypoint_observed(shared, entrypoint, |engine, step| {
+            let capacity = engine.stack.execution.evaluation_stack.stack.capacity();
+            let frames = &engine.stack.execution.frame_stack;
+            if frames.len() == 1 {
+                initial_capacity.get_or_insert(capacity);
+            } else if frames.len() >= 3
+                && initial_capacity.is_some_and(|initial| capacity > initial)
+            {
+                grew_during_nested_call = true;
+            }
             if matches!(step, StepResult::Return) {
                 let StackValue::Int32(value) = engine.stack.execution.evaluation_stack.pop() else {
                     panic!("constructor result was not Int32");
@@ -4066,6 +4162,10 @@ fn p41_constructor_receiver_survives_nested_growth() {
             }
             Observe::Continue
         });
+        assert!(
+            grew_during_nested_call,
+            "nested call must increase evaluation-stack capacity"
+        );
         assert!(collected, "constructor collection point was not reached");
         assert_eq!(result, Some(77));
     }

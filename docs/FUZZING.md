@@ -103,9 +103,11 @@ The harness (`execute_cil_program`) constructs a complete but minimal .NET assem
 
 **Location:** `crates/dotnet-value/fuzz/fuzz_targets/fuzz_managed_ptr_offset.rs`
 
-Fuzzes `ManagedPtr::offset()` over unmanaged, Stack, and Static origin classes and offset deltas.
+Fuzzes `ManagedPtr::offset()` over unmanaged, FrameHome, and Static origin classes and offset deltas.
 The harness derives every pointer from live target-local storage, then asserts that origin, offset,
-and the address derived from that allocation are preserved; it filters deltas outside the fixture.
+and numeric address are preserved; it filters deltas outside the fixture. Numeric address equality
+does not establish provenance. The separate `ptr_arith_live_offset_preserves_provenance_strict_core`
+test dereferences live offset pointers under strict-provenance Miri.
 
 ### `fuzz_managed_ptr_roundtrip` (dotnet-value)
 
@@ -160,8 +162,17 @@ relevant one and add the minimized input to its target's corpus before relying o
 
 Located in `crates/dotnet-vm/fuzz/tools/`:
 
-- **`generate_structured_corpus.rs`** — Generates structured seed inputs using `FuzzProgram` serialized via `arbitrary`. This is the recommended corpus generator.
-- **`generate_corpus.rs`** — Generates raw byte seed inputs that model CIL opcode sequences directly.
+- **`generate_structured_corpus.rs`** writes versioned `DVMSEED1` inputs, whose seed identifier
+  decodes to an explicit `FuzzProgram` in the target. Each generated file is decoded and checked
+  before writing; an existing file with differing bytes is rejected. Use this generator for named
+  arithmetic, memory, control-flow and stack scenarios.
+- **`generate_corpus.rs`** extracts fixture instruction descriptions as opaque mutation seeds.
+  These bytes do not encode the fixture's CIL for this target. `opaque_*` corpus files retain
+  those legacy inputs and earlier raw-opcode seeds; their names make no semantic replay claim.
+
+Other inputs retain the ordinary arbitrary program decoder, so corpus mutations explore programs
+beyond the named seed scenarios. Decoding a seed establishes its input program; executing the
+advertised instruction and observing its result require the separate fuzz-harness regression tests.
 
 To regenerate the seed corpus:
 ```bash
@@ -171,7 +182,9 @@ cargo run -p corpus-tools --bin generate_structured_corpus --release
 
 ### CIL Dictionary
 
-`crates/dotnet-vm/fuzz/cil.dict` contains common CIL opcode byte patterns to guide libFuzzer's mutation engine. Includes single-byte opcodes (`nop`, `add`, `ret`, etc.), multi-byte prefixed opcodes (`localloc`, `cpblk`, `initblk`), and common instruction sequences (`push_42`, `dup_add`, `loop_back`).
+`crates/dotnet-vm/fuzz/cil.dict` supplies mutation byte patterns originally drawn from CIL opcodes.
+The arbitrary decoder does not interpret them as those CIL instructions. Use the semantic seed
+generator and decode checks when a particular instruction sequence is required.
 
 ## Running the Fuzzers
 
@@ -281,9 +294,14 @@ locals, bitwise operations, `localloc` with indirect access, and arrays. They ru
 `fuzzing` leg of the CI test matrix. Under Miri they switch to a mock `AssemblyLoader` that needs
 no .NET runtime, but no CI job runs them under Miri.
 
+The tests require successful entrypoint setup, observe dispatch for the exact generated method,
+and check completion or the intended VM error path. A constructor-helper control verifies that
+another method's instruction offsets cannot satisfy entrypoint reachability. These safety probes
+complement managed fixtures that check specific guest exception semantics.
+
 ```bash
 cargo test -p dotnet-vm --features fuzzing fuzzing
-cargo +"$NIGHTLY" miri test -p dotnet-vm --features fuzzing fuzzing
+cargo +"$NIGHTLY" miri test -p dotnet-vm --features fuzzing fuzzing -- --test-threads=1
 ```
 
 ## Architecture Diagram

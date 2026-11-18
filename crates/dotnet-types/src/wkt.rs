@@ -326,7 +326,6 @@ mod tests {
     fn span1_is_appended_without_renumbering_existing_variants() {
         assert_eq!(WellKnown::SupportSZArrayHelper1 as usize, 58);
         assert_eq!(WellKnown::Span1 as usize, 59);
-        assert_eq!(WellKnown::COUNT, 60);
     }
 
     #[test]

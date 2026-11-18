@@ -1,5 +1,6 @@
 use crate::{
     TypeDescription, TypeResolver,
+    error::TypeResolutionError,
     generics::{ConcreteType, GenericLookup, member_to_method_type},
     members::MethodDescription,
     resolution::ResolutionS,
@@ -25,8 +26,7 @@ enum TypeIdentityComparison {
 #[derive(Clone, Copy)]
 enum TypeResolutionFailureBehavior {
     ReturnFalse,
-    PanicOnFailure,
-    CompareResultsThenReturnFalse,
+    Propagate,
 }
 
 #[derive(Clone, Copy)]
@@ -43,12 +43,12 @@ impl TypeComparisonPolicy {
 
     const CONCRETE_EQUALS_BASE_TYPE: Self = Self {
         type_identity: TypeIdentityComparison::DefinitionNameFallback,
-        resolution_failure: TypeResolutionFailureBehavior::PanicOnFailure,
+        resolution_failure: TypeResolutionFailureBehavior::Propagate,
     };
 
     const CONCRETE_TYPES_EQUAL: Self = Self {
         type_identity: TypeIdentityComparison::DefinitionNameFallback,
-        resolution_failure: TypeResolutionFailureBehavior::CompareResultsThenReturnFalse,
+        resolution_failure: TypeResolutionFailureBehavior::Propagate,
     };
 }
 
@@ -97,6 +97,9 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         true
     }
 
+    /// Compares method signature types. Unresolved signature references are treated as
+    /// nonmatches; concrete runtime equality uses [`Self::concrete_types_equal`] so resolution
+    /// failures remain distinguishable from an ordinary mismatch.
     pub fn types_equal(
         &self,
         res1: &ResolutionS,
@@ -119,6 +122,7 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
             },
             TypeComparisonPolicy::TYPES_EQUAL,
         )
+        .expect("TYPES_EQUAL converts unresolved types to a nonmatch")
     }
 
     fn resolve_generic_type<'g>(
@@ -151,12 +155,12 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         right: &MethodType,
         right_generics: Option<&GenericLookup>,
         policy: TypeComparisonPolicy,
-    ) -> bool {
+    ) -> Result<bool, TypeResolutionError> {
         // Preserve identity of matching generic placeholders before any concrete substitution.
         // If we substitute first, cross-resolution concrete equality can spuriously fail even
         // when both signatures reference the same generic slot (e.g. T0 vs T0).
         if Self::same_generic_placeholder(left, right) {
-            return true;
+            return Ok(true);
         }
 
         if let Some(concrete) = Self::resolve_generic_type(left_generics, left) {
@@ -203,7 +207,7 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                         )
                     },
                 ),
-            _ => false,
+            _ => Ok(false),
         }
     }
 
@@ -214,9 +218,9 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         method_type: &MethodType,
         method_generics: Option<&GenericLookup>,
         policy: TypeComparisonPolicy,
-    ) -> bool {
+    ) -> Result<bool, TypeResolutionError> {
         if let Some(other) = Self::resolve_generic_type(method_generics, method_type) {
-            return concrete == other;
+            return Ok(concrete == other);
         }
 
         match method_type {
@@ -238,7 +242,7 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                     )
                 },
             ),
-            _ => false,
+            _ => Ok(false),
         }
     }
 
@@ -247,7 +251,7 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         left: NormalizedTypeRef<'_>,
         right: NormalizedTypeRef<'_>,
         policy: TypeComparisonPolicy,
-    ) -> bool {
+    ) -> Result<bool, TypeResolutionError> {
         match (left, right) {
             (
                 NormalizedTypeRef::Method {
@@ -302,7 +306,7 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                 NormalizedTypeRef::Concrete(right_concrete),
             ) => {
                 if left_concrete == right_concrete {
-                    return true;
+                    return Ok(true);
                 }
 
                 self.normalized_base_types_equal(
@@ -328,18 +332,13 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         resolution: ResolutionS,
         user_type: UserType,
         policy: TypeComparisonPolicy,
-    ) -> Option<TypeDescription> {
+    ) -> Result<Option<TypeDescription>, TypeResolutionError> {
         match policy.resolution_failure {
             TypeResolutionFailureBehavior::ReturnFalse => {
-                self.loader.locate_type(resolution, user_type).ok()
+                Ok(self.loader.locate_type(resolution, user_type).ok())
             }
-            TypeResolutionFailureBehavior::PanicOnFailure => Some(
-                self.loader
-                    .locate_type(resolution, user_type)
-                    .expect("Type resolution failed during comparison"),
-            ),
-            TypeResolutionFailureBehavior::CompareResultsThenReturnFalse => {
-                self.loader.locate_type(resolution, user_type).ok()
+            TypeResolutionFailureBehavior::Propagate => {
+                self.loader.locate_type(resolution, user_type).map(Some)
             }
         }
     }
@@ -386,91 +385,71 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         right: &BaseType<Rhs>,
         policy: TypeComparisonPolicy,
         mut child_equal: F,
-    ) -> bool
+    ) -> Result<bool, TypeResolutionError>
     where
-        F: FnMut(&L, &Rhs) -> bool,
+        F: FnMut(&L, &Rhs) -> Result<bool, TypeResolutionError>,
     {
         match (left, right) {
             (BaseType::Type { source: ts1, .. }, BaseType::Type { source: ts2, .. }) => {
                 let (ut1, generics1) = decompose_type_source(ts1);
                 let (ut2, generics2) = decompose_type_source(ts2);
 
-                let same_type = match policy.resolution_failure {
-                    TypeResolutionFailureBehavior::CompareResultsThenReturnFalse => {
-                        let left_result = self.loader.locate_type(left_resolution, ut1);
-                        let right_result = self.loader.locate_type(right_resolution, ut2);
-
-                        if left_result == right_result {
-                            true
-                        } else {
-                            let Ok(left_type) = left_result else {
-                                return false;
-                            };
-                            let Ok(right_type) = right_result else {
-                                return false;
-                            };
-                            self.resolved_types_equal(&left_type, &right_type, policy)
-                        }
-                    }
-                    _ => {
-                        let Some(left_type) =
-                            self.resolve_type_with_policy(left_resolution, ut1, policy)
-                        else {
-                            return false;
-                        };
-                        let Some(right_type) =
-                            self.resolve_type_with_policy(right_resolution, ut2, policy)
-                        else {
-                            return false;
-                        };
-                        self.resolved_types_equal(&left_type, &right_type, policy)
-                    }
+                let Some(left_type) =
+                    self.resolve_type_with_policy(left_resolution, ut1, policy)?
+                else {
+                    return Ok(false);
                 };
+                let Some(right_type) =
+                    self.resolve_type_with_policy(right_resolution, ut2, policy)?
+                else {
+                    return Ok(false);
+                };
+                let same_type = self.resolved_types_equal(&left_type, &right_type, policy);
 
                 if !same_type {
-                    return false;
+                    return Ok(false);
                 }
 
                 if generics1.len() != generics2.len() {
-                    return false;
+                    return Ok(false);
                 }
 
                 for (g1, g2) in generics1.iter().zip(generics2.iter()) {
-                    if !child_equal(g1, g2) {
-                        return false;
+                    if !child_equal(g1, g2)? {
+                        return Ok(false);
                     }
                 }
-                true
+                Ok(true)
             }
-            (BaseType::Boolean, BaseType::Boolean) => true,
-            (BaseType::Char, BaseType::Char) => true,
-            (BaseType::Int8, BaseType::Int8) => true,
-            (BaseType::UInt8, BaseType::UInt8) => true,
-            (BaseType::Int16, BaseType::Int16) => true,
-            (BaseType::UInt16, BaseType::UInt16) => true,
-            (BaseType::Int32, BaseType::Int32) => true,
-            (BaseType::UInt32, BaseType::UInt32) => true,
-            (BaseType::Int64, BaseType::Int64) => true,
-            (BaseType::UInt64, BaseType::UInt64) => true,
-            (BaseType::Float32, BaseType::Float32) => true,
-            (BaseType::Float64, BaseType::Float64) => true,
-            (BaseType::IntPtr, BaseType::IntPtr) => true,
-            (BaseType::UIntPtr, BaseType::UIntPtr) => true,
-            (BaseType::Object, BaseType::Object) => true,
-            (BaseType::String, BaseType::String) => true,
+            (BaseType::Boolean, BaseType::Boolean)
+            | (BaseType::Char, BaseType::Char)
+            | (BaseType::Int8, BaseType::Int8)
+            | (BaseType::UInt8, BaseType::UInt8)
+            | (BaseType::Int16, BaseType::Int16)
+            | (BaseType::UInt16, BaseType::UInt16)
+            | (BaseType::Int32, BaseType::Int32)
+            | (BaseType::UInt32, BaseType::UInt32)
+            | (BaseType::Int64, BaseType::Int64)
+            | (BaseType::UInt64, BaseType::UInt64)
+            | (BaseType::Float32, BaseType::Float32)
+            | (BaseType::Float64, BaseType::Float64)
+            | (BaseType::IntPtr, BaseType::IntPtr)
+            | (BaseType::UIntPtr, BaseType::UIntPtr)
+            | (BaseType::Object, BaseType::Object)
+            | (BaseType::String, BaseType::String) => Ok(true),
             (BaseType::Vector(_, l), BaseType::Vector(_, r)) => child_equal(l, r),
             (BaseType::Array(l, _), BaseType::Array(r, _)) => child_equal(l, r),
             (BaseType::ValuePointer(_, l), BaseType::ValuePointer(_, r)) => {
                 match (l.as_ref(), r.as_ref()) {
-                    (None, None) => true,
+                    (None, None) => Ok(true),
                     (Some(l_element), Some(r_element)) => child_equal(l_element, r_element),
-                    _ => false,
+                    _ => Ok(false),
                 }
             }
             // Function pointer signature comparison is not implemented yet.
             // Conservatively treat funcptr types as not equal.
-            (BaseType::FunctionPointer(_), BaseType::FunctionPointer(_)) => false,
-            _ => false,
+            (BaseType::FunctionPointer(_), BaseType::FunctionPointer(_)) => Ok(false),
+            _ => Ok(false),
         }
     }
 
@@ -523,12 +502,12 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         res2: &ResolutionS,
         b: &ManagedMethod<MethodType>,
         generics2: Option<&GenericLookup>,
-    ) -> bool {
+    ) -> Result<bool, TypeResolutionError> {
         if a.instance != b.instance {
-            return false;
+            return Ok(false);
         }
         if a.parameters.len() != b.parameters.len() {
-            return false;
+            return Ok(false);
         }
 
         let variance_lookups = match mode {
@@ -548,8 +527,8 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
             &b.return_type,
             generics2,
             variance_lookups.as_ref().map(|(l, r)| (l, r)),
-        ) {
-            return false;
+        )? {
+            return Ok(false);
         }
 
         for (Parameter(_, a_parameter), Parameter(_, b_parameter)) in
@@ -564,12 +543,12 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                 b_parameter,
                 generics2,
                 variance_lookups.as_ref().map(|(l, r)| (l, r)),
-            ) {
-                return false;
+            )? {
+                return Ok(false);
             }
         }
 
-        true
+        Ok(true)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -583,15 +562,16 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         right: &ReturnType<MethodType>,
         generics2: Option<&GenericLookup>,
         variance_lookups: Option<(&GenericLookup, &GenericLookup)>,
-    ) -> bool {
+    ) -> Result<bool, TypeResolutionError> {
         let ReturnType(_, left_return) = left;
         let ReturnType(_, right_return) = right;
 
         match (left_return, right_return) {
-            (None, None) => true,
+            (None, None) => Ok(true),
             (Some(left_type), Some(right_type)) => match mode {
                 SignatureCompareMode::Invariant => {
-                    self.param_types_equal(res1, left_type, generics1, res2, right_type, generics2)
+                    Ok(self
+                        .param_types_equal(res1, left_type, generics1, res2, right_type, generics2))
                 }
                 SignatureCompareMode::Variant => {
                     let Some((lookup1, lookup2)) = variance_lookups else {
@@ -600,11 +580,11 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
 
                     let left_method_type = match left_type {
                         ParameterType::Value(ty) | ParameterType::Ref(ty) => ty,
-                        ParameterType::TypedReference => return false,
+                        ParameterType::TypedReference => return Ok(false),
                     };
                     let right_method_type = match right_type {
                         ParameterType::Value(ty) | ParameterType::Ref(ty) => ty,
-                        ParameterType::TypedReference => return false,
+                        ParameterType::TypedReference => return Ok(false),
                     };
 
                     // Return type covariance: candidate (`right`) must be assignable to target (`left`).
@@ -618,7 +598,7 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                     )
                 }
             },
-            _ => false,
+            _ => Ok(false),
         }
     }
 
@@ -633,10 +613,10 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         right: &ParameterType<MethodType>,
         generics2: Option<&GenericLookup>,
         variance_lookups: Option<(&GenericLookup, &GenericLookup)>,
-    ) -> bool {
+    ) -> Result<bool, TypeResolutionError> {
         match mode {
             SignatureCompareMode::Invariant => {
-                self.param_types_equal(res1, left, generics1, res2, right, generics2)
+                Ok(self.param_types_equal(res1, left, generics1, res2, right, generics2))
             }
             SignatureCompareMode::Variant => match (left, right) {
                 (ParameterType::Value(left_type), ParameterType::Value(right_type)) => {
@@ -650,7 +630,7 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                     )
                 }
                 // ByRef and TypedReference parameters remain exact in variant mode.
-                _ => self.param_types_equal(res1, left, generics1, res2, right, generics2),
+                _ => Ok(self.param_types_equal(res1, left, generics1, res2, right, generics2)),
             },
         }
     }
@@ -663,21 +643,17 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         target_resolution: &ResolutionS,
         target: &MethodType,
         target_lookup: &GenericLookup,
-    ) -> bool {
-        let Ok(source_concrete) = source_lookup.make_concrete(
+    ) -> Result<bool, TypeResolutionError> {
+        let source_concrete = source_lookup.make_concrete(
             ResolutionS::clone(source_resolution),
             source.clone(),
             self.loader,
-        ) else {
-            return false;
-        };
-        let Ok(target_concrete) = target_lookup.make_concrete(
+        )?;
+        let target_concrete = target_lookup.make_concrete(
             ResolutionS::clone(target_resolution),
             target.clone(),
             self.loader,
-        ) else {
-            return false;
-        };
+        )?;
 
         self.is_assignable_to(&source_concrete, &target_concrete)
     }
@@ -690,7 +666,7 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         res2: &ResolutionS,
         b: &ManagedMethod<MethodType>,
         generics2: Option<&GenericLookup>,
-    ) -> bool {
+    ) -> Result<bool, TypeResolutionError> {
         self.signatures_match(
             SignatureCompareMode::Variant,
             res1,
@@ -720,6 +696,7 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
             b,
             generics2,
         )
+        .expect("invariant signature comparison uses the tolerant type policy")
     }
 
     pub fn concrete_equals_method_type(
@@ -728,7 +705,7 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         res2: &ResolutionS,
         b: &MethodType,
         generics2: Option<&GenericLookup>,
-    ) -> bool {
+    ) -> Result<bool, TypeResolutionError> {
         self.normalized_types_equal(
             NormalizedTypeRef::Concrete(concrete),
             NormalizedTypeRef::Method {
@@ -746,7 +723,7 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         res2: &ResolutionS,
         b: &BaseType<MethodType>,
         generics2: Option<&GenericLookup>,
-    ) -> bool {
+    ) -> Result<bool, TypeResolutionError> {
         self.normalized_base_types_equal(
             concrete.resolution(),
             concrete.get(),
@@ -757,10 +734,14 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         )
     }
 
-    pub fn is_assignable_to(&self, source: &ConcreteType, target: &ConcreteType) -> bool {
+    pub fn is_assignable_to(
+        &self,
+        source: &ConcreteType,
+        target: &ConcreteType,
+    ) -> Result<bool, TypeResolutionError> {
         let key = (source.clone(), target.clone());
         if let Some(cached) = self.assignability_cache.borrow().get(&key) {
-            return *cached;
+            return Ok(*cached);
         }
 
         // Recursive generic variance checks can re-enter assignability with the
@@ -771,27 +752,33 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
             .borrow_mut()
             .insert(key.clone())
         {
-            return true;
+            return Ok(true);
         }
 
         let result = self.is_assignable_to_impl(source, target);
 
         self.assignability_in_progress.borrow_mut().remove(&key);
-        self.assignability_cache.borrow_mut().insert(key, result);
+        if let Ok(result) = &result {
+            self.assignability_cache.borrow_mut().insert(key, *result);
+        }
         result
     }
 
-    fn is_assignable_to_impl(&self, source: &ConcreteType, target: &ConcreteType) -> bool {
-        if self.concrete_types_equal(source, target) {
-            return true;
+    fn is_assignable_to_impl(
+        &self,
+        source: &ConcreteType,
+        target: &ConcreteType,
+    ) -> Result<bool, TypeResolutionError> {
+        if self.concrete_types_equal(source, target)? {
+            return Ok(true);
         }
 
-        if self.compatible_with_variance(source, target) {
-            return true;
+        if self.compatible_with_variance(source, target)? {
+            return Ok(true);
         }
 
         if matches!(target.get(), BaseType::Object) {
-            return true;
+            return Ok(true);
         }
 
         if self.is_system_enum(target) {
@@ -799,18 +786,28 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         }
 
         if self.is_system_value_type(target) {
-            return source.is_value_type(self.loader);
+            return source.try_is_value_type(self.loader);
         }
 
-        if target.is_interface(self.loader) {
-            return self.implements_interface(source, target);
-        }
-
-        if target.is_class(self.loader) {
+        if let BaseType::Type { .. } = target.get() {
+            let target_description = self.loader.find_concrete_type(target.clone())?;
+            if matches!(target_description.definition().flags.kind, Kind::Interface) {
+                return self.implements_interface(source, target);
+            }
+            if target.try_is_value_type(self.loader)? {
+                return Ok(false);
+            }
             return self.is_subclass_of(source, target);
         }
 
-        false
+        if matches!(
+            target.get(),
+            BaseType::String | BaseType::Vector(_, _) | BaseType::Array(_, _)
+        ) {
+            return self.is_subclass_of(source, target);
+        }
+
+        Ok(false)
     }
 
     fn is_system_enum(&self, ty: &ConcreteType) -> bool {
@@ -841,33 +838,32 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                   by pointer. Copy-id interning would close this lint but is deferred to \
                   preserve descriptor-owned arena lifetimes."
     )]
-    pub fn is_subclass_of(&self, source: &ConcreteType, target: &ConcreteType) -> bool {
+    pub fn is_subclass_of(
+        &self,
+        source: &ConcreteType,
+        target: &ConcreteType,
+    ) -> Result<bool, TypeResolutionError> {
         let mut curr = source.clone();
         let mut seen = HashSet::new();
 
         while seen.insert(curr.clone()) {
-            let Ok(td) = self.loader.find_concrete_type(curr.clone()) else {
-                break;
-            };
+            let td = self.loader.find_concrete_type(curr.clone())?;
             if let Some(base_source) = &td.definition().extends {
                 let lookup = curr.make_lookup();
-                if let Ok(base) = lookup.make_concrete(
+                let base = lookup.make_concrete(
                     td.resolution,
                     member_to_method_type(base_source),
                     self.loader,
-                ) {
-                    if self.concrete_types_equal(&base, target) {
-                        return true;
-                    }
-                    curr = base;
-                } else {
-                    break;
+                )?;
+                if self.concrete_types_equal(&base, target)? {
+                    return Ok(true);
                 }
+                curr = base;
             } else {
                 break;
             }
         }
-        false
+        Ok(false)
     }
 
     #[allow(
@@ -877,7 +873,11 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                   by pointer. Copy-id interning would close this lint but is deferred to \
                   preserve descriptor-owned arena lifetimes."
     )]
-    pub fn implements_interface(&self, source: &ConcreteType, target: &ConcreteType) -> bool {
+    pub fn implements_interface(
+        &self,
+        source: &ConcreteType,
+        target: &ConcreteType,
+    ) -> Result<bool, TypeResolutionError> {
         let mut queue = VecDeque::new();
         let mut seen = HashSet::new();
 
@@ -885,39 +885,37 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         seen.insert(source.clone());
 
         while let Some(curr) = queue.pop_front() {
-            if let Ok(td) = self.loader.find_concrete_type(curr.clone()) {
-                let lookup = curr.make_lookup();
+            let td = self.loader.find_concrete_type(curr.clone())?;
+            let lookup = curr.make_lookup();
 
-                // Check direct interfaces
-                for (_, itf_source) in &td.definition().implements {
-                    if let Ok(itf) = lookup.make_concrete(
-                        td.resolution.clone(),
-                        member_to_method_type(itf_source),
-                        self.loader,
-                    ) {
-                        if self.compatible_with_variance(&itf, target) {
-                            return true;
-                        }
-                        if seen.insert(itf.clone()) {
-                            queue.push_back(itf);
-                        }
-                    }
+            // Check direct interfaces.
+            for (_, itf_source) in &td.definition().implements {
+                let itf = lookup.make_concrete(
+                    td.resolution.clone(),
+                    member_to_method_type(itf_source),
+                    self.loader,
+                )?;
+                if self.compatible_with_variance(&itf, target)? {
+                    return Ok(true);
                 }
+                if seen.insert(itf.clone()) {
+                    queue.push_back(itf);
+                }
+            }
 
-                // Check base class interfaces
-                if let Some(base_source) = &td.definition().extends
-                    && let Ok(base) = lookup.make_concrete(
-                        td.resolution.clone(),
-                        member_to_method_type(base_source),
-                        self.loader,
-                    )
-                    && seen.insert(base.clone())
-                {
+            // Check base class interfaces.
+            if let Some(base_source) = &td.definition().extends {
+                let base = lookup.make_concrete(
+                    td.resolution.clone(),
+                    member_to_method_type(base_source),
+                    self.loader,
+                )?;
+                if seen.insert(base.clone()) {
                     queue.push_back(base);
                 }
             }
         }
-        false
+        Ok(false)
     }
 
     pub fn find_method_in_type_with_substitution(
@@ -928,7 +926,7 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         sig_res: ResolutionS,
         generics: &GenericLookup,
         allow_variance: bool,
-    ) -> Option<MethodDescription> {
+    ) -> Result<Option<MethodDescription>, TypeResolutionError> {
         self.find_method_in_type_internal(
             desc,
             name,
@@ -948,6 +946,7 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         sig_res: ResolutionS,
     ) -> Option<MethodDescription> {
         self.find_method_in_type_internal(desc, name, signature, sig_res, None, None, false)
+            .expect("non-variance method lookup uses tolerant type comparison")
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -960,7 +959,7 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         sig_generics: Option<&GenericLookup>,
         type_generics: Option<&GenericLookup>,
         allow_variance: bool,
-    ) -> Option<MethodDescription> {
+    ) -> Result<Option<MethodDescription>, TypeResolutionError> {
         let def = desc.definition();
         let def_res = desc.resolution.definition();
 
@@ -972,8 +971,8 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                     let m_sig = def_res
                         .method_signature(m_idx)
                         .expect("failed to decode method signature");
-                    if m_sig.parameters.len() == signature.parameters.len()
-                        && (if allow_variance {
+                    if m_sig.parameters.len() == signature.parameters.len() {
+                        let signatures_match = if allow_variance {
                             self.signatures_compatible_with_variance(
                                 &sig_res,
                                 signature,
@@ -981,7 +980,7 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                                 &desc.resolution,
                                 m_sig,
                                 type_generics,
-                            )
+                            )?
                         } else {
                             self.signatures_equal(
                                 &sig_res,
@@ -991,14 +990,15 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                                 m_sig,
                                 type_generics,
                             )
-                        })
-                    {
-                        return Some(MethodDescription::new(
-                            desc.clone(),
-                            type_generics.cloned().unwrap_or_default(),
-                            desc.resolution.clone(),
-                            $member_index,
-                        ));
+                        };
+                        if signatures_match {
+                            return Ok(Some(MethodDescription::new(
+                                desc.clone(),
+                                type_generics.cloned().unwrap_or_default(),
+                                desc.resolution.clone(),
+                                $member_index,
+                            )));
+                        }
                     }
                 }
             };
@@ -1083,12 +1083,16 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
             }
         }
 
-        None
+        Ok(None)
     }
 
-    pub fn compatible_with_variance(&self, source: &ConcreteType, target: &ConcreteType) -> bool {
-        if self.concrete_types_equal(source, target) {
-            return true;
+    pub fn compatible_with_variance(
+        &self,
+        source: &ConcreteType,
+        target: &ConcreteType,
+    ) -> Result<bool, TypeResolutionError> {
+        if self.concrete_types_equal(source, target)? {
+            return Ok(true);
         }
 
         match (source.get(), target.get()) {
@@ -1096,19 +1100,15 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                 let (ut1, generics1) = decompose_type_source(ts1);
                 let (ut2, generics2) = decompose_type_source(ts2);
 
-                let Ok(td1) = self.loader.locate_type(source.resolution(), ut1) else {
-                    return false;
-                };
-                let Ok(td2) = self.loader.locate_type(target.resolution(), ut2) else {
-                    return false;
-                };
+                let td1 = self.loader.locate_type(source.resolution(), ut1)?;
+                let td2 = self.loader.locate_type(target.resolution(), ut2)?;
 
                 if td1 != td2 {
-                    return false;
+                    return Ok(false);
                 }
 
                 if generics1.len() != generics2.len() {
-                    return false;
+                    return Ok(false);
                 }
 
                 let def = td1.definition();
@@ -1117,31 +1117,35 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                     // variance is likely an enum with None, Covariant, Contravariant
                     match param.variance {
                         generic::Variance::Invariant => {
-                            if !self.concrete_types_equal(g1, g2) {
-                                return false;
+                            if !self.concrete_types_equal(g1, g2)? {
+                                return Ok(false);
                             }
                         }
                         generic::Variance::Covariant => {
                             // Covariant: source must be assignable to target
-                            if !self.is_assignable_to(g1, g2) {
-                                return false;
+                            if !self.is_assignable_to(g1, g2)? {
+                                return Ok(false);
                             }
                         }
                         generic::Variance::Contravariant => {
                             // Contravariant: target must be assignable to source
-                            if !self.is_assignable_to(g2, g1) {
-                                return false;
+                            if !self.is_assignable_to(g2, g1)? {
+                                return Ok(false);
                             }
                         }
                     }
                 }
-                true
+                Ok(true)
             }
-            _ => false,
+            _ => Ok(false),
         }
     }
 
-    pub fn concrete_types_equal(&self, c1: &ConcreteType, c2: &ConcreteType) -> bool {
+    pub fn concrete_types_equal(
+        &self,
+        c1: &ConcreteType,
+        c2: &ConcreteType,
+    ) -> Result<bool, TypeResolutionError> {
         self.normalized_types_equal(
             NormalizedTypeRef::Concrete(c1),
             NormalizedTypeRef::Concrete(c2),
@@ -1343,14 +1347,17 @@ mod tests {
             vec![ParameterType::Value(primitive(BaseType::Object))],
         );
 
-        assert!(comparer.signatures_compatible_with_variance(
-            &res,
-            &invariant_target,
-            None,
-            &res,
-            &variant_candidate,
-            None,
-        ));
+        assert_eq!(
+            comparer.signatures_compatible_with_variance(
+                &res,
+                &invariant_target,
+                None,
+                &res,
+                &variant_candidate,
+                None,
+            ),
+            Ok(true)
+        );
         assert!(!comparer.signatures_equal(
             &res,
             &invariant_target,
@@ -1370,8 +1377,9 @@ mod tests {
         let left = method_signature(Some(ParameterType::TypedReference), vec![]);
         let right = method_signature(Some(ParameterType::TypedReference), vec![]);
 
-        assert!(
-            !comparer.signatures_compatible_with_variance(&res, &left, None, &res, &right, None,)
+        assert_eq!(
+            comparer.signatures_compatible_with_variance(&res, &left, None, &res, &right, None,),
+            Ok(false)
         );
         assert!(comparer.signatures_equal(&res, &left, None, &res, &right, None));
     }
@@ -1391,8 +1399,9 @@ mod tests {
             vec![ParameterType::Ref(primitive(BaseType::String))],
         );
 
-        assert!(
-            !comparer.signatures_compatible_with_variance(&res, &left, None, &res, &right, None,)
+        assert_eq!(
+            comparer.signatures_compatible_with_variance(&res, &left, None, &res, &right, None,),
+            Ok(false)
         );
     }
 
@@ -1441,7 +1450,7 @@ mod tests {
     }
 
     #[test]
-    fn concrete_equals_method_type_panics_on_resolution_failure() {
+    fn concrete_equals_method_type_propagates_resolution_failure() {
         let failing_definition = crate::type_index_from_usize(7);
         let resolver = SelectiveFailResolver::for_definitions(vec![failing_definition]);
         let comparer = TypeComparer::new(&resolver);
@@ -1450,18 +1459,14 @@ mod tests {
         let concrete = concrete_user_type(res.clone(), failing_definition);
         let target = method_user_type(failing_definition);
 
-        let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            comparer.concrete_equals_method_type(&concrete, &res, &target, None)
-        }));
-
-        assert!(
-            panic_result.is_err(),
-            "concrete_equals_method_type should preserve panic-on-resolution-failure behavior"
+        assert_eq!(
+            comparer.concrete_equals_method_type(&concrete, &res, &target, None),
+            Err(TypeResolutionError::TypeNotFound("missing".into()))
         );
     }
 
     #[test]
-    fn concrete_types_equal_keeps_equal_error_result_behavior() {
+    fn concrete_comparison_propagates_resolution_errors_and_preserves_boolean_results() {
         let resolver = SelectiveFailResolver::fail_all();
         let comparer = TypeComparer::new(&resolver);
         let res = ResolutionS::NULL;
@@ -1470,9 +1475,38 @@ mod tests {
         let c2 = concrete_user_type(res.clone(), crate::type_index_from_usize(2));
 
         assert_ne!(c1, c2);
-        assert!(
-            comparer.concrete_types_equal(&c1, &c2),
-            "legacy CompareResultsThenReturnFalse mode treats identical locate_type errors as equal"
+        let missing = Err(TypeResolutionError::TypeNotFound("missing".into()));
+        assert_eq!(comparer.concrete_types_equal(&c1, &c2), missing);
+        assert_eq!(comparer.is_assignable_to(&c1, &c2), missing);
+        assert_eq!(comparer.concrete_types_equal(&c1, &c1), Ok(true));
+
+        let one_sided_resolver =
+            SelectiveFailResolver::for_definitions(vec![crate::type_index_from_usize(1)]);
+        let one_sided_comparer = TypeComparer::new(&one_sided_resolver);
+        assert_eq!(one_sided_comparer.concrete_types_equal(&c1, &c2), missing);
+        assert_eq!(one_sided_comparer.concrete_types_equal(&c2, &c1), missing);
+
+        let valid_comparer = TypeComparer::new(&MockResolver);
+        let i32_type = ConcreteType::new(res.clone(), BaseType::Int32);
+        let i64_type = ConcreteType::new(res, BaseType::Int64);
+        assert_eq!(
+            valid_comparer.concrete_types_equal(&i32_type, &i32_type),
+            Ok(true)
+        );
+        assert_eq!(
+            valid_comparer.concrete_types_equal(&i32_type, &i64_type),
+            Ok(false)
+        );
+        assert_eq!(
+            valid_comparer.is_assignable_to(&i32_type, &i64_type),
+            Ok(false)
+        );
+        assert_eq!(
+            valid_comparer.is_assignable_to(
+                &i32_type,
+                &ConcreteType::new(ResolutionS::NULL, BaseType::Object,)
+            ),
+            Ok(true)
         );
     }
 

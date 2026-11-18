@@ -233,18 +233,113 @@ mod tests {
     }
 
     #[test]
-    fn records_are_parent_local_and_start_unstarted() {
-        let state = ManagedThreadLocalState::new();
-        let thread = ObjectRef(None);
-        let thread_start = ObjectRef(None);
+    fn records_trace_parent_local_roots_and_prune_completed_workers() {
+        use crate::{
+            state::SharedGlobalState,
+            sync::Arc as VmArc,
+            test_utils::{new_test_arena, test_gc_handle},
+        };
+        use dotnet_assemblies::AssemblyLoader;
+        use dotnet_value::{object::HeapStorage, string::CLRString};
 
-        state.records_write().insert(
-            thread,
-            ManagedThreadRecord::new(thread_start, Arc::new(AtomicBool::new(true))),
-        );
+        #[allow(
+            clippy::arc_with_non_send_sync,
+            reason = "the no-MT test loader stays inside its single-threaded arenas"
+        )]
+        let shared = VmArc::new(SharedGlobalState::new(VmArc::new(
+            AssemblyLoader::new_bare("managed-thread-records".into()).unwrap(),
+        )));
+        let mut parent = new_test_arena(&shared);
+        let mut other_parent = new_test_arena(&shared);
+        let unstarted_retained = Arc::new(AtomicBool::new(true));
+        let parent_retained = Arc::new(AtomicBool::new(true));
+        let other_retained = Arc::new(AtomicBool::new(true));
 
-        let records = state.records.borrow();
-        let record = records.get(&thread).expect("registered Thread record");
-        assert_eq!(record.thread_start, thread_start);
+        parent.mutate_root(|gc, engine| {
+            // SAFETY: F1.GcHandleRooted — the engine is this arena's live root for the whole mutation.
+            let handle = unsafe { test_gc_handle(gc, engine) };
+            let unstarted_thread = ObjectRef::new(
+                handle,
+                HeapStorage::Str(CLRString::from("unstarted thread")),
+            );
+            let unstarted_delegate = ObjectRef::new(
+                handle,
+                HeapStorage::Str(CLRString::from("unstarted delegate")),
+            );
+            let thread = ObjectRef::new(handle, HeapStorage::Str(CLRString::from("parent thread")));
+            let delegate =
+                ObjectRef::new(handle, HeapStorage::Str(CLRString::from("parent delegate")));
+            let argument =
+                ObjectRef::new(handle, HeapStorage::Str(CLRString::from("parent argument")));
+            let state = &engine.stack.local.managed_threads;
+            state.records_write().insert(
+                unstarted_thread,
+                ManagedThreadRecord::new(unstarted_delegate, unstarted_retained.clone()),
+            );
+            let mut record = ManagedThreadRecord::new(delegate, parent_retained.clone());
+            record.start_argument = argument;
+            state.records_write().insert(thread, record);
+
+            let records = state.records.borrow();
+            assert_eq!(records.len(), 2);
+            let unstarted = records
+                .get(&unstarted_thread)
+                .expect("unstarted Thread record");
+            assert_ne!(unstarted.thread_start, ObjectRef(None));
+            assert_eq!(unstarted.start_argument, ObjectRef(None));
+            let record = records.get(&thread).expect("parent Thread record");
+            assert_ne!(thread, ObjectRef(None));
+            assert_ne!(record.thread_start, ObjectRef(None));
+            assert_ne!(record.start_argument, ObjectRef(None));
+            assert!(matches!(
+                record.thread_start.0.unwrap().borrow().storage,
+                HeapStorage::Str(ref text) if text.as_string() == "parent delegate"
+            ));
+            assert!(matches!(
+                record.start_argument.0.unwrap().borrow().storage,
+                HeapStorage::Str(ref text) if text.as_string() == "parent argument"
+            ));
+        });
+
+        other_parent.mutate_root(|gc, engine| {
+            // SAFETY: F1.GcHandleRooted — the engine is this arena's live root for the whole mutation.
+            let handle = unsafe { test_gc_handle(gc, engine) };
+            let thread = ObjectRef::new(handle, HeapStorage::Str(CLRString::from("other thread")));
+            let delegate =
+                ObjectRef::new(handle, HeapStorage::Str(CLRString::from("other delegate")));
+            let argument =
+                ObjectRef::new(handle, HeapStorage::Str(CLRString::from("other argument")));
+            let state = &engine.stack.local.managed_threads;
+            let mut record = ManagedThreadRecord::new(delegate, other_retained.clone());
+            record.start_argument = argument;
+            state.records_write().insert(thread, record);
+            assert_eq!(state.records.borrow().len(), 1);
+
+            // Completing one parent's worker prunes only that parent's record.
+            parent_retained.store(false, Ordering::Release);
+            assert!(state.records_write().contains_key(&thread));
+            other_retained.store(false, Ordering::Release);
+            assert!(state.records_write().is_empty());
+        });
+
+        parent.mutate_root(|_, engine| {
+            let records = engine.stack.local.managed_threads.records_write();
+            assert_eq!(
+                records.len(),
+                1,
+                "the parent state prunes only completed workers"
+            );
+            let (thread, record) = records
+                .iter()
+                .next()
+                .expect("unstarted Thread record remains");
+            assert_ne!(*thread, ObjectRef(None));
+            assert_ne!(record.thread_start, ObjectRef(None));
+            assert_eq!(record.start_argument, ObjectRef(None));
+            assert!(
+                record.retained.load(Ordering::Acquire),
+                "unstarted Thread roots remain until arena teardown"
+            );
+        });
     }
 }

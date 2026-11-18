@@ -525,27 +525,42 @@ fn signature_name(signature: &FieldSignature) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{AccessorType, FieldSignature, SlotView, StorageShape, parse_support_slots};
+    use super::{AccessorType, FieldSignature, SlotView, parse_support_slots};
 
     const SUPPORT_SLOTS: &str = include_str!("../../dotnet-assemblies/support_slots.def");
 
     #[test]
-    fn parses_committed_twenty_one_slot_contract() {
+    fn parses_committed_contract_without_requiring_a_fixed_total() {
         let contract = parse_support_slots(SUPPORT_SLOTS).expect("committed definition must parse");
+        const EXISTING_IDS: &[(i32, &str)] = &[
+            (1, "RuntimeTypeHandleValue"),
+            (2, "RuntimeFieldHandleValue"),
+            (3, "RuntimeMethodHandleValue"),
+            (4, "RuntimeTypeIndex"),
+            (5, "MethodInfoIndex"),
+            (6, "ConstructorInfoIndex"),
+            (7, "FieldInfoIndex"),
+            (8, "ParameterInfoMethodIndex"),
+            (9, "ParameterInfoPosition"),
+            (10, "PropertyInfoName"),
+            (11, "PropertyInfoGetter"),
+            (12, "PropertyInfoSetter"),
+            (13, "PropertyInfoDeclaringType"),
+            (14, "PropertyInfoPropertyType"),
+            (15, "DelegateTarget"),
+            (16, "DelegateMethodIndex"),
+            (17, "MulticastDelegateTargets"),
+            (18, "SpanReference"),
+            (19, "SpanLength"),
+            (20, "ReadOnlySpanReference"),
+            (21, "ReadOnlySpanLength"),
+        ];
 
-        assert_eq!(contract.slots.len(), 21);
-        assert_eq!(contract.slots[0].id, 1);
-        assert_eq!(contract.slots[0].semantic_name, "RuntimeTypeHandleValue");
-        assert_eq!(contract.slots[0].declaring_well_known, "RuntimeTypeHandle");
-        assert_eq!(contract.slots[0].signature, FieldSignature::IntPtr);
-        assert_eq!(contract.slots[0].storage, StorageShape::HandleObjectRef);
-        assert_eq!(
-            contract.slots[0].accessor.value_type,
-            AccessorType::ObjectRef
-        );
-        assert_eq!(contract.slots[14].signature, FieldSignature::Object);
-        assert_eq!(contract.slots[20].id, 21);
-        assert_eq!(contract.slots[20].semantic_name, "ReadOnlySpanLength");
+        assert!(contract.slots.len() >= EXISTING_IDS.len());
+        for (slot, (expected_id, expected_name)) in contract.slots.iter().zip(EXISTING_IDS.iter()) {
+            assert_eq!(slot.id, *expected_id);
+            assert_eq!(slot.semantic_name, *expected_name);
+        }
     }
 
     #[test]

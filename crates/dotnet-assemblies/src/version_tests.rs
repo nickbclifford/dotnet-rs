@@ -8,6 +8,43 @@ mod tests {
     use std::env;
     #[cfg(not(miri))]
     use std::fs;
+    #[cfg(not(miri))]
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[cfg(not(miri))]
+    static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
+
+    #[cfg(not(miri))]
+    struct TestRoot(std::path::PathBuf);
+
+    #[cfg(not(miri))]
+    impl TestRoot {
+        fn new(label: &str) -> Self {
+            loop {
+                let id = NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed);
+                let path =
+                    env::temp_dir().join(format!("dotnet-rs-{label}-{}-{id}", std::process::id()));
+                match fs::create_dir(&path) {
+                    Ok(()) => return Self(path),
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => {
+                        panic!("create isolated test directory {}: {error}", path.display())
+                    }
+                }
+            }
+        }
+
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    #[cfg(not(miri))]
+    impl Drop for TestRoot {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
     #[test]
     fn test_version_parsing() {
         let v = parse_version("1.2.3.4").unwrap();
@@ -45,10 +82,9 @@ mod tests {
     #[test]
     #[cfg(not(miri))]
     fn test_version_binding_basic() {
-        let root = env::temp_dir().join("dotnet_rs_version_test_basic");
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).unwrap();
-        let mut loader = AssemblyLoader::new_bare(root.to_str().unwrap().to_string()).unwrap();
+        let root = TestRoot::new("version-binding");
+        let mut loader =
+            AssemblyLoader::new_bare(root.path().to_str().unwrap().to_string()).unwrap();
         loader.set_strict_versioning(true);
         let mut res = Resolution::new(Module::new("TestAssembly.dll"));
         let mut assembly = Assembly::new("TestAssembly");
@@ -92,17 +128,14 @@ mod tests {
             }),
         );
         assert!(err.is_err());
-        fs::remove_dir_all(&root).unwrap();
     }
     #[test]
     #[cfg(not(miri))]
     fn test_binding_redirect() {
-        let root = env::temp_dir().join("dotnet_rs_version_test_redirects");
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).unwrap();
-        let redirects_path = root.join("redirects.txt");
+        let root = TestRoot::new("version-redirect");
+        let redirects_path = root.path().join("redirects.txt");
         fs::write(&redirects_path, "TestAssembly 2.0.0.0-2.0.0.0 1.0.0.0").unwrap();
-        let mut loader = AssemblyLoader::new(root.to_str().unwrap().to_string()).unwrap();
+        let mut loader = AssemblyLoader::new(root.path().to_str().unwrap().to_string()).unwrap();
         loader.set_strict_versioning(true);
         let mut res = Resolution::new(Module::new("TestAssembly.dll"));
         let mut assembly = Assembly::new("TestAssembly");
@@ -126,6 +159,5 @@ mod tests {
             )
             .unwrap();
         assert_eq!(resolved, res_s);
-        fs::remove_dir_all(&root).unwrap();
     }
 }

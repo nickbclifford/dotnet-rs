@@ -88,7 +88,7 @@ where
             return Ok(cached);
         }
 
-        let result = self.loader.comparer().is_assignable_to(&value, &ancestor);
+        let result = self.loader.comparer().is_assignable_to(&value, &ancestor)?;
 
         self.caches.set_hierarchy_cached(value, ancestor, result);
         Ok(result)

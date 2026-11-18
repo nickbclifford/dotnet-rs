@@ -5,28 +5,53 @@
 using System;
 
 public class Program {
+    // Calls keep operands out of C# constant folding so Main contains these IL operations.
+    static int Ten() => 10;
+    static int Three() => 3;
+    static int NegativeTen() => -10;
+    static int One() => 1;
+    static int Eight() => 8;
+    static int NegativeEight() => -8;
+    static int Two() => 2;
+    static int Fifteen() => 0x0F;
+    static int F0() => 0xF0;
+    static int FF() => 0xFF;
+    static int Four() => 4;
+
     public static int Main() {
+        int ten = Ten();
+        int three = Three();
+        int negativeTen = NegativeTen();
+        int one = One();
+        int eight = Eight();
+        int negativeEight = NegativeEight();
+        int two = Two();
+        int fifteen = Fifteen();
+        int f0 = F0();
+        int ff = FF();
+        int four = Four();
+
         // Division
-        if (10 / 3 != 3) return 1;
-        if (-10 / 3 != -3) return 2;
+        if (ten / three != 3) return 1;
+        if (negativeTen / three != -3) return 2;
         
         // Remainder
-        if (10 % 3 != 1) return 3;
-        if (-10 % 3 != -1) return 4;
+        if (ten % three != 1) return 3;
+        if (negativeTen % three != -1) return 4;
         
         // Shift operations
-        if ((1 << 3) != 8) return 5;
-        if ((8 >> 2) != 2) return 6;
-        if ((-8 >> 2) != -2) return 7; // Arithmetic shift
+        if ((one << three) != 8) return 5;
+        if ((eight >> two) != 2) return 6;
+        if ((negativeEight >> two) != -2) return 7; // Arithmetic shift
         
         // Bitwise
-        if ((0xFF & 0x0F) != 0x0F) return 8;
-        if ((0xF0 | 0x0F) != 0xFF) return 9;
-        if ((0xFF ^ 0x0F) != 0xF0) return 10;
+        if ((ff & fifteen) != 0x0F) return 8;
+        if ((f0 | fifteen) != 0xFF) return 9;
+        if ((ff ^ fifteen) != 0xF0) return 10;
         
         // Multiplication and addition
-        if (2 * 3 + 4 != 10) return 11;
-        if (10 - 2 * 3 != 4) return 12;
+        if (two * three + four != 10) return 11;
+        if (ten - two * three != 4) return 12;
 
         return 42;
     }
