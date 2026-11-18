@@ -72,6 +72,15 @@ EF Core needs the former; Newtonsoft's Emit path currently needs `DynamicMethod.
 
 ## Remaining boundaries
 
+Without `multithreading`, a finalizer runs in a separate managed segment with its own stable
+`Thread` identity and logical monitor/initializer owner key; arena allocation identity and pointer
+serialization are unchanged. Automatic finalizers are deferred while the interrupted thread owns a
+monitor or has an initializer claim, then retried at later safepoints. A long-held monitor can
+therefore delay automatic finalization until it is released. `GC.WaitForPendingFinalizers` forces
+processing; if a finalizer needs a monitor or type initializer held by the waiting caller, the VM
+reports a single-threaded deadlock rather than suspending and resuming the caller through a
+scheduler.
+
 Managed byref displacements use a signed 32-bit compact range, so positive
 displacements above `i32::MAX` are not representable. A negative displacement may
 be formed and carried, but an access still has to resolve within its live owner's

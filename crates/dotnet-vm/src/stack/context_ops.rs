@@ -283,6 +283,17 @@ impl<'a, 'gc> ReflectionOps<'gc> for VesContext<'a, 'gc> {
             self.shared.loader.corlib_wkt(WellKnown::Object)
         }
     }
+
+    #[cfg(feature = "multithreading")]
+    fn await_runtime_method_object(
+        &mut self,
+        method: &MethodDescription,
+        lookup: &GenericLookup,
+    ) -> Option<StepResult> {
+        self.await_reflection_object(crate::stack::ops::ReflectionObjectKey::Method(
+            method, lookup,
+        ))
+    }
 }
 
 impl<'a, 'gc> dotnet_intrinsics_delegates::DelegateInvokeHost<'gc> for VesContext<'a, 'gc> {
@@ -304,25 +315,6 @@ impl<'a, 'gc> dotnet_intrinsics_delegates::DelegateInvokeHost<'gc> for VesContex
             .caches
             .delegate_dispatch_cache
             .insert(method, kind);
-    }
-
-    fn delegate_method_info(
-        &self,
-        method: MethodDescription,
-        lookup: &GenericLookup,
-    ) -> Result<dotnet_vm_data::MethodInfo<'static>, TypeResolutionError> {
-        self.shared
-            .caches
-            .get_method_info(method, lookup, self.shared.clone())
-    }
-
-    #[inline]
-    fn delegate_call_frame(
-        &mut self,
-        method: dotnet_vm_data::MethodInfo<'static>,
-        generic_inst: GenericLookup,
-    ) -> Result<(), TypeResolutionError> {
-        self.call_frame(method, generic_inst)
     }
 
     #[inline]
@@ -391,7 +383,7 @@ impl<'a, 'gc> dotnet_intrinsics_span::LayoutQueryHost for VesContext<'a, 'gc> {}
 impl<'a, 'gc, 'resolver> ManagedPtrResolver<'resolver> for VesContext<'a, 'gc> {
     #[inline]
     fn static_storage_base(&self, metadata: &StaticMetadata) -> Option<NonNull<u8>> {
-        let storage = self.statics().get_for_metadata(metadata);
+        let storage = self.static_storage_for_metadata(metadata).ok()?;
         storage
             .storage
             .with_data(|data| NonNull::new(data.as_ptr().cast_mut()))
@@ -399,7 +391,7 @@ impl<'a, 'gc, 'resolver> ManagedPtrResolver<'resolver> for VesContext<'a, 'gc> {
 
     #[inline]
     fn static_storage_block(&self, metadata: &StaticMetadata) -> Option<(NonNull<u8>, usize)> {
-        let storage = self.statics().get_for_metadata(metadata);
+        let storage = self.static_storage_for_metadata(metadata).ok()?;
         let (base, len) = storage.storage.observe_data_block();
         NonNull::new(base.cast_mut()).map(|base| (base, len))
     }
@@ -557,7 +549,7 @@ impl<'a, 'gc> dotnet_intrinsics_threading::ManagedThreadHost<'gc> for VesContext
                         delegate: None,
                         parameterized: false,
                         started: true,
-                        background: false,
+                        background: self.parked_finalizer_caller.is_some(),
                         completion_index: None,
                         retained: StdArc::new(AtomicBool::new(true)),
                     },
@@ -732,6 +724,11 @@ impl<'a, 'gc> dotnet_intrinsics_threading::ManagedThreadHost<'gc> for VesContext
             self.push_i32(self.local.managed_threads.current_id());
             return StepResult::Continue;
         }
+        #[cfg(not(feature = "multithreading"))]
+        if let Some(id) = self.local.managed_threads.id_for(thread) {
+            self.push_i32(id);
+            return StepResult::Continue;
+        }
         #[cfg(feature = "multithreading")]
         if let Some(metadata) = self.shared.workers.managed_thread(thread.as_ptr().unwrap()) {
             self.push_i32(metadata.id);
@@ -763,11 +760,9 @@ impl<'a, 'gc> dotnet_intrinsics_threading::ManagedThreadHost<'gc> for VesContext
             }
         }
         #[cfg(not(feature = "multithreading"))]
-        if self.local.managed_threads.current() == Some(thread) {
-            if let Some(value) = value {
-                self.local.managed_threads.set_background(value);
-            } else {
-                self.push_i32(i32::from(self.local.managed_threads.background()));
+        if let Some(background) = self.local.managed_threads.background_for(thread, value) {
+            if value.is_none() {
+                self.push_i32(i32::from(background));
             }
             return StepResult::Continue;
         }

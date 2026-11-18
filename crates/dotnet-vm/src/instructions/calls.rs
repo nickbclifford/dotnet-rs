@@ -348,6 +348,30 @@ fn dispatch_constrained_virtual<'gc, T: VesOps<'gc>>(
             .find_generic_method(source, &ctx.current_context())
     );
 
+    // `Object.GetType` is not virtual, so a value-type constraint always boxes the receiver and
+    // the callee reads the constraint's Type object. Select a missing shared Type object here,
+    // before the receiver is boxed, so a retry re-executes this instruction on its original stack.
+    #[cfg(feature = "multithreading")]
+    if base_method.method().name == "GetType"
+        && base_method.signature().parameters.is_empty()
+        && ctx
+            .loader()
+            .canonical_type_name(&base_method.parent.type_name())
+            == "System.Object"
+    {
+        let concrete = dotnet_vm_ops::vm_try!(ctx.make_concrete(constraint));
+        let constraint_type: TypeDescription =
+            dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(concrete.clone()));
+        if dotnet_vm_ops::vm_try!(constraint_type.is_value_type(&ctx.current_context()))
+            && let Some(target) =
+                dotnet_types::runtime::runtime_type_from_concrete(ctx.loader().as_ref(), &concrete)
+            && let Some(step) =
+                ctx.await_reflection_object(crate::stack::ops::ReflectionObjectKey::Type(&target))
+        {
+            return step;
+        }
+    }
+
     // Pop all arguments (this + parameters)
     let num_args = 1 + base_method.signature().parameters.len();
     ctx.pop_call_args_into_buffer(num_args);

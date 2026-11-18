@@ -73,6 +73,12 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
                 })?;
             RuntimeType::Generic(parent, arguments)
         };
+        #[cfg(feature = "multithreading")]
+        if let Some(step) = self
+            .await_reflection_object(crate::stack::ops::ReflectionObjectKey::Type(&runtime_type))
+        {
+            return Err(step);
+        }
         Ok(self.get_runtime_type(runtime_type))
     }
 

@@ -13,6 +13,8 @@ static class Program
     static object? workerObject;
     static object? mainObject;
     static Dictionary<Type, int>? types;
+    static WeakReference? workerTypeWeak;
+    static ConditionalWeakTable<Type, object>? typeKeys;
     static Type? raceA, raceB;
     static volatile bool raceStart;
     static bool workerOk;
@@ -51,6 +53,9 @@ static class Program
             workerObject = new WorkerOwned();
             types = new Dictionary<Type, int>();
             types.Add(workerType, 42);
+            workerTypeWeak = new WeakReference(workerType);
+            typeKeys = new ConditionalWeakTable<Type, object>();
+            typeKeys.Add(workerType, new object());
             workerOk = mainObject!.GetType() == typeof(MainOwned)
                 && Object.ReferenceEquals(mainType, typeof(MainOwned));
         });
@@ -60,14 +65,21 @@ static class Program
         GC.WaitForPendingFinalizers();
         bool ok = workerOk && Object.ReferenceEquals(workerType, typeof(WorkerOwned))
             && workerObject!.GetType() == typeof(WorkerOwned)
-            && types![typeof(WorkerOwned)] == 42;
+            && types![typeof(WorkerOwned)] == 42
+            && Object.ReferenceEquals(workerTypeWeak!.Target, typeof(WorkerOwned))
+            && typeKeys!.TryGetValue(typeof(WorkerOwned), out _);
 
+        workerType = null;
+        types = null;
         var a = new Thread(() => { while (!raceStart) Thread.Sleep(0); raceA = typeof(RaceType); });
         var b = new Thread(() => { while (!raceStart) Thread.Sleep(0); raceB = typeof(RaceType); });
         a.Start(); b.Start(); raceStart = true; a.Join(); b.Join();
         ok = ok && Object.ReferenceEquals(raceA, raceB) && Object.ReferenceEquals(raceA, typeof(RaceType));
         GC.Collect();
-        ok = ok && Object.ReferenceEquals(workerType, typeof(WorkerOwned));
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        ok = ok && Object.ReferenceEquals(workerTypeWeak!.Target, typeof(WorkerOwned))
+            && typeKeys!.TryGetValue(typeof(WorkerOwned), out _);
 
         var contender = new Thread(() => { for (int i = 0; i < 100; i++) { BumpLock(); BumpSync(); } });
         contender.Start();

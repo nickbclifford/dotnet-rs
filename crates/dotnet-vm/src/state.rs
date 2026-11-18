@@ -387,6 +387,9 @@ pub struct SharedGlobalState {
     pub(crate) finalizers: crate::finalizers::Finalizers,
     #[cfg(feature = "multithreading")]
     pub(crate) finalizer_started: AtomicBool,
+    /// Homes canonical shared objects in the finalizer executor's retained arena.
+    #[cfg(feature = "multithreading")]
+    pub(crate) canonical: crate::threading::canonical::CanonicalService,
     #[cfg(feature = "multithreading")]
     pub(crate) finalizer_shutdown: AtomicBool,
     pub metrics: Arc<RuntimeMetrics>,
@@ -504,6 +507,8 @@ impl SharedGlobalState {
             abort_requested: Arc::new(AtomicBool::new(false)),
             gc_coordinator: Arc::new(GCCoordinator::new(stw_in_progress.clone())),
             interned_strings: DashMap::new(),
+            #[cfg(feature = "multithreading")]
+            canonical: Default::default(),
             #[cfg(feature = "multithreading")]
             reflection_registry: SharedReflectionRegistry::new(),
             resolution_shared_cache: OnceLock::new(),
@@ -700,10 +705,11 @@ impl Drop for SharedGlobalState {
     }
 }
 
-// SAFETY: F5.TracesEveryGcRef — the tables contain only reflection-object pointers. Each was
-// published while its allocating arena was active and stays rooted until shutdown;
-// retired arenas remain registered until collection stops. ObjectRef::trace marks
-// local objects and records foreign ones for the cross-arena fixed point.
+// SAFETY: F5.TracesEveryGcRef — the tables contain reflection-object pointers published
+// under the owner mutation. With an active service, new objects use its long-lived arena;
+// otherwise the allocating arena remains registered until shutdown. The tables root each
+// winner. ObjectRef::trace marks local objects and records foreign ones for the cross-arena
+// fixed point.
 #[cfg(feature = "multithreading")]
 unsafe impl<'gc> Collect<'gc> for SharedReflectionRegistry {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
@@ -751,6 +757,18 @@ pub struct ReflectionLocalState<'gc> {
 }
 
 impl<'gc> ReflectionLocalState<'gc> {
+    /// Drop hydrated object caches when an execution segment has finished. Shared canonical
+    /// registries remain authoritative; metadata vectors keep their stable handle indices.
+    #[cfg(feature = "multithreading")]
+    pub(crate) fn clear_object_caches(&mut self) {
+        self.runtime_asms.get_mut().clear();
+        self.runtime_asm_resolutions.get_mut().clear();
+        self.runtime_types.get_mut().clear();
+        self.runtime_method_objs.get_mut().clear();
+        self.runtime_field_objs.get_mut().clear();
+        self.runtime_property_objs.get_mut().clear();
+    }
+
     pub fn new() -> Self {
         Self {
             runtime_asms: RefCell::new(HashMap::new()),

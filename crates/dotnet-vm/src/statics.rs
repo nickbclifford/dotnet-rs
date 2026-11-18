@@ -2,7 +2,7 @@ use crate::{context::ResolutionContext, layout::static_fields};
 use dotnet_assemblies::AssemblyLoader;
 use dotnet_types::{
     TypeDescription,
-    error::TypeResolutionError,
+    error::{MemoryAccessError, TypeResolutionError},
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
     resolution::ResolutionS,
@@ -19,7 +19,7 @@ use dotnet_value::{
 use dotnetdll::prelude::{BaseType, TypeSource, UserType};
 use gc_arena::{Collect, collect::Trace};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt::{Debug, Formatter},
 };
 
@@ -206,14 +206,19 @@ impl Debug for StaticStorage {
 
 type StaticMap = HashMap<(TypeDescription, GenericLookup), Arc<StaticStorage>>;
 
+#[derive(Default)]
+struct ThreadStatics {
+    entries: HashMap<(TypeDescription, GenericLookup, u64), Arc<StaticStorage>>,
+    exited: HashSet<u64>,
+}
+
 pub struct StaticStorageManager {
     /// Thread-safe map of types to their static storage.
     /// We use a striped lock table for better performance and to allow concurrent access to different types,
     /// and each StaticStorage has its own locks for even more granularity.
     shards: [RwLock<StaticMap>; 16],
-    // INVARIANT: F6.ThreadStaticRoot — retained with the VM, like retired executor arenas: managed byrefs can outlive
-    // the thread that first obtained the address.
-    thread_statics: RwLock<HashMap<(TypeDescription, GenericLookup, u64), Arc<StaticStorage>>>,
+    // INVARIANT: F6.ThreadStaticRoot — live owners are traced; closing and creation share this lock.
+    thread_statics: RwLock<ThreadStatics>,
     /// Loader-resolved canonical type arguments, remembered per raw spelling by `init` so the
     /// loader-free lookups (`get`, `get_init_state`, ...) agree with the keys `init` created.
     canonical_args: RwLock<HashMap<GenericLookup, Arc<[ConcreteType]>>>,
@@ -465,11 +470,12 @@ impl Drop for StaticWaitRegistration {
 unsafe impl<'gc> Collect<'gc> for StaticStorageManager {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         self.pool_placeholder.trace(cc);
-        // INVARIANT: F6.ThreadStaticRoot — all mutators are stopped and every retained allocation is traced.
+        // INVARIANT: F6.ThreadStaticRoot — all mutators are stopped and every live owner allocation is traced.
         for storage in self
             .thread_statics
             .try_read()
             .expect("thread statics locked during GC")
+            .entries
             .values()
         {
             storage.trace(cc);
@@ -551,6 +557,9 @@ pub enum StaticInitResult {
     Failed,
     /// Another thread is currently initializing this type.
     Waiting(StaticWaitRegistration),
+    /// The initializing owner is parked on this executor.
+    #[cfg(not(feature = "multithreading"))]
+    WouldDeadlock,
 }
 
 impl StaticStorageManager {
@@ -562,7 +571,7 @@ impl StaticStorageManager {
     pub fn new() -> Self {
         Self {
             shards: std::array::from_fn(|_| RwLock::new(HashMap::new())),
-            thread_statics: RwLock::new(HashMap::new()),
+            thread_statics: RwLock::new(ThreadStatics::default()),
             canonical_args: RwLock::new(HashMap::new()),
             wait_graph: OrderedMutex::new(WaitGraph::default()),
             pool_placeholder: {
@@ -674,26 +683,58 @@ impl Default for StaticStorageManager {
 }
 
 impl StaticStorageManager {
-    /// Returns a per-executor zero-initialized copy of the static field layout.
-    /// Type initialization is still shared with ordinary static fields.
+    #[cfg(not(feature = "multithreading"))]
+    pub(crate) fn has_initializer_owned_by(&self, owner: u64) -> bool {
+        self.shards.iter().any(|shard| {
+            shard
+                .read()
+                .values()
+                .any(|storage| storage.init_state() == InitState::Initializing(owner))
+        })
+    }
+
+    /// Close an owner and discard its roots atomically with respect to lookup and creation.
+    #[cfg(feature = "multithreading")]
+    pub(crate) fn close_thread(&self, owner: u64) {
+        let mut state = self.thread_statics.write();
+        state.exited.insert(owner);
+        state.entries.retain(|(_, _, id), _| *id != owner);
+    }
+
+    /// Returns the owner's static storage. Only the executing owner may create an entry.
     pub fn get_for_thread(
         &self,
         description: TypeDescription,
         generics: &GenericLookup,
-        thread_id: u64,
-    ) -> Arc<StaticStorage> {
+        owner: u64,
+        actor: u64,
+    ) -> Result<Arc<StaticStorage>, MemoryAccessError> {
         let key = (
             description.clone(),
             self.canonical_lookup(generics, None),
-            thread_id,
+            owner,
         );
-        if let Some(storage) = self.thread_statics.read().get(&key) {
-            return storage.clone();
+        {
+            let state = self.thread_statics.read();
+            if state.exited.contains(&owner) {
+                return Err(MemoryAccessError::InvalidOrigin);
+            }
+            if let Some(storage) = state.entries.get(&key) {
+                return Ok(storage.clone());
+            }
+        }
+        if owner != actor {
+            return Err(MemoryAccessError::InvalidOrigin);
         }
         let shared = self.get(description, generics);
         let layout = shared.layout();
-        let mut map = self.thread_statics.write();
-        map.entry(key)
+        let mut state = self.thread_statics.write();
+        if state.exited.contains(&owner) {
+            return Err(MemoryAccessError::InvalidOrigin);
+        }
+        Ok(state
+            .entries
+            .entry(key)
             .or_insert_with(|| {
                 #[allow(
                     clippy::arc_with_non_send_sync,
@@ -707,16 +748,19 @@ impl StaticStorageManager {
                     init_mutex: shared.init_mutex.clone(),
                 })
             })
-            .clone()
+            .clone())
     }
 
     pub fn get_for_metadata(
         &self,
         metadata: &dotnet_value::pointer::StaticMetadata,
-    ) -> Arc<StaticStorage> {
+        actor: u64,
+    ) -> Result<Arc<StaticStorage>, MemoryAccessError> {
         match metadata.thread_id {
-            Some(id) => self.get_for_thread(metadata.type_desc.clone(), &metadata.generics, id),
-            None => self.get(metadata.type_desc.clone(), &metadata.generics),
+            Some(id) => {
+                self.get_for_thread(metadata.type_desc.clone(), &metadata.generics, id, actor)
+            }
+            None => Ok(self.get(metadata.type_desc.clone(), &metadata.generics)),
         }
     }
 
@@ -965,9 +1009,7 @@ impl StaticStorageManager {
                     return Ok(StaticInitResult::Recursive);
                 }
                 #[cfg(not(feature = "multithreading"))]
-                unreachable!(
-                    "single-threaded static initialization cannot wait for another thread"
-                );
+                return Ok(StaticInitResult::WouldDeadlock);
                 #[cfg(feature = "multithreading")]
                 {
                     let id = {

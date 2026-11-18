@@ -63,6 +63,21 @@ enum NativeWaitSleep {
     Initializer(Box<dyn dotnet_vm_ops::effects::NativeInitSleeper>),
 }
 
+// Declared after the executor, so unwinding closes its managed owner before the
+// executor unregisters and before the registry publishes a panic outcome.
+#[cfg(feature = "multithreading")]
+struct ManagedThreadStaticsGuard {
+    shared: Arc<SharedGlobalState>,
+    owner: u64,
+}
+
+#[cfg(feature = "multithreading")]
+impl Drop for ManagedThreadStaticsGuard {
+    fn drop(&mut self) {
+        self.shared.statics.close_thread(self.owner);
+    }
+}
+
 /// Thread-affine execution owner. Neither Executor nor its extracted arena
 /// guard may be sent to or shared with another OS thread.
 pub struct Executor {
@@ -73,6 +88,9 @@ pub struct Executor {
     /// Thread ID for this executor
     thread_id: ArenaId,
     registered: bool,
+    /// Set on the finalizer executor, which owns the canonical allocation service.
+    #[cfg(feature = "multithreading")]
+    canonical_owner: bool,
     /// Owner-held registration; moved into `ArenaGuard` by `extract_arena`.
     #[cfg(feature = "multithreading")]
     registration: std::cell::RefCell<Option<dotnet_utils::gc::ArenaRegistration>>,
@@ -82,6 +100,8 @@ pub struct Executor {
     pub instruction_budget: Option<u64>,
     #[cfg(not(feature = "multithreading"))]
     gc_tick_counter: u32,
+    #[cfg(feature = "multithreading")]
+    reap_tick_counter: u8,
 }
 
 #[derive(Clone, Debug)]
@@ -239,6 +259,8 @@ impl Executor {
             thread_id,
             registered: true,
             #[cfg(feature = "multithreading")]
+            canonical_owner: false,
+            #[cfg(feature = "multithreading")]
             owner,
             #[cfg(feature = "multithreading")]
             registration: std::cell::RefCell::new(None),
@@ -248,6 +270,8 @@ impl Executor {
             instruction_budget: None,
             #[cfg(not(feature = "multithreading"))]
             gc_tick_counter: 0,
+            #[cfg(feature = "multithreading")]
+            reap_tick_counter: 0,
         };
         // From here all fallible initialization is covered by Executor Drop.
         // No arena pointer has been published yet. Capture the exact registration
@@ -450,6 +474,10 @@ impl Executor {
         worker: crate::threading::workers::RunningWorker,
     ) {
         let mut executor = Self::new(shared);
+        let tls_guard = ManagedThreadStaticsGuard {
+            shared: executor.shared.clone(),
+            owner: executor.thread_id.as_u64(),
+        };
         let retained = start.as_ref().map(|start| start.retained.clone());
         let result = match executor.install_thread_start_with_args(method, generic_inst, start) {
             Ok(()) => executor.run_installed_thread_start(),
@@ -483,7 +511,7 @@ impl Executor {
             retained.store(false, StdOrdering::Release);
         }
         let result = cleanup.map_or_else(ExecutorResult::Error, |_| result);
-        executor.serve_retired(worker.complete(result));
+        executor.serve_retired(worker.complete_with_cleanup(result, || drop(tls_guard)));
     }
 
     /// Run each claimed request through CoreLib's managed dispatcher on one reusable executor.
@@ -630,6 +658,8 @@ impl Executor {
     fn serve_retired(mut self, completed: crate::threading::workers::CompletedWorker) {
         let retired = completed.retire();
         let shared = self.shared.clone();
+        self.clear_retired_roots();
+        let mut settled_after = crate::threading::completed_sweeps();
         loop {
             if shared.thread_manager.is_gc_stop_requested() {
                 shared
@@ -641,15 +671,51 @@ impl Executor {
                     arena.mutate(|_, c| c.stack.local.heap.has_pending_finalizers())
                 })
                 .expect("retired owner must retain its arena");
-            if pending && retired.begin_finalizing(&shared) {
+            if pending && retired.begin_finalizing(|| shared.is_abort_requested()) {
                 let result = self.run_inner(true);
                 match result {
                     ExecutorResult::Threw(exception) => shared.report_fatal_exception(exception),
                     ExecutorResult::Error(_) => shared.abort_signal().request_abort(),
                     ExecutorResult::Exited(_) => {}
                 }
+                // Finalizers can hydrate caches or leave exception operands behind too.
+                self.clear_retired_roots();
                 // Publish failures while the registry still sees this owner as Finalizing.
                 retired.finish_finalizing();
+                // A finalizer can allocate or resurrect. Require a new sweep after its effects.
+                settled_after = crate::threading::completed_sweeps();
+            }
+            if crate::threading::completed_sweeps() != settled_after
+                && self.retired_arena_is_empty()
+            {
+                // INVARIANT: F1.RetiredCollectionExclusion — a completed sweep cleared weak
+                // references and traced all external roots. Recheck emptiness and lifecycle
+                // under exclusion before removing this owner from future collection snapshots.
+                let releasing = shared.gc_coordinator.try_exclude_collection(|| {
+                    if !self.retired_arena_is_empty() {
+                        return None;
+                    }
+                    let releasing = retired.begin_release()?;
+                    self.publish_pending_finalizers();
+                    // Arm storage retention before unregistering or any fallible drain.
+                    let retained = self.owner.take().map(RetainedArena::new);
+                    let registration = self.registration.get_mut().take();
+                    self.unregister();
+                    Some((releasing, retained, registration))
+                });
+                if let Some(Some((releasing, retained, registration))) = releasing {
+                    // Lease holders can need coordinator/registry locks to release a lease.
+                    let drained = retained.is_some_and(|arena| arena.drain(registration));
+                    drop(self);
+                    releasing.finish(drained);
+                    return;
+                }
+                if releasing.is_none() {
+                    // The collector may still be dropping its session after our safepoint.
+                    // Retry without depending on another collection to wake this empty owner.
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    continue;
+                }
             }
             if shared.thread_manager.wait_retired() {
                 // INVARIANT: F1.RetiredCollectionExclusion — a collection may have
@@ -664,7 +730,7 @@ impl Executor {
                         return false;
                     }
                     // INVARIANT: F1.RetiredCollectionExclusion — freeing this arena is only
-                    // safe once no managed code anywhere can still collect, because a trace
+                    // safe for a retained nonempty arena once no managed code can collect: a trace
                     // reads owner identity through references into every arena. Another owner's
                     // finalizer, a still-running worker or a pending queue keeps this one
                     // serving. Abort abandons pending finalizers, as in the entry-arena wait.
@@ -698,6 +764,40 @@ impl Executor {
         let drained = retained.is_some_and(|arena| arena.drain(registration));
         drop(self);
         retired.finish_shutdown(drained);
+    }
+
+    #[cfg(feature = "multithreading")]
+    fn retired_arena_is_empty(&self) -> bool {
+        self.with_arena_ref(|arena| {
+            arena.metrics().total_gc_count() == 0
+                && arena.mutate(|_, c| {
+                    !c.stack.local.heap.has_pending_finalizers()
+                        && c.stack.local.managed_threads.records_write().is_empty()
+                })
+        })
+        .expect("retired owner must retain its arena")
+    }
+
+    #[cfg(feature = "multithreading")]
+    fn clear_retired_roots(&mut self) {
+        self.with_arena(|arena| {
+            arena.mutate_root(|_, engine| {
+                engine.retire_finalizer_segment();
+                let stack = &mut engine.stack;
+                let execution = &mut stack.execution;
+                execution
+                    .call_state
+                    .cleanup_native(&mut execution.frame_stack, &mut execution.evaluation_stack);
+                *execution = crate::stack::context::ThreadContext::default();
+                stack.heap_managed_ptr_decode_cache.clear();
+                stack.local.reflection.clear_object_caches();
+                stack.local.managed_threads.clear_current();
+                // Active and unstarted child records still root delegates and arguments.
+                // Only completion's retention flag authorizes removing a record.
+                drop(stack.local.managed_threads.records_write());
+            });
+        })
+        .expect("retired owner must retain its arena");
     }
 
     /// Installs a `ThreadStart` target without applying CLI entrypoint argument rules.
@@ -791,6 +891,8 @@ impl Executor {
     pub fn wait_for_foreground_workers(&mut self) {
         let mut stopping_background = false;
         loop {
+            #[cfg(feature = "multithreading")]
+            self.shared.workers.reap_released();
             let idle = || true;
             if stopping_background {
                 if self.shared.workers.is_quiescent(idle) {
@@ -856,6 +958,61 @@ impl Executor {
         self.shared.workers.spawn_finalizer_owner(move |worker| {
             Self::run_finalizer_thread(shared, worker);
         });
+        // Guest code must not run before the service accepts requests: until then a miss would
+        // be homed in the requester's arena. The owner opens or closes the service promptly.
+        while !self.shared.is_abort_requested() && !self.shared.canonical.is_settled() {
+            self.shared
+                .canonical
+                .wait_settled(std::time::Duration::from_millis(10));
+        }
+    }
+
+    /// Install the canonical empty string, then start admitting requests. The owner's arena is
+    /// retained until shutdown, so every service-homed object outlives its requester.
+    #[cfg(feature = "multithreading")]
+    fn open_canonical_service(&mut self) -> Result<(), VmError> {
+        self.canonical_owner = true;
+        #[cfg(feature = "memory-validation")]
+        let thread_id = self.thread_id;
+        self.with_arena(|arena| {
+            arena.mutate_root(|gc, c| {
+                let gc = GCHandle::new(
+                    gc,
+                    // SAFETY: F1.GcHandleRooted — the executor holds this arena's mutation.
+                    unsafe { c.stack.arena_inner_gc() },
+                    #[cfg(feature = "memory-validation")]
+                    thread_id,
+                );
+                c.ves_context(gc).materialize_canonical_string(&[]);
+            })
+        })?;
+        self.shared.canonical.open(self.thread_id);
+        Ok(())
+    }
+
+    /// Materialize a bounded batch of queued canonical requests inside this arena's own active
+    /// mutation. This is host allocation, not guest dispatch: it never enters a constructor and
+    /// acquires no guest monitor or initializer claim.
+    #[cfg(feature = "multithreading")]
+    fn service_canonical(&mut self) -> Result<(), VmError> {
+        const BATCH: usize = 64;
+        if !self.canonical_owner || !self.shared.canonical.has_work() {
+            return Ok(());
+        }
+        #[cfg(feature = "memory-validation")]
+        let thread_id = self.thread_id;
+        self.with_arena(|arena| {
+            arena.mutate_root(|gc, c| {
+                let gc = GCHandle::new(
+                    gc,
+                    // SAFETY: F1.GcHandleRooted — the executor holds this arena's mutation.
+                    unsafe { c.stack.arena_inner_gc() },
+                    #[cfg(feature = "memory-validation")]
+                    thread_id,
+                );
+                c.ves_context(gc).service_canonical_batch(BATCH);
+            })
+        })
     }
 
     #[cfg(feature = "multithreading")]
@@ -864,10 +1021,17 @@ impl Executor {
         worker: crate::threading::workers::RunningWorker,
     ) {
         let mut executor = Self::new(shared.clone());
+        let mut service = executor.open_canonical_service();
         let result = loop {
+            if let Err(error) = service {
+                shared.report_worker_error(error.clone());
+                break ExecutorResult::Error(error);
+            }
             if shared.is_abort_requested() || shared.finalizer_shutdown.load(Ordering::Acquire) {
                 break ExecutorResult::Exited(0);
             }
+            shared.workers.reap_released();
+            service = executor.service_canonical();
             if shared.thread_manager.is_gc_stop_requested() {
                 shared
                     .thread_manager
@@ -930,7 +1094,10 @@ impl Executor {
                 }
                 Ok(false) => {
                     shared.finalizers.complete();
-                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    // Wake as soon as a canonical request arrives instead of polling.
+                    shared
+                        .canonical
+                        .wait_for_work(std::time::Duration::from_millis(1));
                 }
                 Err(error) => {
                     shared.finalizers.complete();
@@ -939,6 +1106,9 @@ impl Executor {
                 }
             }
         };
+        // Close admission atomically with queue ownership before the arena is retired: every
+        // queued completion resolves with shutdown and sleepers wake.
+        shared.canonical.close();
         executor.serve_retired(worker.complete(result));
     }
 
@@ -966,6 +1136,13 @@ impl Executor {
         #[cfg(feature = "bench-instrumentation")]
         let _metrics_scope = dotnet_metrics::ActiveRuntimeMetricsGuard::enter(&metrics);
         let result = loop {
+            #[cfg(feature = "multithreading")]
+            {
+                self.reap_tick_counter = self.reap_tick_counter.wrapping_add(1);
+                if self.reap_tick_counter == 0 {
+                    self.shared.workers.reap_released();
+                }
+            }
             if self.shared.is_abort_requested() {
                 break ExecutorResult::Error(VmError::Execution(ExecutionError::Aborted(
                     "Requested by user/timeout".into(),
@@ -1036,6 +1213,14 @@ impl Executor {
                 self.shared
                     .thread_manager
                     .safe_point(self.thread_id, &self.shared.gc_coordinator);
+            }
+
+            // The owner services canonical requests on every turn, including while a guest
+            // finalizer runs or the activation is parked in a wait, so Join/monitor cycles
+            // through the allocation service cannot form.
+            #[cfg(feature = "multithreading")]
+            if let Err(error) = self.service_canonical() {
+                break ExecutorResult::Error(error);
             }
 
             #[cfg(feature = "memory-validation")]
@@ -1471,6 +1656,10 @@ mod executor_teardown_tests;
 #[cfg(test)]
 #[path = "executor_collection_tests.rs"]
 mod executor_collection_tests;
+
+#[cfg(all(test, feature = "multithreading"))]
+#[path = "canonical_homing_tests.rs"]
+mod canonical_homing_tests;
 
 #[cfg(test)]
 mod tests {

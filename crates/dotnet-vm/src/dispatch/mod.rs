@@ -4,12 +4,11 @@
 //! which orchestrates the fetch-decode-execute cycle. It also provides
 //! the [`InstructionRegistry`] for looking up instruction handlers.
 use crate::{
-    ExceptionState, StackSlotIndex, StepResult,
+    ExceptionState, StepResult,
     stack::{CallStack, ops::*},
     threading::ThreadManagerOps,
 };
 use dotnet_utils::gc::GCHandle;
-use dotnet_value::object::ObjectRef;
 use dotnetdll::prelude::*;
 use gc_arena::{Collect, collect::Trace};
 use std::sync::OnceLock;
@@ -99,8 +98,44 @@ impl<'gc> ExecutionEngine<'gc> {
     }
 
     pub(crate) fn process_pending_finalizers(&mut self, gc: GCHandle<'gc>) -> StepResult {
+        #[cfg(not(feature = "multithreading"))]
+        let force = self
+            .stack
+            .execution
+            .call_state
+            .native
+            .last()
+            .is_some_and(|work| {
+                matches!(
+                    work.wait,
+                    Some(crate::stack::native_effects::PendingWait::Finalizers(..))
+                )
+            });
+        #[cfg(feature = "multithreading")]
+        let force = false;
+        self.process_pending_finalizers_with_force(gc, force)
+    }
+
+    pub(crate) fn process_pending_finalizers_with_force(
+        &mut self,
+        gc: GCHandle<'gc>,
+        _force: bool,
+    ) -> StepResult {
         if self.stack.parked_finalizer_caller.is_some() {
             return StepResult::Continue;
+        }
+        #[cfg(not(feature = "multithreading"))]
+        if !_force {
+            let owner = self.ves_context(gc).thread_id();
+            if self.stack.shared.sync_blocks.has_owned_monitor(owner)
+                || self
+                    .stack
+                    .shared
+                    .statics
+                    .has_initializer_owned_by(owner.into())
+            {
+                return StepResult::Continue;
+            }
         }
         let prepared = match self.ves_context(gc).prepare_pending_finalizer() {
             Ok(value) => value,
@@ -124,6 +159,8 @@ impl<'gc> ExecutionEngine<'gc> {
         segment.call_state.last_native_id = self.stack.execution.call_state.last_native_id;
         self.stack.parked_finalizer_caller =
             Some(std::mem::replace(&mut self.stack.execution, segment));
+        #[cfg(not(feature = "multithreading"))]
+        self.stack.local.managed_threads.set_finalizer_active(true);
         let result = self.ves_context(gc).entrypoint_frame(
             info,
             generics,
@@ -174,6 +211,8 @@ impl<'gc> ExecutionEngine<'gc> {
             .last_native_id
             .max(active.call_state.last_native_id);
         self.stack.execution = caller;
+        #[cfg(not(feature = "multithreading"))]
+        self.stack.local.managed_threads.set_finalizer_active(false);
         self.stack.local.heap.processing_finalizer.set(false);
         self.stack.shared.publish_finalizers(
             &self.stack.local.heap,
@@ -242,10 +281,6 @@ impl<'gc> ExecutionEngine<'gc> {
     pub fn step_normal(&mut self, gc: GCHandle<'gc>) -> StepResult {
         if self.stack.execution.frame_stack.is_empty() {
             return StepResult::Return;
-        }
-
-        if self.stack.current_frame().multicast_state.is_some() {
-            return self.handle_multicast_step(gc);
         }
 
         let ip = self.stack.state().ip;
@@ -420,130 +455,6 @@ impl<'gc> ExecutionEngine<'gc> {
             }
 
             return res;
-        }
-    }
-
-    fn handle_multicast_step(&mut self, gc: GCHandle<'gc>) -> StepResult {
-        let targets_len = {
-            let frame = self.stack.current_frame();
-            let state = frame
-                .multicast_state
-                .as_ref()
-                .expect("handle_multicast_step is only entered when the current frame's multicast_state.is_some()");
-            ObjectRef(Some(state.targets)).as_vector(|v| v.layout.length)
-        };
-
-        let mut ctx = self.stack.ves_context(gc);
-
-        let retrying = ctx
-            .frame_stack
-            .current_frame()
-            .multicast_state
-            .as_ref()
-            .expect("multicast state must remain installed")
-            .retrying_initializer;
-        if retrying {
-            // Dispatch may have replaced the delegate receiver with the actual target's
-            // arguments before starting its initializer; rebuild from the retained values.
-            while ctx.frame_stack.current_frame().stack_height > StackSlotIndex::new(0) {
-                ctx.pop();
-            }
-            ctx.frame_stack
-                .current_frame_mut()
-                .multicast_state
-                .as_mut()
-                .expect("multicast state must remain installed")
-                .retrying_initializer = false;
-        }
-
-        // Handle the return from the previous target only after a completed dispatch.
-        if !retrying && ctx.frame_stack.current_frame().stack_height > StackSlotIndex::new(0) {
-            let frame = ctx.frame_stack.current_frame();
-            let invoke_method = frame.state.info_handle.source.clone();
-            let has_return_value = invoke_method.signature().return_type.1.is_some();
-
-            let next_index = frame
-                .multicast_state
-                .as_ref()
-                .expect("handle_multicast_step is only entered when the current frame's multicast_state.is_some()")
-                .next_index;
-            if next_index < targets_len && has_return_value {
-                let _ = ctx.pop();
-            }
-        }
-
-        let (target_delegate, args) = {
-            let frame = ctx.frame_stack.current_frame_mut();
-            let state = frame.multicast_state.as_mut().expect("handle_multicast_step is only entered when the current frame's multicast_state.is_some()");
-            let index = state.next_index;
-            if index < targets_len {
-                let target = ObjectRef(Some(state.targets)).as_vector(|v| {
-                    v.object_ref_elements(&gc)
-                        .nth(index)
-                        .expect("multicast targets vector storage must match vector length")
-                });
-                // Move the retained argument vector out only while preparing this target. It is
-                // restored before dispatch so later multicast targets reuse the same storage.
-                (Some(target), Some(std::mem::take(&mut state.args)))
-            } else {
-                (None, None)
-            }
-        };
-
-        if let (Some(target_delegate), Some(args)) = (target_delegate, args) {
-            let invoke_method = ctx
-                .frame_stack
-                .current_frame()
-                .state
-                .info_handle
-                .source
-                .clone();
-            let lookup = ctx.frame_stack.current_frame().generic_inst.clone();
-            let saved_ip = *ctx.original_ip;
-            let saved_height = *ctx.original_stack_height;
-            let ip_before = ctx.state().ip;
-            *ctx.original_ip = ip_before;
-            *ctx.original_stack_height = ctx.top_of_stack();
-
-            ctx.push(dotnet_value::StackValue::ObjectRef(target_delegate));
-            for arg in &args {
-                ctx.push(arg.clone());
-            }
-            ctx.frame_stack
-                .current_frame_mut()
-                .multicast_state
-                .as_mut()
-                .expect("multicast state must remain installed while dispatching a target")
-                .args = args;
-
-            let depth = ctx.frame_stack.len();
-            let result = ctx.dispatch_method(invoke_method, lookup);
-            *ctx.original_ip = saved_ip;
-            *ctx.original_stack_height = saved_height;
-            // A type initializer runs as an effect; this step retries once it completes.
-            let initializer = ctx.has_initializer_gate(depth)
-                // Retained synchronous fallbacks retry without advancing the caller.
-                || (matches!(result, StepResult::Yield) && ctx.frame_stack.len() == depth);
-            if let Some(state) = ctx
-                .frame_stack
-                .frames
-                .get_mut(depth - 1)
-                .and_then(|frame| frame.multicast_state.as_mut())
-            {
-                if initializer {
-                    state.retrying_initializer = true;
-                } else {
-                    state.next_index += 1;
-                }
-            }
-            if matches!(result, StepResult::Jump(_)) && ctx.frame_stack.len() == depth {
-                StepResult::Continue
-            } else {
-                result
-            }
-        } else {
-            // All targets called.
-            ctx.handle_return()
         }
     }
 }

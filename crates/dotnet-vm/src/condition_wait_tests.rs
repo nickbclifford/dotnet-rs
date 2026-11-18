@@ -1338,7 +1338,7 @@ fn static_descriptor_survives_collection_and_resolves_raw_access() {
                     .init(
                         method.parent.clone(),
                         &ctx.with_generics(&generics),
-                        ctx.thread_id.get(),
+                        crate::stack::ThreadOps::thread_id(&ctx),
                     )
                     .unwrap();
                 let pointer = ManagedPtr::new_static(
@@ -1414,7 +1414,7 @@ fn monitor_static_byref_inline_and_out_of_bounds() {
             let gc = unsafe { test_gc_handle(gc, engine) };
             let mut ctx = engine.ves_context(gc);
             let generics = GenericLookup::default();
-            ctx.shared.statics.init(method.parent.clone(), &ctx.with_generics(&generics), ctx.thread_id.get()).unwrap();
+            ctx.shared.statics.init(method.parent.clone(), &ctx.with_generics(&generics), crate::stack::ThreadOps::thread_id(&ctx)).unwrap();
             let length = ctx.shared.statics.get(method.parent.clone(), &generics).storage.with_data(|data| data.len());
             let offset = if out_of_bounds { length } else { 0 };
             let pointer = ManagedPtr::new_static(None, TypeDescription::NULL, method.parent.clone(), generics, false, ByteOffset::new(offset));
@@ -1457,7 +1457,7 @@ fn monitor_static_operand_is_addressless_during_initial_gc_stop() {
         let gc = unsafe { test_gc_handle(gc, engine) };
         let mut ctx = engine.ves_context(gc);
         let generics = GenericLookup::default();
-        ctx.shared.statics.init(method.parent.clone(), &ctx.with_generics(&generics), ctx.thread_id.get()).unwrap();
+        ctx.shared.statics.init(method.parent.clone(), &ctx.with_generics(&generics), crate::stack::ThreadOps::thread_id(&ctx)).unwrap();
         let storage = ctx.shared.statics.get(method.parent.clone(), &generics);
         let address = storage.storage.with_data(|data| std::ptr::NonNull::new(data.as_ptr().cast_mut()).unwrap());
         let pointer = ManagedPtr::new_static(Some(address), TypeDescription::NULL, method.parent.clone(), generics, false, ByteOffset::ZERO);
@@ -1516,7 +1516,7 @@ fn monitor_static_timed_wait_survives_collection_and_writes_result() {
             let gc = unsafe { test_gc_handle(gc, engine) };
             let mut ctx = engine.ves_context(gc);
             let generics = GenericLookup::default();
-            ctx.shared.statics.init(method.parent.clone(), &ctx.with_generics(&generics), ctx.thread_id.get()).unwrap();
+            ctx.shared.statics.init(method.parent.clone(), &ctx.with_generics(&generics), crate::stack::ThreadOps::thread_id(&ctx)).unwrap();
             let pointer = ManagedPtr::new_static(None, TypeDescription::NULL, method.parent.clone(), generics, false, ByteOffset::ZERO);
             let object = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("monitor")));
             let block = ctx.monitor_get_or_create_sync_block_for_object(object, gc);
@@ -4315,7 +4315,7 @@ fn static_storage_identity_ignores_generic_argument_resolution() {
                         .init(
                             method.parent.clone(),
                             &ctx.with_generics(&via_handle),
-                            ctx.thread_id.get(),
+                            crate::stack::ThreadOps::thread_id(&ctx),
                         )
                         .unwrap();
                     // The second spelling reaches the same entry, both before and after `init`.
@@ -4326,7 +4326,7 @@ fn static_storage_identity_ignores_generic_argument_resolution() {
                         .init(
                             method.parent.clone(),
                             &ctx.with_generics(&via_field),
-                            ctx.thread_id.get(),
+                            crate::stack::ThreadOps::thread_id(&ctx),
                         )
                         .unwrap();
                     assert!(Arc::ptr_eq(
@@ -4334,8 +4334,12 @@ fn static_storage_identity_ignores_generic_argument_resolution() {
                         &statics.get(method.parent.clone(), &via_field)
                     ));
                     // Thread-static storage canonicalizes identically.
-                    let t1 = statics.get_for_thread(method.parent.clone(), &via_handle, 7);
-                    let t2 = statics.get_for_thread(method.parent.clone(), &via_field, 7);
+                    let t1 = statics
+                        .get_for_thread(method.parent.clone(), &via_handle, 7, 7)
+                        .unwrap();
+                    let t2 = statics
+                        .get_for_thread(method.parent.clone(), &via_field, 7, 7)
+                        .unwrap();
                     assert!(Arc::ptr_eq(&t1, &t2));
                 }
                 // Different arguments still get different storage.
@@ -4347,7 +4351,7 @@ fn static_storage_identity_ignores_generic_argument_resolution() {
                     .init(
                         method.parent.clone(),
                         &ctx.with_generics(&longs),
-                        ctx.thread_id.get(),
+                        crate::stack::ThreadOps::thread_id(&ctx),
                     )
                     .unwrap();
                 assert!(!Arc::ptr_eq(
@@ -4384,5 +4388,132 @@ fn event_wait_cancelled_grant_hands_off_or_is_retained() {
         }
         assert_eq!(event.begin(Some(Instant::now())).poll(), Some(!successor));
         assert_eq!(event.begin(Some(Instant::now())).poll(), Some(false));
+    }
+}
+
+#[test]
+fn thread_static_owner_controls_creation() {
+    use crate::stack::ops::VmResolutionOps;
+    use dotnet_value::pointer::StaticMetadata;
+    let mut executor = executor();
+    let method = timed_monitor_method(&executor);
+    executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: F1.GcHandleRooted — the engine is the live arena root.
+                let gc = unsafe { test_gc_handle(gc, engine) };
+                let ctx = engine.ves_context(gc);
+                let lookup = GenericLookup::default();
+                let statics = &ctx.shared.statics;
+                statics
+                    .init(
+                        method.parent.clone(),
+                        &ctx.with_generics(&lookup),
+                        crate::stack::ThreadOps::thread_id(&ctx),
+                    )
+                    .unwrap();
+                let metadata = StaticMetadata {
+                    type_desc: method.parent.clone(),
+                    generics: lookup,
+                    thread_id: Some(71),
+                };
+                assert!(statics.get_for_metadata(&metadata, 72).is_err());
+                let owned = statics.get_for_metadata(&metadata, 71).unwrap();
+                let observed = statics.get_for_metadata(&metadata, 72).unwrap();
+                assert!(Arc::ptr_eq(&owned, &observed));
+                let other = StaticMetadata {
+                    thread_id: Some(72),
+                    ..metadata.clone()
+                };
+                assert!(statics.get_for_metadata(&other, 71).is_err());
+                assert!(!Arc::ptr_eq(
+                    &owned,
+                    &statics.get_for_metadata(&other, 72).unwrap()
+                ));
+                #[cfg(feature = "multithreading")]
+                {
+                    use crate::stack::ops::{RawMemoryOps, VmRawMemoryOps};
+                    use dotnet_value::pointer::{ManagedPtrResolver, PointerOrigin};
+                    owned.storage.with_data_mut(|data| data[0] = 42);
+                    let address = ctx.static_storage_base(&metadata).unwrap();
+                    drop(owned);
+                    drop(observed);
+                    statics.close_thread(71);
+                    // SAFETY: F10.BorrowedStorageStable — this context retains the resolved block
+                    // until the mutation ends, even if its owner closes it concurrently.
+                    assert_eq!(unsafe { address.as_ptr().read() }, 42);
+                    assert!(statics.get_for_metadata(&metadata, 71).is_err());
+                    assert!(statics.get_for_metadata(&metadata, 72).is_err());
+                    assert!(statics.get_for_metadata(&other, 72).is_ok());
+                    assert!(ctx.static_storage_base(&metadata).is_none());
+                    let origin = PointerOrigin::Static(std::sync::Arc::new(metadata));
+                    assert!(ctx.resolve_address(&origin, 0usize.into()).is_err());
+                    let mut bytes = [0u8; 1];
+                    // SAFETY: F10.RawMemoryAccessValid — no access occurs when the closed origin is rejected.
+                    assert!(unsafe { ctx.read_bytes(origin, 0usize.into(), &mut bytes) }.is_err());
+                }
+            })
+        })
+        .unwrap();
+}
+
+#[cfg(feature = "multithreading")]
+#[test]
+fn thread_static_close_races_owner_creation_without_resurrection() {
+    use crate::stack::ops::VmResolutionOps;
+    use std::sync::Barrier;
+    let mut executor = executor();
+    let method = timed_monitor_method(&executor);
+    let statics = executor.shared.statics.clone();
+    executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: F1.GcHandleRooted — the engine is the live arena root.
+                let gc = unsafe { test_gc_handle(gc, engine) };
+                let ctx = engine.ves_context(gc);
+                statics
+                    .init(
+                        method.parent.clone(),
+                        &ctx.with_generics(&GenericLookup::default()),
+                        crate::stack::ThreadOps::thread_id(&ctx),
+                    )
+                    .unwrap();
+            })
+        })
+        .unwrap();
+    for owner in 1000..1100 {
+        let barrier = Arc::new(Barrier::new(2));
+        let other_barrier = barrier.clone();
+        let other_statics = statics.clone();
+        let ty = method.parent.clone();
+        let creator = std::thread::spawn(move || {
+            other_barrier.wait();
+            other_statics
+                .get_for_thread(ty, &GenericLookup::default(), owner, owner)
+                .is_ok()
+        });
+        barrier.wait();
+        statics.close_thread(owner);
+        let _created = creator.join().unwrap();
+        assert!(
+            statics
+                .get_for_thread(
+                    method.parent.clone(),
+                    &GenericLookup::default(),
+                    owner,
+                    owner
+                )
+                .is_err()
+        );
+        assert!(
+            statics
+                .get_for_thread(
+                    method.parent.clone(),
+                    &GenericLookup::default(),
+                    owner,
+                    owner + 1
+                )
+                .is_err()
+        );
     }
 }

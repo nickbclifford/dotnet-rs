@@ -31,6 +31,18 @@ pub fn intrinsic_type_get_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
+    #[cfg(feature = "multithreading")]
+    if let StackValue::ObjectRef(name_obj) = ctx.peek_stack_at(0)
+        && name_obj.0.is_some()
+        && let Ok(name) = string_from_heap_obj(name_obj)
+        && let Ok(ty) = ctx.loader().corlib_type(&name)
+        && let Some(step) = crate::common::await_canonical_object(
+            ctx,
+            dotnet_vm_ops::effects::CanonicalKey::Type(RuntimeType::Type(ty)),
+        )
+    {
+        return step;
+    }
     let name_obj = ctx.pop_obj();
     if name_obj.0.is_none() {
         ctx.push(StackValue::null());
@@ -65,7 +77,6 @@ pub fn intrinsic_type_get_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
 
 #[dotnet_intrinsic("string System.Type::get_Name()")]
 #[dotnet_intrinsic("string System.Type::get_Namespace()")]
-#[dotnet_intrinsic("System.Reflection.Assembly System.Type::get_Assembly()")]
 #[dotnet_intrinsic("System.Type System.Type::get_BaseType()")]
 #[dotnet_intrinsic("bool System.Type::get_IsGenericType()")]
 #[dotnet_intrinsic("bool System.Type::get_IsConstructedGenericType()")]
@@ -83,8 +94,6 @@ pub fn intrinsic_type_get_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
 #[dotnet_intrinsic("string System.RuntimeType::GetName()")]
 #[dotnet_intrinsic("string System.RuntimeType::get_Namespace()")]
 #[dotnet_intrinsic("string System.RuntimeType::GetNamespace()")]
-#[dotnet_intrinsic("System.Reflection.Assembly System.RuntimeType::get_Assembly()")]
-#[dotnet_intrinsic("System.Reflection.Assembly System.RuntimeType::GetAssembly()")]
 #[dotnet_intrinsic("System.Type System.RuntimeType::get_BaseType()")]
 #[dotnet_intrinsic("System.Type System.RuntimeType::GetBaseType()")]
 #[dotnet_intrinsic("bool System.RuntimeType::get_IsGenericType()")]
@@ -179,12 +188,23 @@ pub fn runtime_type_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
+    #[cfg(feature = "multithreading")]
+    {
+        if let Some(step) = type_members::preflight_type_member_objects(ctx, &method) {
+            return step;
+        }
+        if let Some(step) = type_queries::preflight_runtime_type_query(ctx, &method) {
+            return step;
+        }
+        if let Some(step) = type_construction::preflight_runtime_type_construction(ctx, &method) {
+            return step;
+        }
+    }
     let method_name = &*method.method().name;
     let param_count = method.signature().parameters.len();
 
     match (method_name, param_count) {
         ("CreateInstanceCheckThis", 0) => handle_create_instance_check_this(ctx, generics),
-        ("GetAssembly" | "get_Assembly", 0) => handle_get_assembly(ctx, generics),
         ("GetNamespace" | "get_Namespace", 0) => handle_get_namespace(ctx, generics),
         ("GetMethods", 1) => handle_get_methods(ctx, generics),
         ("GetMethodImpl", 6) => handle_get_method_impl(ctx, generics, false),

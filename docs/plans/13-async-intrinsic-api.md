@@ -73,7 +73,8 @@ need three functions. This plan settles the API first.
   - `.cctor` dispatch, the span equality slow path and the `Expression.Compile` redirect, all
     of which dispatch managed bodies, never intrinsics
 
-  Plan 16 retired the others; the multicast continuation remains for excluded shapes.
+  Plan 16 retired the others; [plan 26](26-thread-lifecycle-and-multicast-fallback.md)
+  subsequently removed the multicast continuation.
 - Transport for transient and unmanaged `bool&` origins. A `Transient` pointer is a value
   type on the evaluation stack and would need tracing; an `Unmanaged` one is a raw address
   whose stability across a suspension the VM can't check. (Plan 16 slice 5b later admitted

@@ -77,8 +77,9 @@ fn shared_reflection_by_index<V: Clone>(
         .expect(invalid_index_message)
 }
 
-// Published objects are rooted by the shared table and their owner arenas remain
-// registered until shutdown. The returned handle is used only within this arena.
+// Published objects are rooted by the shared table. New objects use the long-lived service
+// arena when active; otherwise their owner arena remains registered until shutdown.
+// The returned handle is used only within this arena.
 #[cfg(feature = "multithreading")]
 fn shared_reflection_object<'gc>(ptr: dotnet_value::object::ObjectPtr) -> ObjectRef<'gc> {
     // SAFETY: F1.GcHandleRooted; F6.NoEscapeAcrossArena — see above.
@@ -162,6 +163,12 @@ impl<'a, 'gc> VmStaticsOps<'gc> for VesContext<'a, 'gc> {
 
 impl<'a, 'gc> ThreadOps for VesContext<'a, 'gc> {
     fn thread_id(&self) -> ArenaId {
+        #[cfg(not(feature = "multithreading"))]
+        if self.parked_finalizer_caller.is_some() {
+            // The ST-only logical key is outside the arena allocator's range and within
+            // the initializer state encoding. It never denotes an allocation arena.
+            return ArenaId::new(u64::MAX - 2);
+        }
         self.thread_id.get()
     }
 
@@ -281,6 +288,49 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ResolutionContextHost<'gc> for VesCo
 }
 
 impl<'a, 'gc> dotnet_intrinsics_reflection::ReflectionRegistryHost<'gc> for VesContext<'a, 'gc> {
+    #[cfg(all(feature = "multithreading", debug_assertions))]
+    fn reflection_assert_canonical_owner(&self, object: ObjectRef<'gc>) {
+        let owner = object
+            .as_ptr()
+            .expect("reflection candidate is non-null")
+            .owner_id();
+        debug_assert_eq!(owner, self.thread_id.get());
+        debug_assert!(self.shared.canonical.is_recorded_owner(owner));
+    }
+
+    fn reflection_assembly_requires_homing(&self) -> bool {
+        #[cfg(feature = "multithreading")]
+        {
+            self.shared.canonical.must_queue(self.thread_id.get())
+        }
+        #[cfg(not(feature = "multithreading"))]
+        {
+            false
+        }
+    }
+
+    fn reflection_type_requires_homing(&self) -> bool {
+        #[cfg(feature = "multithreading")]
+        {
+            self.shared.canonical.must_queue(self.thread_id.get())
+        }
+        #[cfg(not(feature = "multithreading"))]
+        {
+            false
+        }
+    }
+
+    fn reflection_method_requires_homing(&self) -> bool {
+        #[cfg(feature = "multithreading")]
+        {
+            self.shared.canonical.must_queue(self.thread_id.get())
+        }
+        #[cfg(not(feature = "multithreading"))]
+        {
+            false
+        }
+    }
+
     fn reflection_cached_runtime_assembly(
         &self,
         resolution: ResolutionS,
@@ -318,6 +368,11 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ReflectionRegistryHost<'gc> for VesC
                 Entry::Occupied(entry) => *entry.get(),
                 Entry::Vacant(entry) => {
                     let ptr = object.as_ptr().expect("assembly object is non-null");
+                    debug_assert!(
+                        !self.shared.canonical.is_active()
+                            || self.shared.canonical.is_active_owner(ptr.owner_id()),
+                        "canonical assembly allocated outside its owner arena"
+                    );
                     // Publish the reverse mapping before making the object visible.
                     registry
                         .runtime_assembly_resolutions
@@ -688,9 +743,69 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ReflectionRegistryHost<'gc> for VesC
         self.reflection().property_objs_write().insert(key, object);
         object
     }
+
+    #[cfg(feature = "multithreading")]
+    fn reflection_await_canonical(
+        &mut self,
+        key: dotnet_vm_ops::effects::CanonicalKey,
+    ) -> Option<StepResult> {
+        use crate::stack::ops::ReflectionObjectKey;
+        use dotnet_vm_ops::effects::CanonicalKey;
+        match key {
+            CanonicalKey::Type(ty) => self.await_reflection_object(ReflectionObjectKey::Type(&ty)),
+            CanonicalKey::Method(method, lookup) => {
+                self.await_reflection_object(ReflectionObjectKey::Method(&method, &lookup))
+            }
+            CanonicalKey::Field(field, lookup) => {
+                self.await_reflection_object(ReflectionObjectKey::Field(&field, &lookup))
+            }
+            CanonicalKey::Property(accessor, lookup) => {
+                self.await_reflection_object(ReflectionObjectKey::Property(&accessor, &lookup))
+            }
+            _ => None,
+        }
+    }
 }
 
 impl<'a, 'gc> ReflectionLookupOps<'gc> for VesContext<'a, 'gc> {
+    #[cfg(feature = "multithreading")]
+    fn await_reflection_object(
+        &mut self,
+        key: crate::stack::ops::ReflectionObjectKey<'_>,
+    ) -> Option<StepResult> {
+        use crate::stack::ops::ReflectionObjectKey;
+        use dotnet_vm_ops::effects::CanonicalKey;
+        let registry = &self.shared.reflection_registry;
+        let present = match &key {
+            ReflectionObjectKey::Type(ty) => registry.runtime_type_objects.contains_key(*ty),
+            ReflectionObjectKey::Method(method, lookup) => registry
+                .runtime_method_objects
+                .contains_key(&((*method).clone(), (*lookup).clone())),
+            ReflectionObjectKey::Field(field, lookup) => registry
+                .runtime_field_objects
+                .contains_key(&((*field).clone(), (*lookup).clone())),
+            ReflectionObjectKey::Property(accessor, lookup) => registry
+                .runtime_property_objects
+                .contains_key(&((*accessor).clone(), (*lookup).clone())),
+        };
+        if present || !self.shared.canonical.must_queue(self.thread_id.get()) {
+            return None;
+        }
+        let owned = match key {
+            ReflectionObjectKey::Type(ty) => CanonicalKey::Type(ty.clone()),
+            ReflectionObjectKey::Method(method, lookup) => {
+                CanonicalKey::Method(method.clone(), lookup.clone())
+            }
+            ReflectionObjectKey::Field(field, lookup) => {
+                CanonicalKey::Field(field.clone(), lookup.clone())
+            }
+            ReflectionObjectKey::Property(accessor, lookup) => {
+                CanonicalKey::Property(accessor.clone(), lookup.clone())
+            }
+        };
+        Some(self.await_canonical_then_retry(owned))
+    }
+
     #[inline]
     fn get_runtime_method_index(
         &mut self,
@@ -807,7 +922,7 @@ impl<'gc> dotnet_intrinsics_reflection::ReflectionStaticFieldHost<'gc> for VesCo
         lookup: &GenericLookup,
     ) -> Result<StackValue<'gc>, dotnet_types::error::VmError> {
         let (storage, _) =
-            crate::instructions::objects::fields::static_field_storage(self, field, lookup);
+            crate::instructions::objects::fields::static_field_storage(self, field, lookup)?;
         let bytes = storage.storage.get_field_atomic(
             field.parent.clone(),
             &field.field().name,
@@ -838,7 +953,7 @@ impl<'gc> dotnet_intrinsics_reflection::ReflectionStaticFieldHost<'gc> for VesCo
         value: Option<StackValue<'gc>>,
     ) -> Result<(), dotnet_types::error::VmError> {
         let (storage, _) =
-            crate::instructions::objects::fields::static_field_storage(self, field, lookup);
+            crate::instructions::objects::fields::static_field_storage(self, field, lookup)?;
         let layout = storage.layout();
         let field_layout = layout
             .get_field(field.parent.clone(), &field.field().name)

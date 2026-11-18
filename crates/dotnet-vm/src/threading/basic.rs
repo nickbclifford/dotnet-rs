@@ -962,11 +962,21 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                     if let Some(arena) = arena {
                         // Finish the collection (finalize and sweep)
                         arena.finish_cycle();
+                        COMPLETED_SWEEPS.set(COMPLETED_SWEEPS.get().wrapping_add(1));
                     }
                 });
             }
         },
     }
+}
+
+thread_local! {
+    // Owner-local progress: only a completed Sweep command advances this boundary.
+    static COMPLETED_SWEEPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+pub(crate) fn completed_sweeps() -> u64 {
+    COMPLETED_SWEEPS.get()
 }
 
 /// Where a thread is relative to its own `Finalize` command.

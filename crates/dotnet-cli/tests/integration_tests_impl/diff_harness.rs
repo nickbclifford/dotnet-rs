@@ -519,6 +519,14 @@ diff_test!(
     "tests/fixtures/delegates/delegate_multicast_ref_struct_42.cs"
 );
 diff_test!(
+    delegates_multicast_span_42_matches_dotnet,
+    "tests/fixtures/delegates/delegate_multicast_span_42.cs"
+);
+diff_test!(
+    delegates_multicast_pointer_42_matches_dotnet,
+    "tests/fixtures/delegates/delegate_multicast_pointer_42.cs"
+);
+diff_test!(
     reflection_invoke_constructors_42_matches_dotnet,
     "tests/fixtures/reflection/invoke_constructors_42.cs"
 );
@@ -718,6 +726,36 @@ diff_test!(
 
 #[cfg(feature = "multithreading")]
 diff_test!(
+    canonical_token_mt_42_matches_dotnet,
+    "tests/fixtures/threading/canonical_token_mt_42.cs"
+);
+
+#[cfg(feature = "multithreading")]
+diff_test!(
+    canonical_assembly_mt_42_matches_dotnet,
+    "tests/fixtures/threading/canonical_assembly_mt_42.cs"
+);
+
+#[cfg(feature = "multithreading")]
+diff_test!(
+    canonical_strings_mt_42_matches_dotnet,
+    "tests/fixtures/threading/canonical_strings_mt_42.cs"
+);
+
+#[cfg(feature = "multithreading")]
+diff_test!(
+    canonical_reflection_mt_42_matches_dotnet,
+    "tests/fixtures/threading/canonical_reflection_mt_42.cs"
+);
+
+#[cfg(feature = "multithreading")]
+diff_test!(
+    canonical_join_race_mt_42_matches_dotnet,
+    "tests/fixtures/threading/canonical_join_race_mt_42.cs"
+);
+
+#[cfg(feature = "multithreading")]
+diff_test!(
     threading_monitor_contended_lock_42_matches_dotnet,
     "tests/fixtures/threading/monitor_contended_lock_42.cs"
 );
@@ -776,7 +814,6 @@ diff_test!(
     retired_finalizer_monitor_matches_dotnet,
     "tests/debug_fixtures/retired_finalizer_monitor_42.cs"
 );
-#[cfg(feature = "multithreading")]
 diff_test!(
     finalizer_thread_identity_matches_dotnet,
     "tests/debug_fixtures/finalizer_thread_identity_42.cs"
@@ -785,6 +822,22 @@ diff_test!(
 diff_test!(
     finalizer_thread_blocking_matches_dotnet,
     "tests/debug_fixtures/finalizer_thread_blocking_42.cs"
+);
+diff_test!(
+    finalizer_thread_static_identity_matches_dotnet,
+    "tests/fixtures/gc/finalizer_thread_static_identity_42.cs"
+);
+diff_test!(
+    finalizer_monitor_wrong_owner_matches_dotnet,
+    "tests/fixtures/gc/finalizer_monitor_wrong_owner_42.cs"
+);
+diff_test!(
+    finalizer_lock_deferral_matches_dotnet,
+    "tests/fixtures/gc/finalizer_lock_deferral_42.cs"
+);
+diff_test!(
+    finalizer_cctor_deferral_matches_dotnet,
+    "tests/fixtures/gc/finalizer_cctor_deferral_42.cs"
 );
 diff_test!(
     finalizer_collect_matches_dotnet,
@@ -1582,4 +1635,15 @@ diff_test!(
 diff_test!(
     object_array_delegate_shapes_match_dotnet,
     "tests/fixtures/expressions/object_array_delegate_shapes_42.cs"
+);
+
+#[cfg(all(feature = "multithreading", not(feature = "fuzzing")))]
+diff_test!(
+    thread_static_gc_matches_dotnet,
+    "tests/fixtures/threading/thread_static_gc_42.cs"
+);
+#[cfg(all(feature = "multithreading", not(feature = "fuzzing")))]
+diff_test!(
+    thread_local_lifetime_matches_dotnet,
+    "tests/fixtures/threading/thread_local_lifetime_42.cs"
 );

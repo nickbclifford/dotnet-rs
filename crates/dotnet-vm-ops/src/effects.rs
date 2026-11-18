@@ -12,7 +12,7 @@ use dotnet_types::error::{ExecutionError, VmError};
 #[cfg(test)]
 use dotnet_utils::ByteOffset;
 use dotnet_value::{
-    ManagedPtr, StackValue,
+    ManagedPtr, StackManagedPtr, StackValue, TypedReferenceSlot,
     object::{HeapStorage, ObjectRef},
     pointer::{FrameHomeSerial, ManagedPtrInfo, PointerOffset, PointerOrigin},
 };
@@ -46,16 +46,108 @@ struct RootCell<'gc> {
 #[collect(no_drop)]
 enum RootCellValue<'gc> {
     Value(StackValue<'gc>),
-    Pointer {
-        origin: PointerOrigin<'gc>,
+    Pointer(PointerDescriptor<'gc>),
+    TypedReference {
+        pointer: PointerDescriptor<'gc>,
         #[collect(require_static)]
-        inner_type: dotnet_types::TypeDescription,
-        #[collect(require_static)]
-        offset: PointerOffset,
-        pinned: bool,
-        #[collect(require_static)]
-        unmanaged_address: Option<NonNull<u8>>,
+        type_desc: std::sync::Arc<dotnet_types::TypeDescription>,
     },
+}
+
+#[derive(Collect)]
+#[collect(no_drop)]
+struct PointerDescriptor<'gc> {
+    origin: PointerOrigin<'gc>,
+    #[collect(require_static)]
+    inner_type: dotnet_types::TypeDescription,
+    #[collect(require_static)]
+    offset: PointerOffset,
+    pinned: bool,
+    #[collect(require_static)]
+    unmanaged_address: Option<NonNull<u8>>,
+}
+
+// INVARIANT: F6.NativePointerDescriptor — managed origins retain their owner or
+// re-resolvable identity, never a cached address. Guest unmanaged memory remains
+// subject to F10.RawMemoryAccessValid across the call.
+fn pointer_descriptor<'gc>(
+    pointer: &StackManagedPtr<'gc>,
+) -> Result<PointerDescriptor<'gc>, VmError> {
+    let supported = match pointer.origin() {
+        PointerOrigin::Heap(ObjectRef(Some(_)))
+        | PointerOrigin::FrameHome(_)
+        | PointerOrigin::Static(_)
+        | PointerOrigin::Unmanaged => true,
+        #[cfg(feature = "multithreading")]
+        PointerOrigin::CrossArenaObjectRef(_) => true,
+        _ => false,
+    };
+    if !supported {
+        return Err(internal("unsupported native pointer origin"));
+    }
+    Ok(PointerDescriptor {
+        origin: pointer.origin().clone(),
+        inner_type: pointer.inner_type(),
+        offset: pointer.pointer_offset(),
+        pinned: pointer.is_pinned(),
+        unmanaged_address: matches!(pointer.origin(), PointerOrigin::Unmanaged)
+            .then(|| pointer.observe_address())
+            .flatten(),
+    })
+}
+
+impl<'gc> PointerDescriptor<'gc> {
+    fn fetch(&self, backend: &dyn NativeBackend<'gc>) -> Result<StackManagedPtr<'gc>, VmError> {
+        let Self {
+            origin,
+            inner_type,
+            offset,
+            pinned,
+            unmanaged_address,
+        } = self;
+        // INVARIANT: F6.NativePointerDescriptor — a traced heap origin keeps its
+        // owner live; a cross-arena origin is retained by its recorded reference
+        // and validated against the owner's lease on use. Frame homes are resolved
+        // anew and retired homes fail. Static storage remains addressless and is
+        // resolved on access; unmanaged addresses retain their original provenance.
+        let address = if matches!(origin, PointerOrigin::Unmanaged) {
+            *unmanaged_address
+        } else if let PointerOrigin::FrameHome(serial) = origin {
+            let (base, _length) = backend
+                .frame_home_block(*serial)
+                .ok_or_else(|| internal("native frame home is no longer live"))?;
+            let PointerOffset::Managed(displacement) = offset else {
+                return Err(internal("invalid frame home displacement"));
+            };
+            NonNull::new(base.as_ptr().wrapping_offset(*displacement as isize))
+        } else {
+            ManagedPtr::from_info_full(
+                ManagedPtrInfo {
+                    address: None,
+                    origin: origin.clone(),
+                    offset: *offset,
+                },
+                inner_type.clone(),
+                *pinned,
+            )
+            .observe_address()
+        };
+        if address.is_none()
+            && !matches!(origin, PointerOrigin::Static(_) | PointerOrigin::Unmanaged)
+        {
+            return Err(internal("native pointer owner unavailable"));
+        }
+        Ok(ManagedPtr::from_info_full(
+            ManagedPtrInfo {
+                address,
+                origin: origin.clone(),
+                offset: *offset,
+            },
+            inner_type.clone(),
+            *pinned,
+        )
+        .into())
+    }
 }
 
 /// An activation-owned value. Reference roots are private and set-checked on fetch.
@@ -94,47 +186,28 @@ impl RootedValue {
             StackValue::NativeInt(v) => RootedValueInner::NativeInt(v),
             StackValue::NativeFloat(v) => RootedValueInner::NativeFloat(v),
             StackValue::ObjectRef(ObjectRef(None)) => RootedValueInner::Null,
-            // A by-value struct is a plain `Object`, traced through the root cell like any other value.
-            v @ (StackValue::ObjectRef(ObjectRef(Some(_))) | StackValue::ValueType(_)) => {
-                RootedValueInner::Object(roots.stash(
+            // INVARIANT: F5.TracesEveryGcRef; F10.RawMemoryAccessValid — value layouts trace
+            // nested origins; unmanaged addresses retain provenance and remain guest-trusted.
+            v @ (StackValue::ObjectRef(ObjectRef(Some(_)))
+            | StackValue::ValueType(_)
+            | StackValue::UnmanagedPtr(_)) => RootedValueInner::Object(roots.stash(
+                mc,
+                Gc::new(
                     mc,
-                    Gc::new(
-                        mc,
-                        RootCell {
-                            value: RootCellValue::Value(v),
-                        },
-                    ),
-                ))
-            }
+                    RootCell {
+                        value: RootCellValue::Value(v),
+                    },
+                ),
+            )),
             StackValue::ManagedPtr(pointer) => {
-                // INVARIANT: F6.NativePointerDescriptor — only traced heap owners,
-                // non-reused frame-home serials, static metadata, unmanaged addresses, or
-                // (multithreading) cross-arena origins can survive across polls. Static storage is resolved
-                // by type and generics on every raw access, never by a cached address. A
-                // cross-arena origin is kept live by its recorded cross-arena reference and
-                // re-validated against the owner's lease on use.
-                let supported = match pointer.origin() {
-                    PointerOrigin::Heap(ObjectRef(Some(_)))
-                    | PointerOrigin::FrameHome(_)
-                    | PointerOrigin::Static(_)
-                    // F10.RawMemoryAccessValid: as in the legacy path, guest-supplied
-                    // unmanaged addresses must remain valid across the call. They are not traced.
-                    | PointerOrigin::Unmanaged => true,
-                    #[cfg(feature = "multithreading")]
-                    PointerOrigin::CrossArenaObjectRef(_) => true,
-                    _ => false,
-                };
-                if !supported {
-                    return Err(internal("unsupported native pointer origin"));
-                }
-                let value = RootCellValue::Pointer {
-                    origin: pointer.origin().clone(),
-                    inner_type: pointer.inner_type(),
-                    offset: pointer.pointer_offset(),
-                    pinned: pointer.is_pinned(),
-                    unmanaged_address: matches!(pointer.origin(), PointerOrigin::Unmanaged)
-                        .then(|| pointer.observe_address())
-                        .flatten(),
+                let value = RootCellValue::Pointer(pointer_descriptor(&pointer)?);
+                RootedValueInner::Object(roots.stash(mc, Gc::new(mc, RootCell { value })))
+            }
+            StackValue::TypedRef(slot) => {
+                let (pointer, type_desc) = slot.into_parts();
+                let value = RootCellValue::TypedReference {
+                    pointer: pointer_descriptor(&pointer)?,
+                    type_desc,
                 };
                 RootedValueInner::Object(roots.stash(mc, Gc::new(mc, RootCell { value })))
             }
@@ -159,59 +232,10 @@ impl RootedValue {
                 .value
             {
                 RootCellValue::Value(value) => value.clone(),
-                RootCellValue::Pointer {
-                    origin,
-                    inner_type,
-                    offset,
-                    pinned,
-                    unmanaged_address,
-                } => {
-                    // INVARIANT: F6.NativePointerDescriptor — the root keeps a heap origin
-                    // live (a cross-arena origin is live through its recorded cross-arena
-                    // reference and lease check); frame-home addresses are resolved anew and
-                    // retired homes fail. Static descriptors are deliberately addressless;
-                    // their storage is resolved afresh by origin-aware raw access. Unmanaged
-                    // addresses retain their original provenance but carry no root.
-                    let address = if matches!(origin, PointerOrigin::Unmanaged) {
-                        *unmanaged_address
-                    } else if let PointerOrigin::FrameHome(serial) = origin {
-                        let (base, _length) = backend
-                            .frame_home_block(*serial)
-                            .ok_or_else(|| internal("native frame home is no longer live"))?;
-                        let PointerOffset::Managed(displacement) = offset else {
-                            return Err(internal("invalid frame home displacement"));
-                        };
-                        NonNull::new(base.as_ptr().wrapping_offset(*displacement as isize))
-                    } else {
-                        let pointer = ManagedPtr::from_info_full(
-                            ManagedPtrInfo {
-                                address: None,
-                                origin: origin.clone(),
-                                offset: *offset,
-                            },
-                            inner_type.clone(),
-                            *pinned,
-                        );
-                        pointer.observe_address()
-                    };
-                    if address.is_none()
-                        && !matches!(origin, PointerOrigin::Static(_) | PointerOrigin::Unmanaged)
-                    {
-                        return Err(internal("native pointer owner unavailable"));
-                    }
-                    StackValue::ManagedPtr(
-                        ManagedPtr::from_info_full(
-                            ManagedPtrInfo {
-                                address,
-                                origin: origin.clone(),
-                                offset: *offset,
-                            },
-                            inner_type.clone(),
-                            *pinned,
-                        )
-                        .into(),
-                    )
-                }
+                RootCellValue::Pointer(pointer) => StackValue::ManagedPtr(pointer.fetch(backend)?),
+                RootCellValue::TypedReference { pointer, type_desc } => StackValue::TypedRef(
+                    TypedReferenceSlot::new(pointer.fetch(backend)?, type_desc.clone()),
+                ),
             },
         })
     }
@@ -284,6 +308,45 @@ impl NativeInitSleeper for ThreadJoinSleeper {
         });
         self.sleeper.wait(duration);
     }
+}
+
+/// Logical key of a shared canonical object. Each key's object is homed in the
+/// canonical service's long-lived arena; the key owns its data and never a worker `Gc` handle.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum CanonicalKey {
+    /// A literal or `String.Empty` UTF-16 payload.
+    String(Vec<u16>),
+    /// Runtime type wrapper for a resolved type.
+    #[cfg(feature = "multithreading")]
+    Type(dotnet_types::runtime::RuntimeType),
+    /// Runtime method or constructor wrapper.
+    #[cfg(feature = "multithreading")]
+    Method(
+        dotnet_types::members::MethodDescription,
+        dotnet_types::generics::GenericLookup,
+    ),
+    /// Runtime field wrapper.
+    #[cfg(feature = "multithreading")]
+    Field(
+        dotnet_types::members::FieldDescription,
+        dotnet_types::generics::GenericLookup,
+    ),
+    /// Runtime property wrapper, identified by its accessor and generic lookup.
+    #[cfg(feature = "multithreading")]
+    Property(
+        dotnet_types::members::MethodDescription,
+        dotnet_types::generics::GenericLookup,
+    ),
+    /// The runtime assembly wrapper for a metadata resolution.
+    Assembly(dotnet_types::resolution::ResolutionS),
+}
+
+/// Result of probing the canonical table during a branded access.
+pub enum NativeCanonicalProbe {
+    /// The authoritative table now holds the key; the caller retries its lookup.
+    Ready,
+    /// The canonical service owns materialization; park until completion, then probe again.
+    Waiting(Box<dyn NativeInitWait>),
 }
 
 /// Result of probing the shared initializer state during a branded access.
@@ -362,6 +425,40 @@ pub trait NativeBackend<'gc> {
     ) -> Result<ObjectRef<'gc>, VmError> {
         Err(internal("native initialization unavailable"))
     }
+    fn canonical_probe(&mut self, _key: &CanonicalKey) -> Result<NativeCanonicalProbe, VmError> {
+        Err(internal("native canonical service unavailable"))
+    }
+    /// Resolve the declaring or field type corresponding to a runtime field.
+    #[cfg(feature = "multithreading")]
+    fn reflection_field_type_target(
+        &mut self,
+        _object: ObjectRef<'gc>,
+        _declaring: bool,
+    ) -> Result<dotnet_types::runtime::RuntimeType, VmError> {
+        Err(internal("native field type lookup unavailable"))
+    }
+    /// Fetch a canonical runtime type wrapper.
+    #[cfg(feature = "multithreading")]
+    fn reflection_type_object(
+        &mut self,
+        _target: dotnet_types::runtime::RuntimeType,
+    ) -> Result<ObjectRef<'gc>, VmError> {
+        Err(internal("native type lookup unavailable"))
+    }
+    /// Resolve the assembly corresponding to a runtime type.
+    fn reflection_assembly_target(
+        &mut self,
+        _object: ObjectRef<'gc>,
+    ) -> Result<dotnet_types::resolution::ResolutionS, VmError> {
+        Err(internal("native assembly lookup unavailable"))
+    }
+    /// Return the canonical wrapper after service completion.
+    fn reflection_assembly_object(
+        &mut self,
+        _resolution: dotnet_types::resolution::ResolutionS,
+    ) -> Result<ObjectRef<'gc>, VmError> {
+        Err(internal("native assembly lookup unavailable"))
+    }
     fn wrap_reflection_failure(
         &mut self,
         _inner: ObjectRef<'gc>,
@@ -411,6 +508,33 @@ pub trait NativeBackend<'gc> {
         VmError,
     > {
         Err(internal("native static reflection unavailable"))
+    }
+    fn reflection_static_pointer_type_target(
+        &mut self,
+        _field: &dotnet_types::members::FieldDescription,
+        _lookup: &dotnet_types::generics::GenericLookup,
+    ) -> Result<Option<dotnet_types::runtime::RuntimeType>, VmError> {
+        Ok(None)
+    }
+    fn reflection_compile_recorded_target(
+        &mut self,
+    ) -> Result<
+        (
+            dotnet_types::members::MethodDescription,
+            dotnet_types::generics::GenericLookup,
+        ),
+        NativePrepareError<'gc>,
+    > {
+        Err(NativePrepareError::Host(internal(
+            "native recorded reflection unavailable",
+        )))
+    }
+    fn reflection_method_object(
+        &mut self,
+        _method: &dotnet_types::members::MethodDescription,
+        _lookup: &dotnet_types::generics::GenericLookup,
+    ) -> Result<ObjectRef<'gc>, VmError> {
+        Err(internal("native canonical method unavailable"))
     }
     fn reflection_static_complete(
         &mut self,
@@ -621,6 +745,46 @@ impl<'gc, 'a> NativeRegion<'gc, 'a> {
     pub fn fetch(&self, value: &RootedValue) -> Result<StackValue<'gc>, VmError> {
         value.fetch(self.roots, self.backend)
     }
+    /// Resolve a type from a rooted field receiver.
+    #[cfg(feature = "multithreading")]
+    pub fn reflection_field_type_target(
+        &mut self,
+        receiver: &RootedValue,
+        declaring: bool,
+    ) -> Result<dotnet_types::runtime::RuntimeType, VmError> {
+        let StackValue::ObjectRef(receiver) = self.fetch(receiver)? else {
+            return Err(internal("invalid runtime field receiver"));
+        };
+        self.backend
+            .reflection_field_type_target(receiver, declaring)
+    }
+    /// Push a canonical runtime type wrapper after a request completes.
+    #[cfg(feature = "multithreading")]
+    pub fn reflection_type_complete(
+        &mut self,
+        target: dotnet_types::runtime::RuntimeType,
+    ) -> Result<(), VmError> {
+        let object = self.backend.reflection_type_object(target)?;
+        self.backend.push_output(StackValue::ObjectRef(object))
+    }
+    /// Resolve an assembly from a rooted type receiver.
+    pub fn reflection_assembly_target(
+        &mut self,
+        receiver: &RootedValue,
+    ) -> Result<dotnet_types::resolution::ResolutionS, VmError> {
+        let StackValue::ObjectRef(receiver) = self.fetch(receiver)? else {
+            return Err(internal("invalid runtime type receiver"));
+        };
+        self.backend.reflection_assembly_target(receiver)
+    }
+    /// Push the canonical assembly wrapper after a request completes.
+    pub fn reflection_assembly_complete(
+        &mut self,
+        resolution: dotnet_types::resolution::ResolutionS,
+    ) -> Result<(), VmError> {
+        let object = self.backend.reflection_assembly_object(resolution)?;
+        self.backend.push_output(StackValue::ObjectRef(object))
+    }
     /// Copy a traced value into this activation's root set.
     pub fn root(&self, value: StackValue<'gc>) -> Result<RootedValue, VmError> {
         RootedValue::stash(self.mc, self.roots, value)
@@ -645,11 +809,15 @@ impl<'gc, 'a> NativeRegion<'gc, 'a> {
         (
             dotnet_types::members::FieldDescription,
             dotnet_types::generics::GenericLookup,
+            Option<dotnet_types::runtime::RuntimeType>,
             Option<RootedValue>,
         ),
         VmError,
     > {
         let (field, lookup) = self.backend.reflection_static_target()?;
+        let pointer_type = self
+            .backend
+            .reflection_static_pointer_type_target(&field, &lookup)?;
         let operands = self.backend.operands();
         let value = if operands.len() == 6 {
             Some(operands[2].clone())
@@ -659,7 +827,34 @@ impl<'gc, 'a> NativeRegion<'gc, 'a> {
         // INVARIANT: F6.NativeRootTransfer — the stored value stays rooted while the initializer runs.
         let value = value.map(|value| self.root(value)).transpose()?;
         self.backend.operands().clear();
-        Ok((field, lookup, value))
+        Ok((field, lookup, pointer_type, value))
+    }
+    pub fn reflection_compile_recorded_target(
+        &mut self,
+    ) -> Result<
+        (
+            dotnet_types::members::MethodDescription,
+            dotnet_types::generics::GenericLookup,
+        ),
+        NativeFailure,
+    > {
+        match self.backend.reflection_compile_recorded_target() {
+            Ok(target) => Ok(target),
+            Err(NativePrepareError::Host(error)) => Err(error.into()),
+            Err(NativePrepareError::Managed(exception)) => {
+                let rooted = self.root(StackValue::ObjectRef(exception))?;
+                Err(NativeFailure::Managed(rooted))
+            }
+        }
+    }
+    pub fn reflection_method_complete(
+        &mut self,
+        method: &dotnet_types::members::MethodDescription,
+        lookup: &dotnet_types::generics::GenericLookup,
+    ) -> NativeResult {
+        let object = self.backend.reflection_method_object(method, lookup)?;
+        self.backend.push_output(StackValue::ObjectRef(object))?;
+        Ok(())
     }
     fn reflection_static_complete(
         &mut self,
@@ -749,6 +944,10 @@ impl<'gc, 'a> NativeRegion<'gc, 'a> {
                 NativeInitProbe::Waiting(wait) => RootedInitProbe::Waiting(wait),
             },
         )
+    }
+
+    fn canonical_probe(&mut self, key: &CanonicalKey) -> Result<NativeCanonicalProbe, VmError> {
+        self.backend.canonical_probe(key)
     }
 
     fn wrap_initializer_failure(
@@ -1462,6 +1661,20 @@ impl VmEffects {
         })
         .await
     }
+    /// Park until the canonical service has published `key`, retrying the probe after every
+    /// wake so a GC stop or released wait never loses the request.
+    pub async fn await_canonical(&mut self, key: CanonicalKey) -> NativeResult {
+        loop {
+            let probe = {
+                let mut vm = self.vm().await?;
+                vm.with(|region| region.canonical_probe(&key))??
+            };
+            match probe {
+                NativeCanonicalProbe::Ready => return Ok(()),
+                NativeCanonicalProbe::Waiting(wait) => self.wait_initializer(wait).await?,
+            }
+        }
+    }
     /// Ensure a type's static constructor has completed before continuing.
     pub async fn ensure_initialized(
         &mut self,
@@ -2040,8 +2253,8 @@ pub trait NativeSelectorProvider<'gc, T> {
     fn fallback() -> Option<NativeSyncHandler<T>>;
 }
 
-/// Inline calls and intrinsic `newobj` can suspend. `Other` covers retained multicast
-/// continuations and the managed-body-only cctor and span equality routes;
+/// Inline calls and intrinsic `newobj` can suspend. `Other` covers the
+/// managed-body-only cctor and span equality routes;
 /// it uses the optional fallback or returns `NotImplemented` before consuming operands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NativeDispatchMode {
@@ -2977,6 +3190,16 @@ mod tests {
                 false,
             );
             let roots = DynamicRootSet::new(mc);
+            let type_desc = std::sync::Arc::new(dotnet_types::TypeDescription::NULL);
+            let typed = RootedValue::stash(
+                mc,
+                roots,
+                StackValue::TypedRef(TypedReferenceSlot::new(
+                    pointer.clone().into(),
+                    type_desc.clone(),
+                )),
+            )
+            .unwrap();
             let value =
                 RootedValue::stash(mc, roots, StackValue::ManagedPtr(pointer.into())).unwrap();
             let mut backend = HomeBackend {
@@ -3010,7 +3233,15 @@ mod tests {
                 negative.observe_address(),
                 NonNull::new(base.as_ptr().wrapping_sub(1))
             );
+            let StackValue::TypedRef(slot) = typed.fetch(roots, &backend).unwrap() else {
+                panic!("expected typed reference")
+            };
+            assert!(std::sync::Arc::ptr_eq(slot.type_desc(), &type_desc));
+            assert_eq!(slot.value().origin(), &PointerOrigin::FrameHome(serial));
+            assert_eq!(slot.value().byte_offset().unwrap(), ByteOffset::new(2));
+            assert!(typed.fetch(DynamicRootSet::new(mc), &backend).is_err());
             backend.block = None;
+            assert!(typed.fetch(roots, &backend).is_err());
             assert!(value.fetch(roots, &backend).is_err());
             assert!(negative_root.fetch(roots, &backend).is_err());
             let static_pointer = ManagedPtr::new_static(
@@ -3068,9 +3299,131 @@ mod tests {
                 ByteOffset::new(0),
             );
             assert!(
+                RootedValue::stash(
+                    mc,
+                    roots,
+                    StackValue::TypedRef(TypedReferenceSlot::new(
+                        transient.clone().into(),
+                        type_desc,
+                    ))
+                )
+                .is_err()
+            );
+            assert!(
                 RootedValue::stash(mc, roots, StackValue::ManagedPtr(transient.into())).is_err()
             );
         });
+    }
+
+    #[test]
+    fn rooted_unmanaged_pointer_preserves_provenance() {
+        use dotnet_value::pointer::UnmanagedPtr;
+        let arena = Arena::<Rootable![()]>::new(|_| ());
+        arena.mutate(|mc, _| {
+            let mut byte = 41u8;
+            let address = NonNull::from(&mut byte);
+            let roots = DynamicRootSet::new(mc);
+            let value =
+                RootedValue::stash(mc, roots, StackValue::UnmanagedPtr(UnmanagedPtr(address)))
+                    .unwrap();
+            let StackValue::UnmanagedPtr(fetched) = value.fetch(roots, &mock()).unwrap() else {
+                panic!("expected unmanaged pointer")
+            };
+            // SAFETY: F10.RawMemoryAccessValid — byte is live, exclusively borrowed and in range.
+            unsafe {
+                *fetched.0.as_ptr() += 1;
+            }
+            assert_eq!(byte, 42);
+            assert!(value.fetch(DynamicRootSet::new(mc), &mock()).is_err());
+        });
+    }
+
+    #[test]
+    fn rooted_nested_pointer_value_keeps_owner_alive() {
+        use dotnet_value::layout::{
+            FieldKey, FieldLayout, FieldLayoutManager, GcDesc, LayoutManager, Scalar,
+        };
+        use dotnet_value::{object::Object, storage::FieldStorage};
+        use std::sync::Arc;
+
+        let mut saved = None;
+        let mut arena = Arena::<Rootable![TestRoots<'_>]>::new(|mc| {
+            let roots = DynamicRootSet::new(mc);
+            let owner = Gc::new(
+                mc,
+                ThreadSafeLock::new(ObjectInner::new(
+                    HeapStorage::Str(CLRString::from("owner")),
+                    ArenaId::new(1),
+                )),
+            );
+            let address =
+                ObjectRef(Some(owner)).with_data(|data| NonNull::new(data.as_ptr().cast_mut()));
+            let pointer = ManagedPtr::new(
+                address,
+                dotnet_types::TypeDescription::NULL,
+                Some(ObjectRef(Some(owner))),
+                false,
+                Some(ByteOffset::new(0)),
+            );
+            let key = |name: &str| FieldKey {
+                owner: dotnet_types::TypeDescription::NULL,
+                name: name.into(),
+            };
+            let inner = FieldLayoutManager {
+                fields: [(
+                    key("pointer"),
+                    FieldLayout {
+                        position: ByteOffset::new(0),
+                        layout: Arc::new(LayoutManager::Scalar(Scalar::ManagedPtr)),
+                    },
+                )]
+                .into_iter()
+                .collect(),
+                total_size: ManagedPtr::SIZE,
+                alignment: 8,
+                gc_desc: GcDesc::default(),
+                has_ref_fields: true,
+            };
+            let layout = Arc::new(FieldLayoutManager {
+                fields: [(
+                    key("inner"),
+                    FieldLayout {
+                        position: ByteOffset::new(8),
+                        layout: Arc::new(LayoutManager::Field(inner)),
+                    },
+                )]
+                .into_iter()
+                .collect(),
+                total_size: 8 + ManagedPtr::SIZE,
+                alignment: 8,
+                gc_desc: GcDesc::default(),
+                has_ref_fields: true,
+            });
+            let mut bytes = vec![0; 8 + ManagedPtr::SIZE];
+            pointer.write(&mut bytes[8..]);
+            let value = StackValue::ValueType(Object::new(
+                dotnet_types::TypeDescription::NULL,
+                Default::default(),
+                FieldStorage::new(layout, bytes),
+            ));
+            saved = Some(RootedValue::stash(mc, roots, value).unwrap());
+            TestRoots {
+                roots,
+                weak: Gc::downgrade(owner),
+            }
+        });
+        let value = saved.take().unwrap();
+        arena.finish_cycle();
+        arena.mutate(|mc, roots| {
+            assert!(roots.weak.upgrade(mc).is_some());
+            assert!(matches!(
+                value.fetch(roots.roots, &mock()).unwrap(),
+                StackValue::ValueType(_)
+            ));
+        });
+        drop(value);
+        arena.finish_cycle();
+        arena.mutate(|mc, roots| assert!(roots.weak.upgrade(mc).is_none()));
     }
 
     #[test]
@@ -3112,6 +3465,61 @@ mod tests {
                 PointerOrigin::Heap(ObjectRef(Some(_)))
             ));
             assert_eq!(pointer.byte_offset().unwrap(), ByteOffset::new(0));
+            assert!(value.fetch(DynamicRootSet::new(mc), &mock()).is_err());
+        });
+        drop(value);
+        arena.finish_cycle();
+        arena.mutate(|mc, roots| assert!(roots.weak.upgrade(mc).is_none()));
+    }
+
+    #[test]
+    fn rooted_typed_reference_descriptor_keeps_owner_alive() {
+        let mut saved = None;
+        let mut arena = Arena::<Rootable![TestRoots<'_>]>::new(|mc| {
+            let roots = DynamicRootSet::new(mc);
+            let obj = Gc::new(
+                mc,
+                ThreadSafeLock::new(ObjectInner::new(
+                    HeapStorage::Str(CLRString::from("owner")),
+                    ArenaId::new(1),
+                )),
+            );
+            let pointer = ManagedPtr::new(
+                None,
+                dotnet_types::TypeDescription::NULL,
+                Some(ObjectRef(Some(obj))),
+                false,
+                Some(ByteOffset::new(0)),
+            );
+            saved = Some(
+                RootedValue::stash(
+                    mc,
+                    roots,
+                    StackValue::TypedRef(TypedReferenceSlot::new(
+                        pointer.into(),
+                        std::sync::Arc::new(dotnet_types::TypeDescription::NULL),
+                    )),
+                )
+                .unwrap(),
+            );
+            TestRoots {
+                roots,
+                weak: Gc::downgrade(obj),
+            }
+        });
+        let value = saved.take().unwrap();
+        arena.finish_cycle();
+        arena.mutate(|mc, roots| {
+            assert!(roots.weak.upgrade(mc).is_some());
+            let StackValue::TypedRef(slot) = value.fetch(roots.roots, &mock()).unwrap() else {
+                panic!("expected typed reference")
+            };
+            assert!(matches!(
+                slot.value().origin(),
+                PointerOrigin::Heap(ObjectRef(Some(_)))
+            ));
+            assert_eq!(slot.value().byte_offset().unwrap(), ByteOffset::new(0));
+            assert_eq!(**slot.type_desc(), dotnet_types::TypeDescription::NULL);
             assert!(value.fetch(DynamicRootSet::new(mc), &mock()).is_err());
         });
         drop(value);

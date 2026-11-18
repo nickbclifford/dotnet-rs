@@ -4,9 +4,10 @@
 **Outcome:** `String.Substring`, admitted multicast delegate invocation, reflection `Invoke`, static
 field initialization, `GC.WaitForPendingFinalizers` and `Monitor.Enter` run as async native
 bodies in both configurations for admitted shapes. Their existing fixtures pass. The bespoke
-mechanisms they replace are deleted, except the scoped multicast continuation for excluded
-shapes. Reflection return handling, the legacy static-initializer triggers and timed monitor
-retry were retired by [plan 16](16-retire-legacy-continuations.md).
+mechanisms they replace are deleted. Reflection return handling, the legacy static-initializer
+triggers and timed monitor retry were retired by [plan 16](16-retire-legacy-continuations.md);
+the scoped multicast continuation retained at this plan's completion was removed by
+[plan 26](26-thread-lifecycle-and-multicast-fallback.md).
 
 Builds on the explicit Substring continuation ([plan 04](04-native-continuations.md)) and keeps
 its scheduling and rooting contract. Detailed notes for slices 2–5 are in
@@ -18,10 +19,12 @@ verification.
 Native operations that cross GC safepoints, re-enter managed code or wait need a shared rooting
 and scheduling contract. The consumers use native effects for admitted calls in both ST and MT:
 Substring's bounded copy, multicast target calls, reflection invocation, static field
-initialization, finalizer waiting and monitor acquisition. The synchronous and continuation
-fallback below preserves excluded multicast call shapes (plan 16 retired the others).
+initialization, finalizer waiting and monitor acquisition. The historical synchronous and continuation
+fallback below preserved excluded multicast call shapes at this plan's completion.
 
 ## Scope
+
+This scope records the original plan; subsequent changes to multicast transport are in plan 26.
 
 In:
 - The six consumers above, one slice each (slices 4 and 5 share one wait protocol).
@@ -278,7 +281,8 @@ granting access; a still-pending condition requests another yield to the executo
 ### Roots
 
 `RootedValue` wraps a private `DynamicRoot` to a locally allocated, immutable `Collect` cell
-holding a reference value or managed-pointer descriptor. The cell traces the reference or
+holding a reference value, managed-pointer descriptor, or typed reference with its pointer
+descriptor and original type descriptor. The cell traces the reference or
 pointer origin, including cross-arena recording (`dotnet-value/src/object/mod.rs`). A bare foreign
 handle stashed directly would bypass that branch. Each newly rooted reference value or descriptor
 costs one GC allocation plus a root slot.
@@ -301,7 +305,7 @@ descriptors carry no cached address and need no tracing. Each category is enable
 conversion from the actual `PointerOrigin` variant, tracing where needed, reconstruction, and
 invalidation when the owning frame retires. The selector rejects unsupported categories before
 commitment. The original reflection byref-return rejection was superseded by
-[plan 19](19-reflection-invoke-clr-parity.md); multicast still excludes byref returns.
+[plan 19](19-reflection-invoke-clr-parity.md); multicast byref returns use the descriptor as well.
 
 ## Slices
 
@@ -336,8 +340,8 @@ commitment. The original reflection byref-return rejection was superseded by
 Each slice ends with its consumer on the new path for admitted shapes and its tests enabled.
 Of the four scoped legacy paths (multicast continuation, reflection return handling, legacy
 static-initializer triggers, timed monitor retries), only the multicast continuation for
-excluded shapes remains after plan 16. Add facade operations only when a consumer
-needs them.
+excluded shapes remained after plan 16; plan 26 subsequently removed it. Add facade operations
+only when a consumer needs them.
 
 ## Done when
 
@@ -360,8 +364,8 @@ needs them.
 
 **Slices 2–5:** described in each completed note under `08-async-effects/`. The consumer's
 fixtures pass, CLR comparisons cover applicable exception or filter ordering, and the listed
-bespoke mechanisms are removed except for the scoped legacy paths above, of which only the
-multicast continuation remains (plan 16).
+bespoke mechanisms were removed except for the scoped multicast continuation, which plan 26
+subsequently removed.
 
 ## Slice 1 verification
 

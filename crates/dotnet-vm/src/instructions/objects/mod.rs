@@ -432,6 +432,5 @@ pub fn sizeof<'gc, T: ResolutionOps<'gc> + VmResolutionOps<'gc> + EvalStackOps<'
 
 #[dotnet_instruction(LoadString(chars))]
 pub fn ldstr<'gc, T: TypedStackOps<'gc>>(ctx: &mut T, chars: &[u16]) -> StepResult {
-    ctx.push_interned_string(chars);
-    StepResult::Continue
+    ctx.push_interned_string(chars)
 }

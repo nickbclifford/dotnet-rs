@@ -192,15 +192,18 @@ main() {
         exit 2
     }
 
+    local input_path
+    input_path="$(make_abs_path "$1")"
+    [[ -f "$input_path" ]] || fail "input not found: $1"
+    if [[ "$input_path" == *.cs ]] && grep -q '^// DOTNET_RS_VM_ONLY:' "$input_path"; then
+        fail "VM-only fixture cannot be run on dotnet: $1"
+    fi
+
     require_cmd dotnet
     require_cmd diff
     require_cmd awk
     require_cmd find
     require_cmd sort
-
-    local input_path
-    input_path="$(make_abs_path "$1")"
-    [[ -f "$input_path" ]] || fail "input not found: $1"
 
     TMP_DIFF_RUN_DIR="$(mktemp -d "${TMPDIR:-/tmp}/dotnet-rs-diff-run.XXXXXX")"
     trap '[[ -n "${TMP_DIFF_RUN_DIR:-}" ]] && rm -rf "$TMP_DIFF_RUN_DIR"' EXIT

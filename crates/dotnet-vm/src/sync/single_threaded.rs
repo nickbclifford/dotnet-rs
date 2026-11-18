@@ -2,7 +2,7 @@ use crate::sync::{Arc, Mutex, SyncBlockOps};
 use dotnet_metrics::RuntimeMetrics;
 use dotnet_utils::ArenaId;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     num::NonZeroUsize,
     sync::atomic::{AtomicUsize, Ordering},
 };
@@ -14,13 +14,26 @@ thread_local! {
 
 #[derive(Debug)]
 pub struct SyncBlock {
-    recursion_count: AtomicUsize,
+    state: Mutex<MonitorState>,
+}
+
+#[derive(Debug)]
+struct MonitorState {
+    owner: ArenaId,
+    recursion: usize,
+    next_waiter: u64,
+    waiters: VecDeque<(u64, Option<std::time::Instant>, bool)>,
 }
 
 impl SyncBlock {
     pub(super) fn new() -> Self {
         Self {
-            recursion_count: AtomicUsize::new(0),
+            state: Mutex::new(MonitorState {
+                owner: ArenaId::INVALID,
+                recursion: 0,
+                next_waiter: 0,
+                waiters: VecDeque::new(),
+            }),
         }
     }
 
@@ -34,17 +47,27 @@ impl SyncBlock {
 }
 
 impl super::SyncBlockOps for SyncBlock {
-    fn try_enter(&self, _thread_id: ArenaId) -> bool {
+    fn try_enter(&self, thread_id: ArenaId) -> bool {
         #[cfg(test)]
         if MONITOR_TEST_CONTENDED.with(std::cell::Cell::get) {
             return false;
         }
-        self.recursion_count.fetch_add(1, Ordering::Relaxed);
+        let mut state = self.state.lock();
+        if thread_id == ArenaId::INVALID
+            || (state.owner != ArenaId::INVALID && state.owner != thread_id)
+        {
+            return false;
+        }
+        state.owner = thread_id;
+        state.recursion += 1;
         true
     }
 
     fn enter(&self, thread_id: ArenaId, _metrics: &RuntimeMetrics) {
-        self.try_enter(thread_id);
+        assert!(
+            self.try_enter(thread_id),
+            "monitor entry would deadlock in single-threaded mode"
+        );
     }
 
     fn enter_with_timeout(
@@ -53,45 +76,86 @@ impl super::SyncBlockOps for SyncBlock {
         _timeout_ms: u64,
         _metrics: &RuntimeMetrics,
     ) -> bool {
-        self.enter(thread_id, _metrics);
+        self.try_enter(thread_id)
+    }
+
+    fn exit(&self, thread_id: ArenaId) -> bool {
+        let mut state = self.state.lock();
+        if thread_id == ArenaId::INVALID || state.owner != thread_id {
+            return false;
+        }
+        state.recursion -= 1;
+        if state.recursion == 0 {
+            state.owner = ArenaId::INVALID;
+        }
         true
     }
 
-    fn exit(&self, _thread_id: ArenaId) -> bool {
-        let count = self.recursion_count.load(Ordering::Relaxed);
-        if count > 0 {
-            self.recursion_count.fetch_sub(1, Ordering::Relaxed);
-            true
-        } else {
-            false
-        }
-    }
-
-    fn is_owned(&self, _thread_id: ArenaId) -> bool {
-        self.recursion_count.load(Ordering::Relaxed) > 0
+    fn is_owned(&self, thread_id: ArenaId) -> bool {
+        thread_id != ArenaId::INVALID && self.state.lock().owner == thread_id
     }
     fn begin_wait(
         &self,
         thread_id: ArenaId,
-        _deadline: Option<std::time::Instant>,
+        deadline: Option<std::time::Instant>,
     ) -> Option<(u64, usize)> {
-        if !self.is_owned(thread_id) {
+        let mut state = self.state.lock();
+        if thread_id == ArenaId::INVALID || state.owner != thread_id {
             return None;
         }
-        Some((0, self.recursion_count.swap(0, Ordering::Relaxed)))
+        state.next_waiter = state
+            .next_waiter
+            .checked_add(1)
+            .expect("monitor waiter id exhausted");
+        let id = state.next_waiter;
+        state.waiters.push_back((id, deadline, false));
+        let recursion = state.recursion;
+        state.owner = ArenaId::INVALID;
+        state.recursion = 0;
+        Some((id, recursion))
     }
-    fn poll_wait(&self, _id: u64, deadline: Option<std::time::Instant>) -> Option<bool> {
-        deadline
-            .filter(|d| std::time::Instant::now() >= *d)
-            .map(|_| false)
+    fn poll_wait(&self, id: u64, deadline: Option<std::time::Instant>) -> Option<bool> {
+        let mut state = self.state.lock();
+        let pos = state
+            .waiters
+            .iter()
+            .position(|w| w.0 == id)
+            .expect("monitor waiter missing");
+        let pulsed = state.waiters[pos].2;
+        if pulsed || deadline.is_some_and(|d| std::time::Instant::now() >= d) {
+            state.waiters.remove(pos);
+            Some(pulsed)
+        } else {
+            None
+        }
     }
-    fn cancel_wait(&self, _id: u64) {}
-    fn restore_wait(&self, _thread_id: ArenaId, recursion: usize) -> bool {
-        self.recursion_count.store(recursion, Ordering::Relaxed);
+    fn cancel_wait(&self, id: u64) {
+        self.state.lock().waiters.retain(|w| w.0 != id);
+    }
+    fn restore_wait(&self, thread_id: ArenaId, recursion: usize) -> bool {
+        let mut state = self.state.lock();
+        if thread_id == ArenaId::INVALID || state.owner != ArenaId::INVALID || recursion == 0 {
+            return false;
+        }
+        state.owner = thread_id;
+        state.recursion = recursion;
         true
     }
-    fn pulse(&self, thread_id: ArenaId, _all: bool) -> bool {
-        self.is_owned(thread_id)
+    fn pulse(&self, thread_id: ArenaId, all: bool) -> bool {
+        let mut state = self.state.lock();
+        if thread_id == ArenaId::INVALID || state.owner != thread_id {
+            return false;
+        }
+        let now = std::time::Instant::now();
+        for waiter in &mut state.waiters {
+            if !waiter.2 && waiter.1.is_none_or(|d| now < d) {
+                waiter.2 = true;
+                if !all {
+                    break;
+                }
+            }
+        }
+        true
     }
 }
 
@@ -107,6 +171,13 @@ impl SyncBlockManager {
             next_index: AtomicUsize::new(1),
         }
     }
+
+    pub(crate) fn has_owned_monitor(&self, owner: ArenaId) -> bool {
+        self.blocks
+            .lock()
+            .values()
+            .any(|block| block.is_owned(owner))
+    }
 }
 
 impl super::SyncManagerOps for SyncBlockManager {
@@ -116,6 +187,10 @@ impl super::SyncManagerOps for SyncBlockManager {
         let index = NonZeroUsize::new(self.next_index.fetch_add(1, Ordering::Relaxed))
             .expect("SyncBlockManager index overflowed into zero");
 
+        #[allow(
+            clippy::arc_with_non_send_sync,
+            reason = "single-threaded monitor state is executor-confined; Arc keeps the feature-neutral interface"
+        )]
         let block = Arc::new(SyncBlock::new());
         let mut blocks = self.blocks.lock();
         blocks.insert(index, block.clone());
@@ -159,15 +234,56 @@ mod tests {
         // Successive entries should succeed (recursion)
         assert!(block.try_enter(THREAD_A));
         assert!(block.try_enter(THREAD_A));
-        assert_eq!(block.recursion_count.load(Ordering::Relaxed), 2);
+        assert_eq!(block.state.lock().recursion, 2);
 
         // Successive exits should succeed
         assert!(block.exit(THREAD_A));
         assert!(block.exit(THREAD_A));
-        assert_eq!(block.recursion_count.load(Ordering::Relaxed), 0);
+        assert_eq!(block.state.lock().recursion, 0);
 
         // Extra exit should fail
         assert!(!block.exit(THREAD_A));
+    }
+
+    #[test]
+    fn owners_wait_pulse_and_restore_recursion() {
+        let block = SyncBlock::new();
+        let other = ArenaId::new(2);
+        assert!(block.try_enter(THREAD_A));
+        assert!(block.try_enter(THREAD_A));
+        assert!(!block.try_enter(other));
+        assert!(!block.exit(other));
+        assert!(!block.pulse(other, false));
+        assert!(block.begin_wait(other, None).is_none());
+        let (id, recursion) = block.begin_wait(THREAD_A, None).unwrap();
+        assert_eq!(recursion, 2);
+        assert!(block.try_enter(other));
+        assert!(!block.restore_wait(THREAD_A, recursion));
+        assert!(block.pulse(other, false));
+        assert_eq!(block.poll_wait(id, None), Some(true));
+        assert!(block.exit(other));
+        assert!(block.restore_wait(THREAD_A, recursion));
+        assert!(block.exit(THREAD_A));
+        assert!(block.is_owned(THREAD_A));
+        assert!(block.exit(THREAD_A));
+        assert!(!block.is_owned(THREAD_A));
+    }
+
+    #[test]
+    fn timed_wait_and_pulse_all_preserve_ownership() {
+        use std::time::{Duration, Instant};
+        let block = SyncBlock::new();
+        let other = ArenaId::new(2);
+        assert!(block.try_enter(THREAD_A));
+        let expired = Instant::now() - Duration::from_millis(1);
+        let (expired_id, depth) = block.begin_wait(THREAD_A, Some(expired)).unwrap();
+        assert!(block.try_enter(other));
+        assert!(block.pulse(other, true));
+        assert_eq!(block.poll_wait(expired_id, Some(expired)), Some(false));
+        assert!(!block.restore_wait(THREAD_A, depth));
+        assert!(block.exit(other));
+        assert!(block.restore_wait(THREAD_A, depth));
+        assert!(block.exit(THREAD_A));
     }
 
     #[test]

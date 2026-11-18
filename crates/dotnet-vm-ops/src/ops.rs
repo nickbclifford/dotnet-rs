@@ -139,7 +139,14 @@ pub trait TypedStackOps<'gc>: EvalStackOps<'gc> {
     }
     fn push_string(&mut self, value: CLRString);
     /// Push the canonical literal object for these UTF-16 code units.
-    fn push_interned_string(&mut self, chars: &[u16]);
+    ///
+    /// A multithreaded miss is homed by the canonical service: the call
+    /// starts a wait and returns a non-`Continue` result with the instruction unchanged and
+    /// nothing pushed, so the caller must return it untouched and the instruction retries.
+    fn push_interned_string(&mut self, chars: &[u16]) -> StepResult;
+    /// Push the canonical empty string. The service installs it before accepting requests,
+    /// so this never suspends and is safe after operands were consumed.
+    fn push_empty_string(&mut self);
     /// Intern an existing string object and push the canonical object.
     fn push_interned_string_object(&mut self, chars: &[u16], object: ObjectRef<'gc>);
     /// Return the canonical object for these code units, or null if none exists.
@@ -407,6 +414,8 @@ pub trait RawMemoryOps<'gc>: BorrowScopeOps {
 }
 
 pub trait ThreadOps {
+    /// Logical execution owner for monitors, initializer claims and thread-static storage.
+    /// This is not an allocation-arena identity: an ST finalizer has a distinct owner key.
     fn thread_id(&self) -> ArenaId;
     fn managed_thread_id(&self) -> i32;
 }
@@ -547,6 +556,17 @@ pub trait ReflectionOps<'gc>: MemoryOps<'gc> {
         &self,
         object: ObjectRef<'gc>,
     ) -> Result<TypeDescription, TypeResolutionError>;
+
+    /// Retry an intrinsic before it commits operands when a shared method wrapper must be
+    /// materialized by the canonical service.
+    #[cfg(feature = "multithreading")]
+    fn await_runtime_method_object(
+        &mut self,
+        _method: &dotnet_types::members::MethodDescription,
+        _lookup: &dotnet_types::generics::GenericLookup,
+    ) -> Option<dotnet_vm_data::StepResult> {
+        None
+    }
 }
 
 pub trait TypeLayoutOps {
@@ -759,7 +779,10 @@ mod tests {
         fn push_string(&mut self, _: CLRString) {
             unimplemented!()
         }
-        fn push_interned_string(&mut self, _: &[u16]) {
+        fn push_interned_string(&mut self, _: &[u16]) -> StepResult {
+            unimplemented!()
+        }
+        fn push_empty_string(&mut self) {
             unimplemented!()
         }
         fn push_interned_string_object(&mut self, _: &[u16], _: ObjectRef<'static>) {

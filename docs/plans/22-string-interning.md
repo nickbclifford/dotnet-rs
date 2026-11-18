@@ -48,11 +48,11 @@ Out:
 - **One process-wide intern table** keyed by UTF-16 content, holding one canonical string object
   per key. Reuse plan 14's canonical-object mechanism (`SharedReflectionRegistry` in
   `crates/dotnet-vm/src/state.rs`):
-  - The first literal load allocates a string in its own arena and publishes it with
-    insert-if-absent. `String.Intern` publishes its supplied object when the key is absent,
-    matching .NET's observed identity. A thread that loses the race uses the winner's object.
-  - Every arena traces the table as a root. Plan 09's retired-arena contract keeps the owning
-    arena alive until shutdown, so a foreign interned string stays valid.
+  - The first literal load publishes with insert-if-absent. [Plan 26](26-thread-lifecycle-and-multicast-fallback.md)
+    homes new MT literals in the finalizer arena. `String.Intern` publishes its supplied object
+    when the key is absent, matching .NET's observed identity; a losing thread uses the winner.
+  - Every arena traces the table as a root. A winning explicit `Intern` input keeps its original
+    live-object arena retained, so a foreign interned string stays valid.
   - Single-threaded builds use the same table with a single owner. Keep one code path.
 - **`ldstr`** looks up the table by its character slice. The lookup must not allocate a
   `CLRString` when it hits.

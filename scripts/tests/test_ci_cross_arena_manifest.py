@@ -15,6 +15,8 @@ WORKFLOW = (ROOT / '.github/workflows/ci.yml').read_text()
 JOB = re.search(r'^  miri-cross-arena:\n(.*?)(?=^  [\w-]+:\n)', WORKFLOW, re.M | re.S).group(1)
 BASE = 'executor::executor_teardown_tests::'
 MT_TEARDOWN = {
+    'retired_owner_clears_dead_local_roots',
+    'empty_retired_arena_releases_before_shutdown',
     'retired_owner_keeps_registration_until_shutdown',
     'retired_shutdown_waits_for_inflight_collection_and_lease',
     'worker_panic_drains_lease_before_shutdown',
@@ -64,7 +66,6 @@ BRIDGE = {'effects::tests::' + name for name in (
     'rooted_heap_pointer_descriptor_keeps_owner_alive')}
 NATIVE = {'executor::native_substring_tests::' + name for name in (
     'native_activation_real_context_and_collection',
-    'reflection_retry_completed_collection_does_not_retry',
     'condition_wait_tests::monitor_heap_byref_survives_stop_before_dispatch',
     'condition_wait_tests::monitor_byref_dispatch_writes_frame_home',
     'condition_wait_tests::monitor_timed_byref_alias_writes_once_for_timeout_and_acquisition',
@@ -74,7 +75,6 @@ NATIVE = {'executor::native_substring_tests::' + name for name in (
     'finalizer_preserves_filter_and_suspended_native_context',
     'native_activation_nested_return_is_copied',
     'native_capture_filters_and_child_cleanup_precede_outer_search',
-    'legacy_initializer_frame_retirement_fails_claim',
     'native_initializer_failure_is_published_with_original_inner',
     'native_error_retires_initializer_frame_before_future_drop',
     'static_store_operand_released_after_abandonment',
@@ -87,7 +87,6 @@ NATIVE = {'executor::native_substring_tests::' + name for name in (
 FOREIGN = {'executor::native_substring_tests::' + name for name in (
     'condition_wait_tests::finalizer_wait_rechecks_after_another_owner_finishes',
     'condition_wait_tests::retired_owner_remains_registered_while_other_arena_has_queued_finalizer',
-    'legacy_initializer_host_error_releases_waiter',
     'worker_teardown_cleans_native_before_retiring_caller',
     'foreign_source_survives_coordinated_collections_between_chunks',
     'native_initializer_failure_survives_owner_retirement_and_collection',
@@ -101,6 +100,7 @@ FOREIGN = {'executor::native_substring_tests::' + name for name in (
     'native_foreign_byref_owner_survives_collection_and_child_call',
     'native_cross_arena_byref_owner_survives_collection_and_child_call',
     'foreign_short_weak_handle_clears_before_the_owner_finalizes',
+    'thread_static_gc_on_worker_exit',
     'condition_wait_tests::dedicated_finalizer_thread_claims_runs_and_completes_collected_finalizer')}
 HANDLES_MT = {'executor::executor_collection_tests::dependent_handle_chain_survives_and_clears'}
 COLLECTION_MT = {'executor::executor_collection_tests::' + name for name in (
@@ -146,7 +146,7 @@ def execute(row, name='Execute guarded singletons'):
 class CrossArenaManifestTests(unittest.TestCase):
     def test_matrix_teardown_is_exact_and_mt_only(self):
         rows = matrix_rows()
-        self.assertEqual(len(rows), 100)
+        self.assertEqual(len(rows), 98)
         self.assertEqual(len({(r['configuration'], r['group'], r['shard']) for r in rows}), len(rows))
         teardown = [r for r in rows if r['group'] == 'vm-teardown']
         st = [r for r in teardown if r['configuration'] == 'no-features']
@@ -245,7 +245,7 @@ class CrossArenaManifestTests(unittest.TestCase):
             handles = {selector for crate, selector in seen[config]
                        if crate == 'dotnet-vm' and selector in HANDLES_MT}
             self.assertEqual(handles, HANDLES_MT if config == 'multithreading' else set())
-        self.assertEqual(len(seen['no-features']), 35)
+        self.assertEqual(len(seen['no-features']), 33)
         self.assertEqual(len(seen['multithreading']), 81)
 
     def test_strict_core_is_isolated_and_guarded(self):

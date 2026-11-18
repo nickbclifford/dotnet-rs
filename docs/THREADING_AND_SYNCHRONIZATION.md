@@ -8,7 +8,7 @@ Threading is feature-gated with **two parallel implementations** that share a co
 
 | Feature          | Threading Module         | Sync Module                   | Behavior                                                |
 |------------------|--------------------------|-------------------------------|---------------------------------------------------------|
-| (none)           | `threading/stub.rs`      | `sync/single_threaded.rs`     | No-op thread ops, no locking                            |
+| (none)           | `threading/stub.rs`      | `sync/single_threaded.rs`     | Executor-confined execution; owner-checked monitors without host-thread locks |
 | `multithreading` | `threading/basic.rs`     | `sync/threaded.rs`            | Real OS threads, monitor locks, and STW GC coordination |
 
 The feature controls managed VM concurrency, not whether host code may create OS threads; the
@@ -146,10 +146,13 @@ and release retain the queue's managed critical section without entering that na
 Completion notifications count individual dispatched work items. Min/max settings are validated and
 reported but do not resize the capped worker set; available-thread reports are approximate. A
 traced shared placeholder supplies the completion-count object expected by CoreLib. Fields marked
-`ThreadStatic` use zero-initialized storage per executor and constructed generic type. Field
-addresses retain the originating executor identity, including when serialized. Storage and its
-managed references remain rooted until VM shutdown so that outstanding byrefs remain valid;
-this also retains values from completed threads.
+`ThreadStatic` use zero-initialized storage per logical thread and constructed generic type. Field
+addresses retain the originating logical thread key, including when serialized, but do not root
+their storage. Completion closes and removes that owner's storage before completion is published;
+values reachable only from an exited owner's thread statics can then be collected and finalized.
+Ordinary static storage is unaffected. `ThreadLocal<T>` has distinct semantics: untracked values
+may be collected when their owner exits, while `trackAllValues: true` retains values in `Values`
+until the `ThreadLocal<T>` is disposed and any snapshots release their references.
 Without `multithreading`, requests are recorded without creating workers or draining the queue;
 an infinite wait for queued work reports the host single-threaded deadlock error.
 
@@ -158,10 +161,17 @@ an infinite wait for queued work reports the host single-threaded deadlock error
 `SharedGlobalState` owns the native worker handles, and one registry lock protects each worker's
 lifecycle and managed result. A worker follows
 `Running → Completed(outcome) → Retired ⇄ Finalizing`; shutdown transitions from `Retired` to
-`ShuttingDown`, then `Drained` or `Leaked`. A panic follows the existing drain-or-leak path.
+`ShuttingDown`, then `Drained` or `Leaked`. Eligible empty managed owners instead transition from
+`Retired` through `Releasing` to `Released` or `Leaked`, preserving completion entries. Pool and
+finalizer owners remain retained. A panic follows the existing drain-or-leak path.
 `Thread.Join` observes `Completed` and consumes the outcome without waiting for the native thread.
-After segment cleanup and publication, the completed owner stops ordinary managed execution, remains registered
-for GC and leases, and services coordinator commands on its own thread. Finalizers run on one
+Publication and thread-static closure share the registry lock, so Join cannot observe completion
+before that owner's storage is removed. Unwinding closes the owner before publishing the panic.
+After segment cleanup and publication, the completed owner stops ordinary managed execution and
+services coordinator commands on its own thread while its arena remains registered. If cleanup and
+a coordinated sweep prove that the arena is empty and has no pending work or retained child records,
+it can unregister, drain its exact leases, and release the arena; otherwise it remains registered
+for collection until shutdown. Finalizers run on one
 registered background executor with its own arena and managed thread identity. An abort interrupts a
 non-terminating finalizer. The [GC contract](GC_AND_MEMORY_SAFETY.md#retired-worker-arenas) describes
 the collection-exclusion and exact-lease-drain ordering.
@@ -181,16 +191,25 @@ workers stop. A native operation that does not return can still delay shutdown.
 
 The CLI and in-process harness call `SharedGlobalState::shutdown_workers` after dropping the entry
 executor, retaining the extracted entry arena until shutdown returns. Shutdown requests abort,
-waits for running and finalizing workers to stop, signals retired owners and joins all native
-handles. A retired owner unregisters and frees its arena only after workers are quiescent and no
-finalizer is pending, unless abort abandoned the work. This prevents collection from tracing into
-freed arenas. In single-threaded builds finalizers instead run on the interrupted context and
-share its managed thread identity.
+waits for running and finalizing workers to stop, signals retired owners and joins remaining native
+handles, also waiting for any live-path join already in progress. A nonempty retired owner unregisters
+and frees its arena only after workers are quiescent and no finalizer is pending, unless abort
+abandoned the work. This prevents collection from tracing into freed arenas. In single-threaded builds finalizers run in a separate segment on the interrupted
+arena, with a stable, rooted background `Thread` and a distinct logical owner key. The caller's
+segment and `Thread` remain rooted and are restored on completion or error. Arena ownership and
+pointer serialization remain unchanged. Automatic finalizers stay queued while the interrupted
+owner holds a monitor or initializer claim; later safepoints retry them. An explicit finalizer wait
+forces execution, reporting a deadlock if the finalizer needs the parked owner's monitor or claim.
 
-Retaining a completed worker costs one OS thread and its arena until VM shutdown. Arena IDs are
-monotonic and the process supports at most 65,535 IDs, so this policy deliberately trades bounded
-process-lifetime capacity and per-worker resources for correct retained references. The detailed
-design and acceptance checks are in the [retained-arena plan](plans/09-retired-arena-lifetime.md).
+A completed worker with live objects retains its OS thread and arena until VM shutdown; empty
+eligible arenas release after a coordinated sweep and exact lease drain. Once their worker closure finishes, live
+executors take and join their handles outside the registry lock; shutdown joins any remaining handles
+and waits for all claimed joins, including those of another shutdown caller.
+Completion entries and outcomes remain stable. Arena IDs are monotonic and the
+process supports at most 65,535 IDs; empty-worker release does not recycle them because owner-keyed
+state and pointer/registration identities may outlive an individual execution. A worker with live
+objects and the dedicated pool/finalizer owners retain their arenas as required by reachable roots.
+The detailed design and acceptance checks are in the [thread lifecycle plan](plans/26-thread-lifecycle-and-multicast-fallback.md).
 
 ## Safe Points
 
@@ -335,9 +354,9 @@ Current multithreaded call path:
 
 ### Single-Threaded Implementation (`sync/single_threaded.rs`)
 
-- Tracks lock ownership for correctness checking but never actually blocks
-- Detects re-entrant locks and recursive lock errors
-- Useful for catching synchronization bugs in single-threaded testing
+- Tracks a logical owner, recursion and condition waiters, rejecting wrong-owner operations.
+- Restores all recursion after a timed wait; contended infinite entry reports a deadlock instead of
+  re-entering the parked caller's monitor. A timed entry can expire without acquiring it.
 
 ## Non-Obvious Connections
 
@@ -351,8 +370,8 @@ Current multithreaded call path:
 
 `StaticStorageManager::init` claims a constructor under its initialization mutex. Same-thread
 recursion and detected wait cycles follow the recursive-initialization policy; a single-threaded
-build cannot wait for another thread. An owned wait registration removes its particular edge on
-completion, cancellation or unwind. The graph can hold multiple edges from one arena because a
+build reports a deadlock if the other owner is the parked segment. An owned wait registration
+removes its particular edge on completion, cancellation or unwind. The graph can hold multiple edges from one arena because a
 finalizer or a suspended exception segment can have its own wait while another is parked. Cycle
 checking and insertion are atomic under the graph lock.
 
@@ -365,7 +384,7 @@ probes and checks for a cycle again. Notifications make the waiter eligible to r
 legacy callers and releases its registration before returning or yielding.
 
 ### Threading ↔ Executor
-Each `Executor` owns a `GCArena`: directly in ST and via a private owner-qualified TLS slot in MT. Thread creation (`threading/basic.rs`) spawns a new OS thread, which creates its own `Executor` and registers with the `ThreadManager`. The arena ID serves as both the GC arena identifier and the managed thread ID.
+Each `Executor` owns a `GCArena`: directly in ST and via a private owner-qualified TLS slot in MT. Thread creation (`threading/basic.rs`) spawns a new OS thread, which creates its own `Executor` and registers with the `ThreadManager`. Allocation identity remains the `ArenaId` used by the GC and existing pointer serialization; managed execution uses a logical owner key, and the guest-visible managed `Thread` ID is separate. In ST the finalizer segment has a distinct logical owner and rooted `Thread` from the parked caller, without changing arena ownership or pointer bytes.
 
 `CallStack` owns the executor's `ArenaLocalState`, including the cached P/Invoke last-error scalar; `VesContext` borrows it directly, so no ThreadManager lookup or shared lock is involved. Native `errno`/`GetLastError` capture at the P/Invoke boundary is not implemented.
 
@@ -409,6 +428,8 @@ an unqualified acquisition merely because another guard happens to be in scope.
 - `ThreadManager::threads` must never be held while trying to acquire `ThreadManager::gc_coordination`.
 - `GCCoordinator::arenas` or `ArenaHandle::current_command` must never be held while trying to acquire `GCCoordinator::collection_lock`.
 - `ArenaHandle::current_command` must never be held while calling paths that take `GCCoordinator::arenas` (for example `get_arena` and `command_finished`).
+- Worker completion takes the registry lock before the thread-static table lock; no table operation
+  may acquire the registry lock while holding the table lock.
 - `StaticStorageManager::wait_graph` must never be held while acquiring `StaticStorage::init_mutex` (keep `wait_graph` updates short and non-blocking).
 - A `StaticWaitRegistration` must retire its own wait-graph edge before a terminal return or a GC-stop retry; unrelated registrations on the same thread remain intact.
 - `SyncBlockManager::next_index` must never be acquired before `SyncBlockManager::blocks`.
@@ -436,7 +457,11 @@ MT executor teardown (extraction, thread affinity, draining and deliberate leaks
 
 ### Thread-Local Storage Patterns
 - `THREAD_ARENA` (MT only): private `RefCell<Option<Slot>>`, where `Slot` holds an optional exact identity and optional `Box<GCArena>`. An initializing or extracted slot remains reserved until its owner drops; internal safepoint dispatch can borrow the Box but cannot replace or extract it.
-- `MANAGED_THREAD_ID`: A thread-local `Cell<Option<ArenaId>>` in `dotnet_utils::sync`. Cached via `get_current_thread_id()` to avoid repeatedly querying the ThreadManager for identity.
+- `MANAGED_THREAD_ID`: A thread-local `Cell<Option<ArenaId>>` in `dotnet_utils::sync`, cached via `get_current_thread_id()` for GC arena/owner lookup. It is not the guest-visible managed `Thread` ID; that ID is separate, and the ST finalizer segment has its own logical owner key without a new allocation arena.
+- Managed `[ThreadStatic]` storage is keyed by type, generic arguments and logical owner. Only the
+  owner may create a missing entry. Closure and removal share the table lock, and saved metadata
+  for an exited owner fails rather than recreating storage. Pool and finalizer executors keep their
+  storage while serving their work; ordinary statics are unaffected.
 
 ### Architecture Routing (`SharedGlobalState`)
 The concrete `ThreadManager` (implementing `ThreadManagerOps`) is instantiated once and held as `Arc<ThreadManager>`. It is distributed throughout the VM by being embedded inside `SharedGlobalState` (the `thread_manager` field). Every `VesContext` has a reference to `SharedGlobalState`, granting all CIL instructions and BCL intrinsics access to threading and synchronization primitives.

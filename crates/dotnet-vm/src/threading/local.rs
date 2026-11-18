@@ -73,6 +73,14 @@ pub(crate) struct ManagedThreadLocalState<'gc> {
     current_id: Cell<i32>,
     #[cfg(not(feature = "multithreading"))]
     background: Cell<bool>,
+    #[cfg(not(feature = "multithreading"))]
+    finalizer_active: Cell<bool>,
+    #[cfg(not(feature = "multithreading"))]
+    finalizer_current: RefCell<Option<ObjectRef<'gc>>>,
+    #[cfg(not(feature = "multithreading"))]
+    finalizer_id: Cell<i32>,
+    #[cfg(not(feature = "multithreading"))]
+    finalizer_background: Cell<bool>,
 }
 
 impl<'gc> ManagedThreadLocalState<'gc> {
@@ -83,14 +91,31 @@ impl<'gc> ManagedThreadLocalState<'gc> {
             current_id: Cell::new(next_managed_id()),
             #[cfg(not(feature = "multithreading"))]
             background: Cell::new(false),
+            #[cfg(not(feature = "multithreading"))]
+            finalizer_active: Cell::new(false),
+            #[cfg(not(feature = "multithreading"))]
+            finalizer_current: RefCell::new(None),
+            #[cfg(not(feature = "multithreading"))]
+            finalizer_id: Cell::new(next_managed_id()),
+            #[cfg(not(feature = "multithreading"))]
+            finalizer_background: Cell::new(true),
         }
     }
 
     pub(crate) fn current(&self) -> Option<ObjectRef<'gc>> {
+        #[cfg(not(feature = "multithreading"))]
+        if self.finalizer_active.get() {
+            return *self.finalizer_current.borrow();
+        }
         *self.current.borrow()
     }
 
     pub(crate) fn set_current(&self, thread: ObjectRef<'gc>) {
+        #[cfg(not(feature = "multithreading"))]
+        if self.finalizer_active.get() {
+            *self.finalizer_current.borrow_mut() = Some(thread);
+            return;
+        }
         *self.current.borrow_mut() = Some(thread);
     }
 
@@ -100,6 +125,10 @@ impl<'gc> ManagedThreadLocalState<'gc> {
     }
 
     pub(crate) fn current_id(&self) -> i32 {
+        #[cfg(not(feature = "multithreading"))]
+        if self.finalizer_active.get() {
+            return self.finalizer_id.get();
+        }
         self.current_id.get()
     }
 
@@ -109,13 +138,38 @@ impl<'gc> ManagedThreadLocalState<'gc> {
     }
 
     #[cfg(not(feature = "multithreading"))]
-    pub(crate) fn background(&self) -> bool {
-        self.background.get()
+    pub(crate) fn set_finalizer_active(&self, active: bool) {
+        self.finalizer_active.set(active);
     }
 
     #[cfg(not(feature = "multithreading"))]
-    pub(crate) fn set_background(&self, value: bool) {
-        self.background.set(value);
+    pub(crate) fn id_for(&self, thread: ObjectRef<'gc>) -> Option<i32> {
+        if *self.current.borrow() == Some(thread) {
+            Some(self.current_id.get())
+        } else if *self.finalizer_current.borrow() == Some(thread) {
+            Some(self.finalizer_id.get())
+        } else {
+            None
+        }
+    }
+
+    #[cfg(not(feature = "multithreading"))]
+    pub(crate) fn background_for(
+        &self,
+        thread: ObjectRef<'gc>,
+        value: Option<bool>,
+    ) -> Option<bool> {
+        let flag = if *self.current.borrow() == Some(thread) {
+            &self.background
+        } else if *self.finalizer_current.borrow() == Some(thread) {
+            &self.finalizer_background
+        } else {
+            return None;
+        };
+        if let Some(value) = value {
+            flag.set(value);
+        }
+        Some(flag.get())
     }
 
     pub(crate) fn records_write(
@@ -133,12 +187,14 @@ impl<'gc> Default for ManagedThreadLocalState<'gc> {
     }
 }
 
-// SAFETY: F5.TracesEveryGcRef — the current Thread and every retained record's Thread key,
+// SAFETY: F5.TracesEveryGcRef — both segment Threads and every retained record's Thread key,
 // delegate and start argument are traced. Completed records are removed before tracing so no
 // untraced `Gc` remains in this root. IDs and retention flags contain no GC-managed references.
 unsafe impl<'gc> Collect<'gc> for ManagedThreadLocalState<'gc> {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         self.current.borrow().trace(cc);
+        #[cfg(not(feature = "multithreading"))]
+        self.finalizer_current.borrow().trace(cc);
         let mut records = self.records.borrow_mut();
         records.retain(|_, record| record.retained.load(Ordering::Acquire));
         for (thread, record) in records.iter() {

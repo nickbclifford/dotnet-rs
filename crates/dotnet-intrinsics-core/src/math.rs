@@ -1276,7 +1276,10 @@ mod byte_operand_tests {
         fn push_string(&mut self, _: dotnet_value::CLRString) {
             unreachable!()
         }
-        fn push_interned_string(&mut self, _: &[u16]) {
+        fn push_interned_string(&mut self, _: &[u16]) -> StepResult {
+            unreachable!()
+        }
+        fn push_empty_string(&mut self) {
             unreachable!()
         }
         fn push_interned_string_object(

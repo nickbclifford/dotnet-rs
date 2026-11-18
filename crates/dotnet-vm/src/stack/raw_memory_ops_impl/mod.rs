@@ -3,7 +3,7 @@ use crate::{
     error::{CompareExchangeError, MemoryAccessError},
     stack::{
         context::VesContext,
-        ops::{RawMemoryOps, VesInternals, VmRawMemoryOps, VmStaticsOps},
+        ops::{RawMemoryOps, VesInternals, VmRawMemoryOps},
     },
     threading::ThreadManagerOps,
 };
@@ -175,7 +175,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 unsafe { memory.write_to_unmanaged(self.gc, ptr.as_ptr(), value, layout) }
             }
             PointerOrigin::Static(metadata) => {
-                let storage = self.statics().get_for_metadata(&metadata);
+                let storage = self.static_storage_for_metadata(&metadata)?;
                 storage.storage.with_data_mut(|data| {
                     let mut memory = RawMemoryAccess::new(&self.local.heap);
                     // SAFETY: F10.RawMemoryAccessValid — the static storage stays borrowed for the closure, the helper bounds-checks
@@ -266,7 +266,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 }
             }
             PointerOrigin::Static(metadata) => {
-                let storage = self.statics().get_for_metadata(&metadata);
+                let storage = self.static_storage_for_metadata(&metadata)?;
                 storage.storage.with_data(|data| {
                     let memory = RawMemoryAccess::new(&self.local.heap);
                     // SAFETY: F10.RawMemoryAccessValid — the static storage stays borrowed for the closure, the helper bounds-checks
@@ -342,7 +342,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 unsafe { memory.write_bytes_ptr(ptr, data) }
             }
             PointerOrigin::Static(metadata) => {
-                let storage = self.statics().get_for_metadata(&metadata);
+                let storage = self.static_storage_for_metadata(&metadata)?;
                 storage
                     .storage
                     .with_data_mut(|obj_data| bounds_checked_slice_copy(obj_data, data, offset))
@@ -401,7 +401,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 unsafe { memory.read_bytes_ptr(ptr, dest) }
             }
             PointerOrigin::Static(metadata) => {
-                let storage = self.statics().get_for_metadata(&metadata);
+                let storage = self.static_storage_for_metadata(&metadata)?;
                 storage
                     .storage
                     .with_data(|obj_data| bounds_checked_slice_read(obj_data, dest, offset))
@@ -470,7 +470,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 }
             }
             PointerOrigin::Static(metadata) => {
-                let storage = self.statics().get_for_metadata(&metadata);
+                let storage = self.static_storage_for_metadata(&metadata)?;
                 storage.storage.with_data_mut(|data| {
                     let range = checked_window(offset, size_of::<*mut u8>(), data.len())?;
                     let slot = NonNull::new(data.as_mut_ptr().wrapping_add(range.start))
@@ -538,9 +538,11 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 }
             }
             PointerOrigin::Static(metadata) => {
-                let storage = self.statics().get_for_metadata(&metadata);
-                // SAFETY: F10.BorrowedStorageStable — `storage` is retained by the statics registry for this call, and the atomic
-                // operation below synchronizes the access.
+                let storage = self
+                    .static_storage_for_metadata(&metadata)
+                    .map_err(CompareExchangeError::Bounds)?;
+                // SAFETY: F10.BorrowedStorageStable; F6.ThreadStaticRoot — the local Arc retains
+                // the fixed allocation for this call, and the atomic operation synchronizes access.
                 let base_ptr = unsafe { storage.storage.raw_data_ptr() };
                 // SAFETY: F10.RawMemoryAccessValid — this function's caller guarantees `offset` (and width) lie within the static
                 // storage; no bounds check is done here.
@@ -642,9 +644,9 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 }
             }
             PointerOrigin::Static(metadata) => {
-                let storage = self.statics().get_for_metadata(&metadata);
-                // SAFETY: F10.BorrowedStorageStable — `storage` is retained by the statics registry for this call, and the atomic
-                // operation below synchronizes the access.
+                let storage = self.static_storage_for_metadata(&metadata)?;
+                // SAFETY: F10.BorrowedStorageStable; F6.ThreadStaticRoot — the local Arc retains
+                // the fixed allocation for this call, and the atomic operation synchronizes access.
                 let base_ptr = unsafe { storage.storage.raw_data_ptr() };
                 // SAFETY: F10.RawMemoryAccessValid — this function's caller guarantees `offset` (and width) lie within the static
                 // storage; no bounds check is done here.
@@ -731,9 +733,9 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 }
             }
             PointerOrigin::Static(metadata) => {
-                let storage = self.statics().get_for_metadata(&metadata);
-                // SAFETY: F10.BorrowedStorageStable — `storage` is retained by the statics registry for this call, and the atomic
-                // operation below synchronizes the access.
+                let storage = self.static_storage_for_metadata(&metadata)?;
+                // SAFETY: F10.BorrowedStorageStable; F6.ThreadStaticRoot — the local Arc retains
+                // the fixed allocation for this call, and the atomic operation synchronizes access.
                 let base_ptr = unsafe { storage.storage.raw_data_ptr() };
                 // SAFETY: F10.RawMemoryAccessValid — this function's caller guarantees `offset` (and width) lie within the static
                 // storage; no bounds check is done here.
@@ -812,7 +814,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 }
             }
             PointerOrigin::Static(metadata) => {
-                let storage = self.statics().get_for_metadata(&metadata);
+                let storage = self.static_storage_for_metadata(&metadata)?;
                 storage.storage.with_data(|data| {
                     // SAFETY: F10.RawMemoryAccessValid — Static-field metadata keeps `offset` within this live storage.
                     let abs_ptr = unsafe { data.as_ptr().add(offset.as_usize()) };
@@ -896,7 +898,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 }
             }
             PointerOrigin::Static(metadata) => {
-                let storage = self.statics().get_for_metadata(&metadata);
+                let storage = self.static_storage_for_metadata(&metadata)?;
                 storage.storage.with_data_mut(|data| {
                     // SAFETY: F10.RawMemoryAccessValid — Static-field metadata keeps `offset` within this live storage.
                     let abs_ptr = unsafe { data.as_mut_ptr().add(offset.as_usize()) };
@@ -977,9 +979,7 @@ impl<'a, 'gc> VmRawMemoryOps<'gc> for VesContext<'a, 'gc> {
         Ok(match origin {
 
             PointerOrigin::Static(metadata) => {
-                let storage = self
-                    .statics()
-                    .get_for_metadata(metadata);
+                let storage = self.static_storage_for_metadata(metadata)?;
                 storage.storage.with_data(|data| {
                     #[expect(clippy::multiple_unsafe_ops_per_block, reason = "forming the static offset address and wrapping its proven non-null result share one storage proof")]
                     // SAFETY: F10.RawMemoryAccessValid — Static origins use the unchecked
@@ -1181,12 +1181,12 @@ mod safe_api_tests {
                 .init(
                     metadata.type_desc.clone(),
                     &ctx.with_generics(&generics),
-                    ctx.thread_id.get(),
+                    crate::stack::ThreadOps::thread_id(&ctx),
                 )
                 .unwrap();
             let static_len = ctx
-                .statics()
-                .get_for_metadata(&metadata)
+                .static_storage_for_metadata(&metadata)
+                .unwrap()
                 .storage
                 .with_data(|data| data.len());
             // A live frame block exercises the same operations through the serial resolver.
@@ -1371,6 +1371,10 @@ mod safe_api_tests {
                 thread_id: Some(200),
                 ..(*first).clone()
             });
+            // Each logical owner creates its own entry before the foreign resolver uses it.
+            assert!(ctx.shared.statics.get_for_metadata(&first, 200).is_err());
+            ctx.shared.statics.get_for_metadata(&first, 100).unwrap();
+            ctx.shared.statics.get_for_metadata(&second, 200).unwrap();
             let first_origin = PointerOrigin::Static(first.clone());
             let second_origin = PointerOrigin::Static(second);
             let address = ctx

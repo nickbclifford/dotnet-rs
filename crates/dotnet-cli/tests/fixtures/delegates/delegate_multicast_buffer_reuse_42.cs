@@ -37,7 +37,7 @@ public class Program
         trace = 0;
         for (int i = 0; i < 3; i++)
         {
-            // Exercises repeated Invoke classification and multicast continuation argument reuse.
+            // Exercises repeated Invoke classification and multicast argument reuse.
             if (chain(i, 2, 3, 4) != i * 10 + 9)
                 return 2;
         }

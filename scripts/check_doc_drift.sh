@@ -103,7 +103,7 @@ CHECKS=(
 
   # --- DELEGATES_AND_DISPATCH.md ---
   "DELEGATES_AND_DISPATCH.md|unified_dispatch|*.rs"
-  "DELEGATES_AND_DISPATCH.md|MulticastState|*.rs"
+  "DELEGATES_AND_DISPATCH.md|try_start_multicast|*.rs"
 
   # --- TYPE_RESOLUTION_AND_CACHING.md ---
   "TYPE_RESOLUTION_AND_CACHING.md|GlobalCaches|*.rs"

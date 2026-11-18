@@ -10,7 +10,7 @@ Method dispatch in `dotnet-rs` has several interleaved paths that interact in no
 2. **Intrinsic dispatch**: Method call intercepted → native Rust handler
 3. **Virtual dispatch**: Runtime type → vtable lookup → resolved method
 4. **Delegate dispatch**: Special interception before normal method resolution
-5. **Multicast dispatch**: Sequential invocation of delegate targets with stepping protocol
+5. **Multicast dispatch**: Sequential invocation of delegate targets through native effects
 
 ## Dispatch Flow (`dispatch/mod.rs`)
 
@@ -19,13 +19,12 @@ Method dispatch in `dotnet-rs` has several interleaved paths that interact in no
 The main dispatch loop in `step` / `step_normal`:
 
 1. Check exception state (`ExceptionState::None`, `ExecutingHandler`, `Filtering`). If an exception is being handled, route to `ves_context.handle_exception()`.
-2. Check for pending fallback multicast steps in the current frame's `multicast_state`. If present, route to `handle_multicast_step`; admitted multicast calls use native activations.
-3. Fetch the CIL instruction at the current Instruction Pointer (`IP`).
-4. Record the original IP and evaluation stack height to allow for safe yield/suspension retries.
-5. Emit an instruction trace when tracing is enabled and record it in the `InstructionRingBuffer` (in `dispatch/ring_buffer.rs`). This circular buffer maintains a history of the last N executed instructions to provide context during crashes or for performance analysis.
-6. Look up the handler in `InstructionRegistry::dispatch` (generated at build time via `dotnet-macros`).
-7. Execute the handler, which receives a `VesContext` and returns a `StepResult`.
-8. Process the `StepResult`:
+2. Fetch the CIL instruction at the current Instruction Pointer (`IP`).
+3. Record the original IP and evaluation stack height to allow for safe yield/suspension retries.
+4. Emit an instruction trace when tracing is enabled and record it in the `InstructionRingBuffer` (in `dispatch/ring_buffer.rs`). This circular buffer maintains a history of the last N executed instructions to provide context during crashes or for performance analysis.
+5. Look up the handler in `InstructionRegistry::dispatch` (generated at build time via `dotnet-macros`).
+6. Execute the handler, which receives a `VesContext` and returns a `StepResult`.
+7. Process the `StepResult`:
    - `Continue`: Increment IP and continue loop.
    - `Jump(target)`: Branch to the target IP and continue.
    - `Yield`: Return from `step` to yield control (e.g., GC safe point).
@@ -64,7 +63,7 @@ Delegate invocation and intrinsics such as `Delegate.Target` and `Delegate.Metho
 
 `try_delegate_dispatch` runs inside `VesContext::dispatch_resolved_method_with_mode`, after method resolution, not as a pre-call intercept. It only engages for body-less methods on delegate types:
 - It bails out immediately unless `method.body()` is `None` and `is_delegate_type` reports the parent inherits from `System.Delegate`.
-- For `Invoke` it dispatches the delegate (single or multicast); `.ctor` returns `None` and is handled by the support-library stub; `BeginInvoke`/`EndInvoke` throw `System.NotSupportedException`.
+- For `Invoke` it dispatches a single-target delegate; multicast was selected earlier; `.ctor` returns `None` and is handled by the support-library stub; `BeginInvoke`/`EndInvoke` throw `System.NotSupportedException`.
 - Returns `Some(StepResult)` if handled, `None` to fall through to normal dispatch.
 
 ### `invoke_delegate`
@@ -78,16 +77,18 @@ Single delegate invocation:
 ### Multicast invocation
 
 `VesContext::try_start_multicast` selects the effects path before consuming the operand window.
-Scalars, object references, and supported heap and frame-home byrefs are rooted while
+Scalars, unmanaged pointer values, object references, supported byrefs, and typed references are rooted while
 `multicast_body` calls each resolved target through the transparent call effect. Each target is
-resolved on demand; the last return is published, and exceptions cross the native boundary without
+resolved on demand; the last return, including an unchanged byref, is published, and exceptions cross the native boundary without
 resuming the body. Single-target delegates remain synchronous.
 
-Ref-struct values, byref targets containing managed pointers, byref returns, `TypedReference`
-and `Transient` byrefs (invalid) are excluded; the first four use `MulticastState`. `ExecutionEngine::handle_multicast_step` retains the original arguments,
-discards intermediate returns, and dispatches each target in order. If dispatch starts or waits
-for a type initializer, it rebuilds the pending target call after initialization instead of
-advancing the list. The effects call handler similarly retains a pending target across initialization.
+Ref-struct values and byref targets containing managed pointers follow the same path. Nested
+field origins are traced by the value layout; valid heap, frame-home, static, unmanaged and
+cross-arena field encodings can be read again. A transient tag can be written but cannot be
+read as a stored field. Unmanaged addresses retain the guest's `F10.RawMemoryAccessValid`
+obligation. Raw pointer values retain their address provenance, but not a managed owner.
+Transient byref operands, including typed references, are rejected before operand
+commitment. A pending target remains staged across type initialization.
 
 ### Key Delegate Intrinsics
 
@@ -136,7 +137,7 @@ When a resolved method call is about to be dispatched, both VM-context and `Exec
 ## Non-Obvious Connections
 
 ### Delegates ↔ Exception Handling
-A throwing target stops the list. Exception search crosses a native boundary for admitted calls or the dummy `Invoke` frame for fallback calls, running the child's cleanup before the outer handler.
+A throwing target stops the list. Exception search crosses the native boundary, running the child's cleanup before the outer handler.
 
 ### Delegates ↔ Reflection
 `delegate_get_method` returns a `MethodInfo` reflection object, connecting the delegate system to the reflection registry (`ReflectionRegistry` in `state.rs`).

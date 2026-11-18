@@ -374,9 +374,10 @@ unsafe impl<'gc> Collect<'gc> for ObjectRef<'gc> {
                     // accepted-risk boundary linked from the `Collect` SAFETY comment above.
                     // SAFETY: F1.StwParked — During STW all mutator threads are at safe points,
                     // so the owning arena cannot be freed. F1.RetiredCollectionExclusion
-                    // extends that to retired owners: none frees its arena while any worker is
-                    // running or finalizing or a finalizer is pending (abort abandons pending
-                    // finalizers), so no collection can trace into a freed arena during shutdown.  `owner_id` is
+                    // extends that to retired owners: empty owners unregister under collection
+                    // exclusion after a completed sweep proves no object can be referenced;
+                    // nonempty owners wait for shutdown quiescence before unregistering.
+                    // Exact leases drain outside exclusion before storage is freed. `owner_id` is
                     // immutable after construction, so reading it without the
                     // lock is safe even under concurrent observation.
                     let owner_id = unsafe { (*(*lock_ptr).as_ptr()).owner_id() };

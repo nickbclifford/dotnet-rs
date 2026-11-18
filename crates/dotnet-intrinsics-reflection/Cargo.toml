@@ -17,6 +17,7 @@ tracing = { workspace = true }
 
 [features]
 default = []
+multithreading = ["dotnet-vm-ops/multithreading"]
 generic-constraint-validation = ["dotnet-types/generic-constraint-validation"]
 
 [lints]

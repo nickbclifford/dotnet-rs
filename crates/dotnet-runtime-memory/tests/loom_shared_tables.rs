@@ -2,7 +2,6 @@
 
 //! Loom models that drive the production VM-wide GC handle table and f-reachable queue.
 //!
-//! `dotnet-vm` does not compile under `cfg(loom)` with `multithreading`, but this crate does, so
 //! `SharedGcHandles` is used directly. `Finalizers` lives in `dotnet-vm` behind the
 //! `multithreading` feature; its source file has no other crate-local dependencies, so it is
 //! compiled verbatim into this test with `#[path]` instead of being mirrored.

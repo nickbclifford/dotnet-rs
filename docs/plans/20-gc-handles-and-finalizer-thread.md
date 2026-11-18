@@ -80,8 +80,9 @@ Out:
     activates the entry in a shared active set if the key is live; in `TraceDependents`, each
     arena traces the active values it owns. The key's owner clears both halves in `ClearWeak`
     when the key is dead.
-  - Retired arenas keep servicing collection until shutdown
-    (`F1.RetiredCollectionExclusion`), so every entry's owner takes part in each collection.
+  - Retired arenas with live objects keep servicing collection. Empty retired arenas can be
+    released after a coordinated sweep as described by `F1.RetiredCollectionExclusion` and
+    [plan 26](26-thread-lifecycle-and-multicast-fallback.md).
 - **Mutation during collection.** A handle allocated or set from another thread while a
   collection is in progress must still be traced. Confirm that the collector re-traces arena
   roots at the end of marking (the property plan 14's registry relies on), and record that
@@ -213,8 +214,9 @@ Closed after the review (2026-11-13, evidence below): Loom, Miri and single-thre
 
 **Loom.** `crates/dotnet-runtime-memory/tests/loom_shared_tables.rs` drives the production
 `SharedGcHandles` and `Finalizers` (compiled verbatim from `dotnet-vm/src/finalizers.rs` with
-`#[path]`, because `dotnet-vm` itself does not compile under `cfg(loom)` with `multithreading`;
-`dotnet-runtime-memory` does). Run by the `loom` CI job:
+`#[path]`; at the time of this evidence, `dotnet-vm` did not compile under `cfg(loom)` with
+`multithreading`). The VM now compiles and the worker registry has its own model; see
+[CI](../CI.md#loom). Run by the `loom` CI job:
 
 ```bash
 RUSTFLAGS="--cfg loom" cargo nextest run -p dotnet-runtime-memory --test loom_shared_tables --features multithreading

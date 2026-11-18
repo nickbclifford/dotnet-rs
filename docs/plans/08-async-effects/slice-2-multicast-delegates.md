@@ -2,8 +2,10 @@
 
 **Status:** Complete
 **Outcome:** Admitted multicast invocations use transparent native calls in both configurations,
-preserving target order, return values and exception behavior. The existing `MulticastState`
-continuation remains for shapes the effects transport cannot safely represent.
+preserving target order, return values and exception behavior. The `MulticastState` continuation
+retained at this slice's completion was subsequently removed by
+[plan 26](../26-thread-lifecycle-and-multicast-fallback.md). The path description below records
+the slice-time design; see the delegate documentation for the current path.
 
 ## Consumer and current path
 

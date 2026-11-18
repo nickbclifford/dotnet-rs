@@ -37,6 +37,7 @@ pub(crate) enum NativeOutput {
     NativeFloat,
     Object,
     ValueType,
+    ByRef,
     Unsupported,
 }
 
@@ -166,6 +167,9 @@ impl<'gc> CallState<'gc> {
 
 pub struct VesContext<'a, 'gc> {
     pub(crate) gc: GCHandle<'gc>,
+    // INVARIANT: F6.ThreadStaticRoot — a resolved block stays allocated for this mutation's
+    // accesses even if its owner closes concurrently; STW waits for the mutation to finish.
+    pub(crate) static_storage_borrows: std::cell::RefCell<Vec<Arc<crate::statics::StaticStorage>>>,
     pub(crate) evaluation_stack: &'a mut EvaluationStack<'gc>,
     pub(crate) frame_stack: &'a mut FrameStack<'gc>,
     pub(crate) parked_finalizer_caller: &'a Option<ThreadContext<'gc>>,
@@ -185,11 +189,14 @@ struct VesManagedPtrResolver<'a, 'gc> {
     frame_stack: &'a FrameStack<'gc>,
     parked_finalizer_caller: &'a Option<ThreadContext<'gc>>,
     statics: &'a StaticStorageManager,
+    actor: u64,
+    borrows: &'a std::cell::RefCell<Vec<Arc<crate::statics::StaticStorage>>>,
 }
 
 impl<'a, 'gc, 'resolver> ManagedPtrResolver<'resolver> for VesManagedPtrResolver<'a, 'gc> {
     fn static_storage_base(&self, metadata: &StaticMetadata) -> Option<NonNull<u8>> {
-        let storage = self.statics.get_for_metadata(metadata);
+        let storage = self.statics.get_for_metadata(metadata, self.actor).ok()?;
+        self.borrows.borrow_mut().push(storage.clone());
         storage
             .storage
             .with_data(|data| NonNull::new(data.as_ptr().cast_mut()))
@@ -197,7 +204,8 @@ impl<'a, 'gc, 'resolver> ManagedPtrResolver<'resolver> for VesManagedPtrResolver
 
     #[inline]
     fn static_storage_block(&self, metadata: &StaticMetadata) -> Option<(NonNull<u8>, usize)> {
-        let storage = self.statics.get_for_metadata(metadata);
+        let storage = self.statics.get_for_metadata(metadata, self.actor).ok()?;
+        self.borrows.borrow_mut().push(storage.clone());
         let (base, len) = storage.storage.observe_data_block();
         NonNull::new(base.cast_mut()).map(|base| (base, len))
     }
@@ -225,6 +233,8 @@ impl<'a, 'gc> VmManagedPtrDecodeCacheOps<'gc> for VesContext<'a, 'gc> {
             frame_stack: &*self.frame_stack,
             parked_finalizer_caller: self.parked_finalizer_caller,
             statics: &self.shared.statics,
+            actor: self.thread_id().as_u64(),
+            borrows: &self.static_storage_borrows,
         };
         // SAFETY: F10.RawMemoryAccessValid — The field reader supplies one complete ManagedPtr encoding
         // from live managed storage. The cache is rooted by this CallStack and
@@ -242,6 +252,22 @@ impl<'a, 'gc> VmManagedPtrDecodeCacheOps<'gc> for VesContext<'a, 'gc> {
 }
 
 impl<'a, 'gc> VesContext<'a, 'gc> {
+    pub(crate) fn static_storage_for_metadata(
+        &self,
+        metadata: &StaticMetadata,
+    ) -> Result<Arc<crate::statics::StaticStorage>, dotnet_types::error::MemoryAccessError> {
+        let storage = self
+            .shared
+            .statics
+            .get_for_metadata(metadata, self.thread_id().as_u64())?;
+        // The map can be closed by another owner concurrently. Retain the allocation
+        // through this mutation; a collection cannot trace until mutators have stopped.
+        self.static_storage_borrows
+            .borrow_mut()
+            .push(storage.clone());
+        Ok(storage)
+    }
+
     pub(crate) fn is_byref_home(
         &self,
         serial: dotnet_value::pointer::FrameHomeSerial,
@@ -457,11 +483,6 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         }
 
         if !was_auto_invoked {
-            if self.frame_stack.current_frame().multicast_state.is_some() {
-                tracing::debug!("handle_return: in multicast state, stopping return");
-                return StepResult::Continue;
-            }
-
             tracing::debug!("handle_return: incrementing IP of caller");
             self.frame_stack.increment_ip();
             let out_of_bounds = {

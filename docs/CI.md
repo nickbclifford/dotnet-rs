@@ -60,7 +60,7 @@ files and fails on drift.
 | `format`, `clippy`, `test` | `cargo fmt`; `SHARED_FEATURE_MATRIX` in `xtask/src/main.rs` (`cargo run -p xtask -- matrix test-features`). The `test` job also runs the native-effects compile-fail doctests and `scripts/check_vm_effects_compile_fail.py` in no-features and multithreading, and the multithreading hang-probe filters listed in its YAML step. |
 | `clippy-release` | No features and `multithreading` with `--release`, so code under `cfg(not(debug_assertions))` is linted |
 | `provenance-lints` | `scripts/check_provenance_lints.sh` |
-| `loom` | `crates/dotnet-vm/tests/loom_stw.rs` and `crates/dotnet-runtime-memory/tests/loom_shared_tables.rs` |
+| `loom` | `crates/dotnet-vm/tests/loom_stw.rs`, `crates/dotnet-vm/tests/loom_workers.rs` and `crates/dotnet-runtime-memory/tests/loom_shared_tables.rs` |
 | `build-script-regression` | `scripts/check_build_script_regressions.sh` |
 | `build-fixtures` | `xtask fixtures` (output path and cache key) |
 | `miri-value`, `miri-frame-blocks`, `miri-owner-retention` | Selectors and `--require` counts in the job steps in `ci.yml` |
@@ -152,12 +152,12 @@ cargo +"$NIGHTLY" miri test -p dotnet-vm-data --lib --no-default-features frame_
 ```
 
 The `miri-cross-arena` matrix also runs the native-effects bridge, byref-descriptor, activation,
-condition-wait, reflection collection retry, static-initializer failure/retirement and legacy-frame
-disposal/pooling, monitor heap and frame-home write-through and nested-call root-transfer
-singletons in both configurations. Multithreading also runs finalizer-wait registration and
-retired-owner pending-queue controls, legacy initializer worker host-error waiter completion,
-foreign-source Substring, byref, child-return and monitor-wait controls, and a local contended
-monitor frame-home collection control. Bridge rows use `dotnet-vm-ops`; activation rows use `dotnet-vm`.
+condition-wait, static-initializer failure/retirement, activation-abandonment, monitor heap and
+frame-home write-through, and nested-call root-transfer singletons in both configurations.
+Multithreading also runs finalizer-wait registration and retired-owner pending-queue controls,
+initializer cycle and busy-owner wait checks, foreign-source Substring, byref, child-return and
+monitor-wait controls, and a local contended monitor frame-home collection control. Bridge rows use
+`dotnet-vm-ops`; activation rows use `dotnet-vm`.
 
 Reproduce one cross-arena row with its selector from the `miri-cross-arena` `include` list:
 
@@ -201,8 +201,24 @@ DOTNET_SKIP_BUILD=1 RUSTFLAGS="--cfg loom" \
 Loom is a rustc `cfg`, not a Cargo feature. The model is exhaustive at three threads (the
 collector and two mutators).
 
-The production shared tables are driven by a second suite, because `dotnet-vm` does not compile
-under `cfg(loom)` with `multithreading` but `dotnet-runtime-memory` does:
+The production worker registry is compiled verbatim into its own suite, using Loom threads,
+completion mutex/condition variable and scheduler yields in place of OS operations. Its models
+cover completion publication and waiting, stable indices and once-only handle reaping, abort and
+finalization, empty-arena release against collection and shutdown, and shutdown under a modeled
+collection-exclusion lock. Releasing guards preserve a stable terminal result if an unwind races
+the transition. Each explores up to three threads and two preemptions, with a 20,000-branch limit
+and no permutation or duration cutoff. Loom does not model timed waits; the completion model
+provides a notification. The collection lock and retired-owner wake are protocol adapters, not a
+model of gc-arena mark colors or the full executor.
+
+```bash
+DOTNET_SKIP_BUILD=1 RUSTFLAGS="--cfg loom" \
+  cargo nextest run -p dotnet-vm --test loom_workers --no-default-features --features multithreading
+DOTNET_SKIP_BUILD=1 RUSTFLAGS="--cfg loom" \
+  cargo check -p dotnet-vm --features multithreading --all-targets
+```
+
+The production shared tables are driven by a separate suite:
 
 ```bash
 DOTNET_SKIP_BUILD=1 RUSTFLAGS="--cfg loom" \

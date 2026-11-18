@@ -186,6 +186,115 @@ pub fn intrinsic_method_base_get_method_from_handle<'gc, T: ReflectionIntrinsicH
     StepResult::Continue
 }
 
+#[cfg(feature = "multithreading")]
+fn preflight_runtime_method_objects<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    method: &MethodDescription,
+) -> Option<StepResult> {
+    use dotnet_vm_ops::effects::CanonicalKey;
+
+    let name = method.method().name.as_ref();
+    let count = method.signature().parameters.len();
+    if !matches!(
+        name,
+        "GetDeclaringType"
+            | "get_DeclaringType"
+            | "GetReturnType"
+            | "get_ReturnType"
+            | "GetBaseDefinition"
+            | "GetGenericArguments"
+            | "GetGenericMethodDefinition"
+            | "MakeGenericMethod"
+    ) {
+        return None;
+    }
+    let StackValue::ObjectRef(receiver) = ctx.peek_stack_at(count) else {
+        return None;
+    };
+    let (target_method, lookup) = crate::common::resolve_runtime_method(ctx, receiver).ok()?;
+    let mut keys = Vec::new();
+    match name {
+        "GetDeclaringType" | "get_DeclaringType" => {
+            if !target_method.resolution().is_dynamic_method() {
+                keys.push(CanonicalKey::Type(declaring_runtime_type(
+                    ctx,
+                    &target_method,
+                    &lookup,
+                )));
+            }
+        }
+        "GetReturnType" | "get_ReturnType" => {
+            keys.push(CanonicalKey::Type(resolve_return_type(
+                ctx,
+                &target_method,
+                &lookup,
+            )));
+        }
+        "GetBaseDefinition" => {
+            let (base, base_lookup) =
+                resolve_base_method_definition(ctx, &target_method, &lookup).ok()?;
+            keys.push(CanonicalKey::Method(base, base_lookup));
+        }
+        "GetGenericArguments" => {
+            let arity = target_method.method().generic_parameters.len();
+            for index in 0..arity {
+                let runtime_type = lookup
+                    .method_generics
+                    .get(..arity)
+                    .and_then(|_| target_method.own_method_arg(&lookup, index).ok())
+                    .and_then(|arg| runtime_type_from_concrete(ctx.loader().as_ref(), arg))
+                    .unwrap_or_else(|| RuntimeType::MethodParameter {
+                        owner: target_method.clone(),
+                        index: index as u16,
+                    });
+                keys.push(CanonicalKey::Type(runtime_type));
+            }
+        }
+        "GetGenericMethodDefinition" => {
+            if target_method.method().generic_parameters.is_empty() {
+                return None;
+            }
+            let definition_lookup =
+                GenericLookup::from_arcs(lookup.type_generics.clone(), Vec::new().into());
+            keys.push(CanonicalKey::Method(target_method, definition_lookup));
+        }
+        "MakeGenericMethod" => {
+            let arity = target_method.method().generic_parameters.len();
+            if arity == 0 {
+                return None;
+            }
+            let StackValue::ObjectRef(type_args) = ctx.peek_stack_at(0) else {
+                return None;
+            };
+            let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
+            let args = type_args
+                .try_as_vector(|vector| vector.object_ref_elements(&gc).collect::<Vec<_>>())
+                .ok()?;
+            if args.len() != arity {
+                return None;
+            }
+            let concrete = args
+                .into_iter()
+                .map(|arg| {
+                    crate::common::resolve_runtime_type(ctx, arg)
+                        .ok()
+                        .map(|runtime_type| runtime_type.to_concrete(ctx.loader().as_ref()))
+                })
+                .collect::<Option<Vec<_>>>()?;
+            let mut target_lookup = lookup;
+            target_lookup.set_method_generics(concrete.into());
+            keys.push(CanonicalKey::Method(target_method, target_lookup));
+        }
+        _ => unreachable!(),
+    }
+    for key in keys {
+        if let Some(step) = crate::common::await_canonical_object(ctx, key) {
+            return Some(step);
+        }
+    }
+    None
+}
+
 #[dotnet_intrinsic("string System.Reflection.MethodInfo::get_Name()")]
 #[dotnet_intrinsic("System.Type System.Reflection.MethodInfo::get_DeclaringType()")]
 #[dotnet_intrinsic("System.Type System.Reflection.MethodInfo::get_ReturnType()")]
@@ -262,6 +371,10 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
     method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
+    #[cfg(feature = "multithreading")]
+    if let Some(step) = preflight_runtime_method_objects(ctx, &method) {
+        return step;
+    }
     let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let method_name = &*method.method().name;
     let param_count = method.signature().parameters.len();

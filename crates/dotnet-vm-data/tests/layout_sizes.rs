@@ -37,9 +37,10 @@ const STACK_FRAME_SIZE_MATRIX: [(bool, usize); 2] = [
     // Removing the reflection continuation (a return-action Vec and a boxed pending target)
     // saved 32 bytes.
     // Moving type initialization to effects removed the 16-byte frame initializer claim.
+    // Removing the multicast continuation saves 48 bytes.
     // (multithreading, expected_size)
-    (false, 544),
-    (true, 544),
+    (false, 496),
+    (true, 496),
 ];
 
 #[cfg(target_pointer_width = "64")]

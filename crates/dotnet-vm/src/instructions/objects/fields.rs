@@ -103,15 +103,21 @@ pub(crate) fn static_field_storage<'gc, T: VesOps<'gc>>(
     ctx: &T,
     field: &FieldDescription,
     generics: &GenericLookup,
-) -> (crate::sync::Arc<crate::statics::StaticStorage>, Option<u64>) {
+) -> Result<
+    (crate::sync::Arc<crate::statics::StaticStorage>, Option<u64>),
+    dotnet_types::error::MemoryAccessError,
+> {
     let thread = static_field_thread(ctx, field);
     let storage = match thread {
-        Some(id) => ctx
-            .statics()
-            .get_for_thread(field.parent.clone(), generics, id),
+        Some(id) => ctx.statics().get_for_thread(
+            field.parent.clone(),
+            generics,
+            id,
+            ctx.thread_id().as_u64(),
+        )?,
         None => ctx.statics().get(field.parent.clone(), generics),
     };
-    (storage, thread)
+    Ok((storage, thread))
 }
 
 #[dotnet_instruction(LoadField { param0, volatile })]
@@ -345,7 +351,7 @@ fn complete_load<'gc, T: VesOps<'gc>>(
     };
 
     // Thread-safe path: use GlobalState
-    let (storage, _) = static_field_storage(ctx, &field, &static_lookup);
+    let (storage, _) = dotnet_vm_ops::vm_try!(static_field_storage(ctx, &field, &static_lookup));
     let t = dotnet_vm_ops::vm_try!(res_ctx.make_concrete(&field.field().return_type));
     let val_bytes = storage
         .storage
@@ -410,7 +416,7 @@ fn complete_store<'gc, T: VesOps<'gc>>(
     };
 
     // Thread-safe path: use GlobalState
-    let (storage, _) = static_field_storage(ctx, &field, &static_lookup);
+    let (storage, _) = dotnet_vm_ops::vm_try!(static_field_storage(ctx, &field, &static_lookup));
     let t = dotnet_vm_ops::vm_try!(res_ctx.make_concrete(&field.field().return_type));
 
     let layout = storage.layout();
@@ -627,9 +633,10 @@ fn complete_address<'gc, T: VesOps<'gc>>(
         .for_type_with_generics(field.parent.clone(), &static_lookup);
     let name = &field.field().name;
 
-    let (storage, thread_id) = static_field_storage(ctx, &field, &static_lookup);
-    // SAFETY: F10.RawMemoryAccessValid — Initialized static storage owns a fixed backing allocation that remains live through
-    // the returned Arc; this captures its base for an owner-described static ManagedPtr.
+    let (storage, thread_id) =
+        dotnet_vm_ops::vm_try!(static_field_storage(ctx, &field, &static_lookup));
+    // SAFETY: F10.RawMemoryAccessValid; F6.ThreadStaticRoot — the Arc keeps the fixed
+    // allocation live for this observation. The descriptor re-resolves it for later access.
     let base_ptr = unsafe { storage.storage.raw_data_ptr() };
 
     let layout = storage.layout();

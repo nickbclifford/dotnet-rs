@@ -55,8 +55,8 @@ Out:
   popped and ignored today, and no fixture or known application needs a custom binder.
 - `Delegate.DynamicInvoke`, `Type.InvokeMember`, `Reflection.Emit`: not implemented paths;
   write separate entries if needed.
-- The multicast continuation's byref-return exclusion
-  ([DELEGATES_AND_DISPATCH.md](../DELEGATES_AND_DISPATCH.md)): delegates, not reflection.
+- The multicast continuation's byref-return exclusion was outside this reflection plan;
+  [plan 26](26-thread-lifecycle-and-multicast-fallback.md) subsequently removed it.
 
 ## Design
 

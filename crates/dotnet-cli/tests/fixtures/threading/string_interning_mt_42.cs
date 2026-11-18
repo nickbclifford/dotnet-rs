@@ -45,10 +45,12 @@ static class Program
             && ReferenceEquals(string.IsInterned(RaceInput()), internA);
         var literalRoot = new WeakReference(literalA);
         var internRoot = new WeakReference(internA);
+        var winningInputRoot = new WeakReference(ReferenceEquals(internA, inputA) ? inputA : inputB);
         literalA = literalB = emptyA = emptyB = inputA = inputB = internA = internB = null;
         GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
         bool rooted = ReferenceEquals(literalRoot.Target, "cross-thread literal 42")
-            && internRoot.Target != null && ReferenceEquals(internRoot.Target, string.IsInterned(RaceInput()));
+            && internRoot.Target != null && ReferenceEquals(internRoot.Target, string.IsInterned(RaceInput()))
+            && ReferenceEquals(winningInputRoot.Target, internRoot.Target);
 
         Console.WriteLine("literal: " + literals);
         Console.WriteLine("empty: " + empty);

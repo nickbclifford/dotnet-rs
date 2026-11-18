@@ -58,13 +58,15 @@ pub(crate) fn extend_from_utf16_ne_bytes(dest: &mut Vec<u16>, bytes: &[u8]) {
     );
 }
 
-/// Push a string result whose empty case is specified to return string.Empty.
+/// Push a string result whose empty case is specified to return string.Empty. The canonical
+/// empty string is installed before the canonical service accepts requests, so this never
+/// suspends after the caller consumed its operands.
 pub(crate) fn push_string_or_empty<'gc, T: dotnet_vm_ops::ops::TypedStackOps<'gc>>(
     ctx: &mut T,
     chars: Vec<u16>,
 ) {
     if chars.is_empty() {
-        ctx.push_interned_string(&[]);
+        ctx.push_empty_string();
     } else {
         ctx.push_string(dotnet_value::CLRString::new(chars));
     }

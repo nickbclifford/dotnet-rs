@@ -70,6 +70,12 @@ pub fn ldtoken_type<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> St
         ctx.make_runtime_type(&res_ctx, param0)
     };
 
+    #[cfg(feature = "multithreading")]
+    if let Some(step) =
+        ctx.await_reflection_object(crate::stack::ops::ReflectionObjectKey::Type(&runtime_type))
+    {
+        return step;
+    }
     let rt_obj = ctx.get_runtime_type(runtime_type);
 
     let res_ctx = ctx.current_context();
@@ -91,6 +97,12 @@ pub fn ldtoken_method<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodSource) -
             .find_generic_method(param0, &ctx.current_context())
     );
 
+    #[cfg(feature = "multithreading")]
+    if let Some(step) = ctx.await_reflection_object(crate::stack::ops::ReflectionObjectKey::Method(
+        &method, &lookup,
+    )) {
+        return step;
+    }
     let method_obj = ctx.get_runtime_method_obj(method, lookup);
 
     let res_ctx = ctx.current_context();
@@ -109,6 +121,12 @@ pub fn ldtoken_method<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodSource) -
 pub fn ldtoken_field<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepResult {
     let (field, lookup) = dotnet_vm_ops::vm_try!(ctx.locate_field(*param0));
 
+    #[cfg(feature = "multithreading")]
+    if let Some(step) = ctx.await_reflection_object(crate::stack::ops::ReflectionObjectKey::Field(
+        &field, &lookup,
+    )) {
+        return step;
+    }
     let field_obj = ctx.get_runtime_field_obj(field, lookup);
 
     let res_ctx = ctx.current_context();

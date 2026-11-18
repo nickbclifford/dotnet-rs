@@ -115,7 +115,7 @@ pub struct CallStack<'gc> {
 
 // SAFETY: F5.TracesEveryGcRef — `trace` visits every field that can hold a `Gc` handle of
 // this arena: `execution` and `parked_finalizer_caller` (frames and evaluation stack), `heap_managed_ptr_decode_cache`
-// (its cached handles stay live until `GCArena::finish_cycle` invalidates the cache),
+// (its cached handles stay live until collection invalidation or completed-execution cleanup),
 // `local`, `shared.statics`, shared GC handles, and the shared reflection and string tables. The remaining fields hold no `Gc`
 // handles: `thread_id`, `arena_identity` and `arena` are plain identifiers and registry
 // handles, and the other `SharedGlobalState` fields hold `'static` metadata, caches and
@@ -132,8 +132,10 @@ unsafe impl<'gc> Collect<'gc> for CallStack<'gc> {
         self.shared.statics.trace(cc);
         self.shared.gc_handles.trace(cc);
         for entry in self.shared.interned_strings.iter() {
-            // SAFETY: F1.StwParked; F6.NoEscapeAcrossArena — published strings are
-            // rooted by this table, and their owner arenas are retained until shutdown.
+            // SAFETY: F1.StwParked; F6.NoEscapeAcrossArena — this table roots each winner.
+            // New literals use the long-lived service arena when active; an explicit Intern
+            // winner can instead be the original input in a retained live-object arena.
+            // Both owner arenas remain registered through collection.
             let object = dotnet_value::object::ObjectRef(Some(unsafe {
                 gc_arena::Gc::from_ptr(entry.value().as_ptr().cast())
             }));
@@ -318,6 +320,7 @@ impl<'gc> CallStack<'gc> {
     pub fn ves_context(&mut self, gc: GCHandle<'gc>) -> VesContext<'_, 'gc> {
         VesContext {
             gc,
+            static_storage_borrows: Default::default(),
             evaluation_stack: &mut self.execution.evaluation_stack,
             frame_stack: &mut self.execution.frame_stack,
             parked_finalizer_caller: &self.parked_finalizer_caller,

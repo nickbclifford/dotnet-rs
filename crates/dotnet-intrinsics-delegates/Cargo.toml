@@ -13,6 +13,7 @@ dotnetdll = { workspace = true }
 
 [features]
 default = []
+multithreading = ["dotnet-vm-ops/multithreading"]
 
 [lints]
 workspace = true

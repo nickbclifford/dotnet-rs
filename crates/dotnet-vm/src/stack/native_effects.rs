@@ -34,6 +34,9 @@ enum NativeEntry {
     Instruction(StaticFieldAction),
     /// Initialize a type, then resume the interrupted dispatch or instruction.
     Initializer(TypeDescription, GenericLookup, InitializerResume),
+    /// Wait for the canonical service to publish a key, then retry the interrupted instruction.
+    #[cfg_attr(not(feature = "multithreading"), allow(dead_code))]
+    Canonical(dotnet_vm_ops::effects::CanonicalKey),
 }
 
 /// How the interrupted caller continues once its type initializer has completed.
@@ -328,6 +331,66 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
         let lookup = crate::instructions::objects::fields::canonical_static_lookup(&field, &lookup);
         Ok((field, lookup))
     }
+    fn reflection_static_pointer_type_target(
+        &mut self,
+        field: &dotnet_types::members::FieldDescription,
+        lookup: &GenericLookup,
+    ) -> Result<Option<dotnet_types::runtime::RuntimeType>, VmError> {
+        let field_type: dotnetdll::prelude::MethodType = field.field().return_type.clone().into();
+        let concrete = lookup.make_concrete(
+            field.resolution(),
+            field_type,
+            self.context.loader().as_ref(),
+        )?;
+        if !matches!(
+            concrete.get(),
+            dotnetdll::prelude::BaseType::ValuePointer(..)
+        ) {
+            return Ok(None);
+        }
+        dotnet_types::runtime::runtime_type_from_concrete(self.context.loader().as_ref(), &concrete)
+            .map(Some)
+            .ok_or_else(|| {
+                dotnet_types::error::ExecutionError::InternalError(
+                    "unresolvable static pointer field type".into(),
+                )
+                .into()
+            })
+    }
+    fn reflection_compile_recorded_target(
+        &mut self,
+    ) -> Result<(MethodDescription, GenericLookup), NativePrepareError<'gc>> {
+        let result = dotnet_intrinsics_reflection::dynamic_method::compile_recorded_from_operands(
+            self.context,
+            self.operands,
+        );
+        self.operands.clear();
+        match result {
+            Ok(method) => Ok((method, GenericLookup::default())),
+            Err(message) => {
+                let step = self.context.throw_by_name_with_message(
+                    "System.NotSupportedException",
+                    &format!("DynamicMethod: {message}"),
+                );
+                Err(reflection_prepare_error(self.context, step))
+            }
+        }
+    }
+    fn reflection_method_object(
+        &mut self,
+        method: &MethodDescription,
+        lookup: &GenericLookup,
+    ) -> Result<ObjectRef<'gc>, VmError> {
+        use dotnet_intrinsics_reflection::ReflectionRegistryHost;
+        self.context
+            .reflection_cached_runtime_method_obj(method, lookup)
+            .ok_or_else(|| {
+                dotnet_types::error::ExecutionError::InternalError(
+                    "canonical runtime method missing after completion".into(),
+                )
+                .into()
+            })
+    }
     fn reflection_static_complete(
         &mut self,
         field: &dotnet_types::members::FieldDescription,
@@ -501,6 +564,60 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
         self.operands.pop();
         Ok((description, generics))
     }
+    fn canonical_probe(
+        &mut self,
+        key: &dotnet_vm_ops::effects::CanonicalKey,
+    ) -> Result<dotnet_vm_ops::effects::NativeCanonicalProbe, VmError> {
+        #[cfg(feature = "multithreading")]
+        {
+            self.context.canonical_probe(key)
+        }
+        #[cfg(not(feature = "multithreading"))]
+        {
+            let _ = key;
+            Err(dotnet_types::error::ExecutionError::InternalError(
+                "canonical service exists only in multithreaded builds".into(),
+            )
+            .into())
+        }
+    }
+    #[cfg(feature = "multithreading")]
+    fn reflection_field_type_target(
+        &mut self,
+        object: ObjectRef<'gc>,
+        declaring: bool,
+    ) -> Result<dotnet_types::runtime::RuntimeType, VmError> {
+        dotnet_intrinsics_reflection::fields::runtime_field_type(self.context, object, declaring)
+    }
+    #[cfg(feature = "multithreading")]
+    fn reflection_type_object(
+        &mut self,
+        target: dotnet_types::runtime::RuntimeType,
+    ) -> Result<ObjectRef<'gc>, VmError> {
+        use dotnet_intrinsics_reflection::ReflectionRegistryHost;
+        self.context
+            .reflection_cached_runtime_type(&target)
+            .ok_or_else(|| {
+                dotnet_types::error::ExecutionError::InternalError(
+                    "canonical runtime type missing after completion".into(),
+                )
+                .into()
+            })
+    }
+    fn reflection_assembly_target(
+        &mut self,
+        object: ObjectRef<'gc>,
+    ) -> Result<dotnet_types::resolution::ResolutionS, VmError> {
+        let target =
+            dotnet_intrinsics_reflection::common::resolve_runtime_type(self.context, object)?;
+        Ok(target.resolution(self.context.loader().as_ref()))
+    }
+    fn reflection_assembly_object(
+        &mut self,
+        resolution: dotnet_types::resolution::ResolutionS,
+    ) -> Result<ObjectRef<'gc>, VmError> {
+        dotnet_intrinsics_reflection::types::materialize_runtime_assembly(self.context, resolution)
+    }
     fn probe_initializer(
         &mut self,
         description: TypeDescription,
@@ -510,7 +627,7 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
         let generics =
             GenericLookup::new(generics.type_generics.iter().take(arity).cloned().collect());
         let manager = self.context.shared.statics.clone();
-        let thread_id = self.context.thread_id.get();
+        let thread_id = self.context.thread_id();
         let result = manager.init(
             description.clone(),
             &self.context.with_generics(&generics),
@@ -537,6 +654,13 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
                     },
                     Box::new(claim),
                 )
+            }
+            #[cfg(not(feature = "multithreading"))]
+            crate::statics::StaticInitResult::WouldDeadlock => {
+                return Err(dotnet_types::error::ExecutionError::InternalError(
+                    "static initialization would deadlock in single-threaded mode".into(),
+                )
+                .into());
             }
             crate::statics::StaticInitResult::Waiting(registration) => {
                 #[cfg(feature = "multithreading")]
@@ -1276,6 +1400,10 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
     }
 }
 
+// INVARIANT: F5.TracesEveryGcRef — value layouts trace nested pointer origins. Valid field bytes
+// round-trip heap, frame-home, static, unmanaged and cross-arena origins; transient
+// tags can be written but cannot be decoded as stored fields. Unmanaged addresses
+// retain the guest's F10.RawMemoryAccessValid obligation on dereference.
 fn multicast_value_shape(
     ctx: &VesContext<'_, '_>,
     method: &MethodDescription,
@@ -1307,7 +1435,10 @@ fn multicast_value_shape(
         | BaseType::Int32
         | BaseType::UInt32 => NativeOutput::Int32,
         BaseType::Int64 | BaseType::UInt64 => NativeOutput::Int64,
-        BaseType::IntPtr | BaseType::UIntPtr => NativeOutput::NativeInt,
+        BaseType::IntPtr
+        | BaseType::UIntPtr
+        | BaseType::ValuePointer(..)
+        | BaseType::FunctionPointer(_) => NativeOutput::NativeInt,
         BaseType::Float32 | BaseType::Float64 => NativeOutput::NativeFloat,
         _ if concrete.is_class(ctx.loader().as_ref()) => NativeOutput::Object,
         BaseType::Type { .. }
@@ -1315,7 +1446,7 @@ fn multicast_value_shape(
                 .current_context()
                 .resolver()
                 .type_layout_cached_with_lookup(concrete.clone(), method.resolution(), generics)
-                .is_ok_and(|layout| !layout.has_managed_ptrs()) =>
+                .is_ok() =>
         {
             NativeOutput::ValueType
         }
@@ -1331,7 +1462,22 @@ fn multicast_output(
     match &method.signature().return_type.1 {
         None => NativeOutput::Void,
         Some(ParameterType::Value(ty)) => multicast_value_shape(ctx, method, generics, ty),
+        Some(ParameterType::Ref(_)) => NativeOutput::ByRef,
         _ => NativeOutput::Unsupported,
+    }
+}
+
+// INVARIANT: F6.NativePointerDescriptor — only origins supported by the root descriptor
+// may cross a native activation, including its returned pointer.
+fn native_pointer_origin_supported(origin: &dotnet_value::pointer::PointerOrigin<'_>) -> bool {
+    match origin {
+        dotnet_value::pointer::PointerOrigin::Heap(ObjectRef(Some(_)))
+        | dotnet_value::pointer::PointerOrigin::FrameHome(_)
+        | dotnet_value::pointer::PointerOrigin::Static(_)
+        | dotnet_value::pointer::PointerOrigin::Unmanaged => true,
+        #[cfg(feature = "multithreading")]
+        dotnet_value::pointer::PointerOrigin::CrossArenaObjectRef(_) => true,
+        _ => false,
     }
 }
 
@@ -1340,7 +1486,10 @@ fn multicast_argument_supported(shape: NativeOutput, value: &StackValue<'_>) -> 
         (shape, value),
         (NativeOutput::Int32, StackValue::Int32(_))
             | (NativeOutput::Int64, StackValue::Int64(_))
-            | (NativeOutput::NativeInt, StackValue::NativeInt(_))
+            | (
+                NativeOutput::NativeInt,
+                StackValue::NativeInt(_) | StackValue::UnmanagedPtr(_)
+            )
             | (NativeOutput::NativeFloat, StackValue::NativeFloat(_))
             | (NativeOutput::Object, StackValue::ObjectRef(_))
             | (NativeOutput::ValueType, StackValue::ValueType(_))
@@ -1418,7 +1567,7 @@ impl<'gc> VesContext<'_, 'gc> {
         // The acquire read observes published bytes; only the initializing owner may
         // access incomplete storage without going through the wait/cycle protocol.
         if state == crate::statics::InitState::Initialized
-            || state == crate::statics::InitState::Initializing(self.thread_id.get().as_u64())
+            || state == crate::statics::InitState::Initializing(self.thread_id().as_u64())
         {
             return crate::instructions::objects::fields::complete_static_field(self, action);
         }
@@ -1456,17 +1605,11 @@ impl<'gc> VesContext<'_, 'gc> {
             .statics
             .get_init_state(description.clone(), &generics);
         if state == crate::statics::InitState::Initialized
-            || state == crate::statics::InitState::Initializing(self.thread_id.get().as_u64())
+            || state == crate::statics::InitState::Initializing(self.thread_id().as_u64())
         {
             return StepResult::Continue;
         }
         let depth = self.frame_stack.len();
-        let resume = if self.frame_stack.current_frame().multicast_state.is_some() {
-            // A multicast step rebuilds its operands from retained arguments on retry.
-            InitializerResume::Retry
-        } else {
-            resume
-        };
         if let InitializerResume::Dispatch(method, lookup, _) = &resume
             && self.has_staged_native_call(depth)
         {
@@ -1479,6 +1622,24 @@ impl<'gc> VesContext<'_, 'gc> {
             None,
             None,
             NativeEntry::Initializer(description, generics, resume),
+            NativeDispatchMode::InlineCall,
+        )
+    }
+
+    /// Park this instruction until the canonical service publishes `key`, then re-execute it
+    /// with its operands and instruction pointer unchanged. Nothing is pushed or consumed.
+    #[cfg(feature = "multithreading")]
+    pub(crate) fn await_canonical_then_retry(
+        &mut self,
+        key: dotnet_vm_ops::effects::CanonicalKey,
+    ) -> StepResult {
+        let method = self.state().info_handle.source.clone();
+        self.start_native_inner(
+            method,
+            &GenericLookup::default(),
+            None,
+            None,
+            NativeEntry::Canonical(key),
             NativeDispatchMode::InlineCall,
         )
     }
@@ -1497,7 +1658,7 @@ impl<'gc> VesContext<'_, 'gc> {
             NativeEntry::Instruction(action) => {
                 usize::from(matches!(action.kind, StaticFieldKind::Store { .. }))
             }
-            NativeEntry::Initializer(..) => 0,
+            NativeEntry::Initializer(..) | NativeEntry::Canonical(_) => 0,
             NativeEntry::Intrinsic(_) => {
                 signature.parameters.len()
                     + usize::from(
@@ -1571,7 +1732,7 @@ impl<'gc> VesContext<'_, 'gc> {
             NativeOutput::Object
         } else if matches!(
             entry,
-            NativeEntry::Instruction(_) | NativeEntry::Initializer(..)
+            NativeEntry::Instruction(_) | NativeEntry::Initializer(..) | NativeEntry::Canonical(_)
         ) {
             NativeOutput::Void
         } else {
@@ -1664,6 +1825,13 @@ impl<'gc> VesContext<'_, 'gc> {
             }
         }
         let (future, instruction, resume) = match entry {
+            NativeEntry::Canonical(key) => {
+                let future: NativeFuture = Box::pin(async move {
+                    let mut fx = fx;
+                    fx.await_canonical(key).await
+                });
+                (future, None, Some(InitializerResume::Retry))
+            }
             NativeEntry::Initializer(description, generics, resume) => {
                 let future: NativeFuture = Box::pin(async move {
                     let mut fx = fx;
@@ -1788,14 +1956,6 @@ impl<'gc> VesContext<'_, 'gc> {
         }
     }
 
-    /// Whether a type-initializer activation is live for the frame at `depth`.
-    pub(crate) fn has_initializer_gate(&self, depth: usize) -> bool {
-        self.call_state
-            .native
-            .last()
-            .is_some_and(|work| work.caller_depth == depth && work.resume.is_some())
-    }
-
     pub(crate) fn try_start_multicast(
         &mut self,
         method: MethodDescription,
@@ -1840,12 +2000,10 @@ impl<'gc> VesContext<'_, 'gc> {
             multicast_output(self, &method, generics),
             NativeOutput::Unsupported
         ) {
-            tracing::debug!(
-                multicast_path = "fallback",
-                reason = "return",
-                "multicast selection"
-            );
-            return None;
+            return Some(self.throw_by_name_with_message(
+                "System.InvalidProgramException",
+                "Common Language Runtime detected an invalid program.",
+            ));
         }
         for (index, parameter) in signature.parameters.iter().enumerate() {
             let value = self.peek_stack_at(count - index - 1);
@@ -1871,35 +2029,27 @@ impl<'gc> VesContext<'_, 'gc> {
                                     )
                                     .ok()
                             })
-                            .is_some_and(|layout| !layout.has_managed_ptrs()) =>
+                            .is_some() =>
                     {
                         match value {
                             StackValue::NativeInt(_) | StackValue::UnmanagedPtr(_) => true,
-                            StackValue::ManagedPtr(pointer) => match pointer.origin() {
-                                dotnet_value::pointer::PointerOrigin::Heap(ObjectRef(Some(_)))
-                                | dotnet_value::pointer::PointerOrigin::FrameHome(_)
-                                | dotnet_value::pointer::PointerOrigin::Static(_)
-                                | dotnet_value::pointer::PointerOrigin::Unmanaged => true,
-                                #[cfg(feature = "multithreading")]
-                                dotnet_value::pointer::PointerOrigin::CrossArenaObjectRef(_) => {
-                                    true
-                                }
-                                _ => false,
-                            },
+                            StackValue::ManagedPtr(pointer) => {
+                                native_pointer_origin_supported(pointer.origin())
+                            }
                             _ => unreachable!(),
                         }
                     }
                     _ => false,
                 },
-                ParameterType::TypedReference => false,
+                ParameterType::TypedReference => {
+                    matches!(value, StackValue::TypedRef(slot) if native_pointer_origin_supported(slot.value().origin()))
+                }
             };
             if !supported {
-                tracing::debug!(
-                    multicast_path = "fallback",
-                    reason = "argument",
-                    "multicast selection"
-                );
-                return None;
+                return Some(self.throw_by_name_with_message(
+                    "System.InvalidProgramException",
+                    "Common Language Runtime detected an invalid program.",
+                ));
             }
         }
         tracing::debug!(multicast_path = "async", "multicast selection");
@@ -1973,6 +2123,12 @@ impl<'gc> VesContext<'_, 'gc> {
             self.call_state.native.push(work);
             StepResult::Continue
         } else {
+            #[cfg(not(feature = "multithreading"))]
+            if wait.deadline.is_none() {
+                return StepResult::internal_error(
+                    "monitor entry would deadlock in single-threaded mode",
+                );
+            }
             work.wait = Some(PendingWait::Monitor(wait));
             self.call_state.native.push(work);
             StepResult::Yield
@@ -2351,7 +2507,10 @@ impl<'gc> VesContext<'_, 'gc> {
                             matches!(work.outputs.as_slice(), [StackValue::Int64(_)])
                         }
                         NativeOutput::NativeInt => {
-                            matches!(work.outputs.as_slice(), [StackValue::NativeInt(_)])
+                            matches!(
+                                work.outputs.as_slice(),
+                                [StackValue::NativeInt(_) | StackValue::UnmanagedPtr(_)]
+                            )
                         }
                         NativeOutput::NativeFloat => {
                             matches!(work.outputs.as_slice(), [StackValue::NativeFloat(_)])
@@ -2362,6 +2521,8 @@ impl<'gc> VesContext<'_, 'gc> {
                         NativeOutput::ValueType => {
                             matches!(work.outputs.as_slice(), [StackValue::ValueType(_)])
                         }
+                        NativeOutput::ByRef => matches!(work.outputs.as_slice(),
+                            [StackValue::ManagedPtr(pointer)] if native_pointer_origin_supported(pointer.origin())),
                         NativeOutput::Unsupported => false,
                     };
                 if !valid {

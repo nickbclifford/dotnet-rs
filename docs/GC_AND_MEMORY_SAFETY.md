@@ -196,6 +196,11 @@ Limits of this contract:
   that owns the popped `StackValue` for the synchronous operation; with `multithreading`, a
   cross-arena operand also holds an arena lease. It does not hold a heap borrow, and must be
   dropped before the thread parks at a safepoint.
+- **Thread-static descriptors.** A static descriptor records the logical owner, not an allocation
+  root. Resolution retains the block through the current mutation, but fails once that owner has
+  completed. STW waits for active mutations before tracing. An unmanaged address from `conv.u` is
+  subject to the caller's lifetime obligation and dangles after completion (`F6.ThreadStaticRoot`,
+  `F10.RawMemoryAccessValid`). Ordinary static storage remains rooted by shared state.
 - **Observation.** `pop_address` returns an address with no owner. `resolve_address` borrows
   the origin; its result and `ManagedPtr::observe_address` are address observations, not access
   permission, a lasting lease, a storage guard or a range proof.
@@ -240,14 +245,32 @@ Executor Drop.
 
 #### Retired worker arenas
 
+At retirement and after each retired finalizer run, the owner discards finished execution state,
+native activations, hydrated reflection object caches and managed-pointer decode entries. It clears
+the current managed Thread root and prunes only completed child records. Active or unstarted child
+records still root their delegates and arguments; shared statics, GC handles, canonical tables and
+finalization queues remain authoritative roots. Reflection metadata vectors retain stable indices.
+
 In `multithreading`, a managed worker that completes its entry point does not immediately drop its
 executor. After cleaning up the managed segment, it publishes the completion outcome and enters
 `Executor::serve_retired`. The owner thread and arena remain registered with the GC coordinator and
-the exact-identity lease registry. A retired owner counts as stopped for stop-the-world and services
-the coordinator's mark, finalize and sweep commands; it never resumes its ordinary managed entry
-point. In normal MT execution it publishes finalizers to the dedicated finalizer worker.
+the exact-identity lease registry while retired. A retired owner counts as stopped for stop-the-world
+and services the coordinator's mark, finalize and sweep commands; it never resumes its ordinary
+managed entry point. In normal MT execution it publishes finalizers to the dedicated finalizer worker.
 
-Shutdown starts only from that service loop. The owner excludes collections, rechecks worker quiescence and that no
+An ordinary managed owner can release an empty arena from that loop after a coordinated sweep
+following root cleanup and any owner-side finalizers. It checks zero total Gc allocations, no pending
+finalizers and no retained child records, then rechecks under collection exclusion. It transitions to
+`Releasing`, extracts storage into a retention guard and unregisters from collection and thread
+coordination. Outside collection and lifecycle locks it drains the exact registration; successful
+drain frees storage and publishes `Released`. An incomplete or unwound drain publishes `Leaked`
+and retains storage. No arena access or allocation follows extraction. Pool and dedicated-finalizer arenas stay
+retained. Weak clearing and finalizer promotion precede sweep, so zero total allocations excludes
+objects retained by statics, strong handles, finalizers or other arenas. Completion entries and their
+indices/outcomes survive release. Live executors join released handles; shutdown joins any
+unclaimed handles and waits for joins already claimed by another reaper or shutdown caller.
+
+For retained arenas, shutdown starts from that service loop. The owner excludes collections, rechecks worker quiescence and that no
 finalizer is queued (unless abort abandoned it), marks the worker as shutting down, and unregisters its exact arena identity.
 It then drains outstanding leases outside the collection lock before freeing the arena. If exact
 drain cannot complete, storage is deliberately leaked. These ordering requirements are
@@ -335,7 +358,11 @@ owner's next sweep. In ST, the arena retains and executes its own queue. In MT,
 `GC.WaitForPendingFinalizers` snapshots the enqueue generation and waits outside the
 arena mutation until the FIFO worker completes that prefix, while servicing GC stops. Later
 enqueues do not extend the wait. A call from a finalizer returns immediately. ST drains its local
-work on the interrupted context; it has no separate finalizer-thread identity.
+work in a separate segment on the interrupted arena. Its rooted finalizer `Thread` and logical
+owner key are distinct from the parked caller's; both managed Thread roots are traced, and the
+allocation arena identity is unchanged. Automatic processing leaves the queue untouched while the
+caller owns a monitor or initializer claim. An explicit finalizer wait forces processing, and
+contention with the parked caller reports a single-threaded deadlock.
 
 ```mermaid
 sequenceDiagram
@@ -630,12 +657,17 @@ next safepoint; the slot lock alone is not an arena lease or a lasting root afte
 ### Shared reflection roots
 
 Under `multithreading`, `SharedReflectionRegistry` publishes canonical type, method, field,
-property and assembly objects for their existing reflection cache keys. Every `CallStack` traces
-the shared tables alongside `StaticStorageManager`.
+property and assembly objects for their existing reflection cache keys. Newly materialized literal
+and empty strings and shared reflection objects are homed in the dedicated finalizer executor's
+long-lived arena. Every `CallStack` traces the shared tables alongside `StaticStorageManager`.
 Its retained object pointers are converted to temporary handles for `ObjectRef::trace`, which
 marks owner-local objects and records foreign objects for the cross-arena fixed point. Local
 reflection caches also trace their handles, including foreign ones. Publication happens between
-safepoints, and retired owner arenas remain registered until collection has stopped at shutdown.
+safepoints. An arena owning a published canonical object stays nonempty and registered through
+shutdown; empty retired arenas follow the release protocol above. The explicit
+`String.Intern(existingObject)` winner is the approved exception: the table retains that exact
+input, so its original live-object arena also remains retained through shutdown. No general string
+allocator migration or copying at retirement is used.
 The table and its pointers must not outlive that arena-retention contract.
 
 The support `RuntimeType`, method, constructor and field wrappers hold native-sized registry

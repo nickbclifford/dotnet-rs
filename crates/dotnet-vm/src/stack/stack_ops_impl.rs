@@ -14,7 +14,10 @@ use dotnet_value::{
     pointer::ManagedPtr,
     storage::FieldStorage,
 };
-use dotnet_vm_data::frame_homes::{FrameHomes, HomeSlot, VariableHome};
+use dotnet_vm_data::{
+    StepResult,
+    frame_homes::{FrameHomes, HomeSlot, VariableHome},
+};
 use std::ptr::NonNull;
 
 impl<'a, 'gc> EvalStackOps<'gc> for VesContext<'a, 'gc> {
@@ -73,6 +76,164 @@ impl<'a, 'gc> EvalStackOps<'gc> for VesContext<'a, 'gc> {
     }
 }
 
+impl<'gc> VesContext<'_, 'gc> {
+    /// Allocate (or find) the canonical object for `chars` in this context's arena and return
+    /// the authoritative table winner. The caller is the service owner, a single-threaded
+    /// executor, or an executor with no service; each of those arenas is retained until
+    /// shutdown. A concurrent explicit `Intern` winner takes precedence and is returned as is.
+    pub(crate) fn materialize_canonical_string(
+        &self,
+        chars: &[u16],
+    ) -> dotnet_value::object::ObjectPtr {
+        if let Some(entry) = self.shared.interned_strings.get(chars) {
+            return *entry;
+        }
+        let object = ObjectRef::new(self.gc, HeapStorage::Str(CLRString::new(chars.to_vec())));
+        self.register_new_object(&object);
+        // New literals use the service arena when active. Explicit Intern winners retain their
+        // original allocation and are not subject to the owner assertion.
+        #[cfg(feature = "multithreading")]
+        debug_assert!(
+            !self.shared.canonical.is_active()
+                || self.shared.canonical.is_active_owner(self.thread_id.get()),
+            "canonical literal allocated outside the service arena"
+        );
+        *self
+            .shared
+            .interned_strings
+            .entry(chars.to_vec())
+            .or_insert(object.as_ptr().expect("interned string is non-null"))
+    }
+
+    /// Probe the canonical table for a queued wait. Returns `Ready` once the key is published.
+    #[cfg(feature = "multithreading")]
+    pub(crate) fn canonical_probe(
+        &self,
+        key: &dotnet_vm_ops::effects::CanonicalKey,
+    ) -> Result<dotnet_vm_ops::effects::NativeCanonicalProbe, dotnet_types::error::VmError> {
+        use dotnet_vm_ops::effects::{CanonicalKey, NativeCanonicalProbe};
+        let published = match key {
+            CanonicalKey::String(chars) => {
+                self.shared.interned_strings.contains_key(chars.as_slice())
+            }
+            CanonicalKey::Type(ty) => self
+                .shared
+                .reflection_registry
+                .runtime_type_objects
+                .contains_key(ty),
+            CanonicalKey::Method(method, lookup) => self
+                .shared
+                .reflection_registry
+                .runtime_method_objects
+                .contains_key(&(method.clone(), lookup.clone())),
+            CanonicalKey::Field(field, lookup) => self
+                .shared
+                .reflection_registry
+                .runtime_field_objects
+                .contains_key(&(field.clone(), lookup.clone())),
+            CanonicalKey::Property(accessor, lookup) => self
+                .shared
+                .reflection_registry
+                .runtime_property_objects
+                .contains_key(&(accessor.clone(), lookup.clone())),
+            CanonicalKey::Assembly(resolution) => self
+                .shared
+                .reflection_registry
+                .runtime_assembly_objects
+                .contains_key(resolution),
+        };
+        if published {
+            return Ok(NativeCanonicalProbe::Ready);
+        }
+        let needed = self
+            .shared
+            .canonical
+            .request_needed(self.thread_id.get())
+            .map_err(|error| {
+                dotnet_types::error::ExecutionError::InternalError(
+                    error.describe().into_boxed_str(),
+                )
+            })?;
+        if !needed {
+            // The owner, or an executor without a service, materializes directly on retry.
+            return Ok(NativeCanonicalProbe::Ready);
+        }
+        match self.shared.canonical.request(key) {
+            Ok(wait) => Ok(NativeCanonicalProbe::Waiting(Box::new(wait))),
+            Err(error) => Err(dotnet_types::error::ExecutionError::InternalError(
+                error.describe().into_boxed_str(),
+            )
+            .into()),
+        }
+    }
+
+    /// Materialize at most `max` queued canonical requests. Runs inside the owner's active
+    /// mutation; the queue lock is released before any allocation, and the shared table (not
+    /// the completion) carries the result.
+    #[cfg(feature = "multithreading")]
+    pub(crate) fn service_canonical_batch(&mut self, max: usize) -> usize {
+        use crate::threading::canonical::CanonicalError;
+        use dotnet_vm_ops::effects::CanonicalKey;
+        let batch = self.shared.canonical.take_batch(max);
+        let served = batch.len();
+        for request in batch {
+            let outcome = match &request.key {
+                CanonicalKey::String(chars) => {
+                    self.materialize_canonical_string(chars);
+                    Ok(())
+                }
+                CanonicalKey::Type(ty) => {
+                    dotnet_intrinsics_reflection::common::materialize_runtime_type(self, ty.clone())
+                        .map(|_| ())
+                        .map_err(|error| CanonicalError::Materialization(error.to_string()))
+                }
+                CanonicalKey::Method(method, lookup) => {
+                    dotnet_intrinsics_reflection::common::materialize_runtime_method_obj(
+                        self,
+                        method.clone(),
+                        lookup.clone(),
+                    )
+                    .map(|_| ())
+                    .map_err(|error| CanonicalError::Materialization(error.to_string()))
+                }
+                CanonicalKey::Field(field, lookup) => {
+                    dotnet_intrinsics_reflection::common::materialize_runtime_field_obj(
+                        self,
+                        field.clone(),
+                        lookup.clone(),
+                    )
+                    .map(|_| ())
+                    .map_err(|error| CanonicalError::Materialization(error.to_string()))
+                }
+                CanonicalKey::Property(accessor, lookup) => {
+                    dotnet_intrinsics_reflection::types::materialize_runtime_property_obj(
+                        self,
+                        accessor.clone(),
+                        lookup.clone(),
+                    )
+                    .map(|_| ())
+                    .map_err(|error| CanonicalError::Materialization(error.to_string()))
+                }
+                CanonicalKey::Assembly(resolution) => {
+                    dotnet_intrinsics_reflection::types::materialize_runtime_assembly(
+                        self,
+                        resolution.clone(),
+                    )
+                    .map(|_| ())
+                    .map_err(|error| {
+                        CanonicalError::Materialization(format!(
+                            "request {} failed: {error}",
+                            request.id
+                        ))
+                    })
+                }
+            };
+            self.shared.canonical.finish(request, outcome);
+        }
+        served
+    }
+}
+
 impl<'a, 'gc> TypedStackOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn push_string(&mut self, value: CLRString) {
@@ -82,18 +243,36 @@ impl<'a, 'gc> TypedStackOps<'gc> for VesContext<'a, 'gc> {
         self.push(StackValue::ObjectRef(in_heap));
     }
 
-    fn push_interned_string(&mut self, chars: &[u16]) {
-        let ptr = if let Some(entry) = self.shared.interned_strings.get(chars) {
-            *entry
+    fn push_interned_string(&mut self, chars: &[u16]) -> StepResult {
+        let hit = self.shared.interned_strings.get(chars).map(|entry| *entry);
+        let ptr = if let Some(ptr) = hit {
+            ptr
         } else {
-            let object = ObjectRef::new(self.gc, HeapStorage::Str(CLRString::new(chars.to_vec())));
-            self.register_new_object(&object);
-            *self
-                .shared
-                .interned_strings
-                .entry(chars.to_vec())
-                .or_insert(object.as_ptr().expect("interned string is non-null"))
+            #[cfg(feature = "multithreading")]
+            if self.shared.canonical.must_queue(self.thread_id.get()) {
+                // The service allocates misses in its long-lived arena before the retry.
+                return self.await_canonical_then_retry(
+                    dotnet_vm_ops::effects::CanonicalKey::String(chars.to_vec()),
+                );
+            }
+            self.materialize_canonical_string(chars)
         };
+        // SAFETY: F1.GcHandleRooted; F6.NoEscapeAcrossArena — the shared table
+        // roots this object, and its allocating arena is retained until shutdown.
+        let object = ObjectRef(Some(unsafe { gc_arena::Gc::from_ptr(ptr.as_ptr().cast()) }));
+        self.push(StackValue::ObjectRef(object));
+        StepResult::Continue
+    }
+
+    fn push_empty_string(&mut self) {
+        // The service installs the empty key before it accepts requests, and without a service
+        // (single-threaded, or no finalizer thread) the local arena is the retained home.
+        let ptr = self
+            .shared
+            .interned_strings
+            .get(&[][..])
+            .map(|entry| *entry)
+            .unwrap_or_else(|| self.materialize_canonical_string(&[]));
         // SAFETY: F1.GcHandleRooted; F6.NoEscapeAcrossArena — the shared table
         // roots this object, and its allocating arena is retained until shutdown.
         let object = ObjectRef(Some(unsafe { gc_arena::Gc::from_ptr(ptr.as_ptr().cast()) }));
@@ -111,6 +290,8 @@ impl<'a, 'gc> TypedStackOps<'gc> for VesContext<'a, 'gc> {
     }
 
     fn push_interned_string_object(&mut self, chars: &[u16], object: ObjectRef<'gc>) {
+        // Interning an existing object preserves the winning input's identity; its arena must
+        // remain registered while the shared table roots it.
         let ptr = *self
             .shared
             .interned_strings

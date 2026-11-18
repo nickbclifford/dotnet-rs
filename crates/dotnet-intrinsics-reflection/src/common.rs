@@ -181,6 +181,72 @@ pub fn get_runtime_type<'gc>(
     ctx.reflection_cache_runtime_type(target, obj_ref)
 }
 
+#[cfg(feature = "multithreading")]
+fn try_alloc_reflection_obj<'gc>(
+    ctx: &mut impl ReflectionIntrinsicHost<'gc>,
+    corlib_type: WellKnown,
+    index: usize,
+) -> Result<ObjectRef<'gc>, TypeResolutionError> {
+    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
+    let loader = ctx.loader();
+    // Host materialization can run without a managed frame. Check the context prerequisite
+    // and ancestry using fallible resolution before the layout code traverses those types.
+    loader.corlib_wkt(WellKnown::Object)?;
+    let rt = loader.corlib_wkt(corlib_type)?;
+    validate_reflection_ancestry(loader, rt.clone())?;
+    let rt_obj = ctx.new_object(rt.clone())?;
+    let obj_ref = ctx.alloc_obj_ref(gc, rt_obj);
+    #[cfg(debug_assertions)]
+    ctx.reflection_assert_canonical_owner(obj_ref);
+    obj_ref.as_object_mut(gc, |instance| {
+        write_reflection_index(ctx, instance, rt, index);
+    });
+    Ok(obj_ref)
+}
+
+#[cfg(feature = "multithreading")]
+#[cold]
+#[inline(never)]
+fn validate_reflection_ancestry(
+    loader: &dotnet_assemblies::AssemblyLoader,
+    mut ty: TypeDescription,
+) -> Result<(), TypeResolutionError> {
+    use dotnetdll::prelude::TypeSource;
+    let mut seen = Vec::new();
+    loop {
+        if seen.contains(&ty) {
+            return Err(TypeResolutionError::InvalidLayout(
+                "cyclic reflection ancestry".into(),
+            ));
+        }
+        seen.push(ty.clone());
+        let Some(source) = &ty.definition().extends else {
+            return Ok(());
+        };
+        let (TypeSource::User(parent) | TypeSource::Generic { base: parent, .. }) = source;
+        let name = parent.type_name(ty.resolution.definition());
+        ty = match loader.canonical_type_name(&name) {
+            "System.Delegate" => loader.corlib_wkt(WellKnown::Delegate)?,
+            "System.MulticastDelegate" => loader.corlib_wkt(WellKnown::MulticastDelegate)?,
+            _ => loader.locate_type(ty.resolution.clone(), *parent)?,
+        };
+    }
+}
+
+/// Materialize a complete runtime type in the caller's arena without guest execution.
+#[cfg(feature = "multithreading")]
+pub fn materialize_runtime_type<'gc>(
+    ctx: &mut impl ReflectionIntrinsicHost<'gc>,
+    target: RuntimeType,
+) -> Result<ObjectRef<'gc>, TypeResolutionError> {
+    if let Some(obj) = ctx.reflection_cached_runtime_type(&target) {
+        return Ok(obj);
+    }
+    let index = ctx.reflection_runtime_type_index_get_or_insert(target.clone());
+    let obj_ref = try_alloc_reflection_obj(ctx, WellKnown::RuntimeType, index)?;
+    Ok(ctx.reflection_cache_runtime_type(target, obj_ref))
+}
+
 pub fn resolve_runtime_type<'gc>(
     ctx: &impl ReflectionIntrinsicHost<'gc>,
     obj: ObjectRef<'gc>,
@@ -404,6 +470,17 @@ pub fn get_runtime_field_index<'gc>(
     ctx.reflection_runtime_field_index_get_or_insert(field, lookup) as u16
 }
 
+/// Retry the current intrinsic before it consumes operands when a shared canonical reflection
+/// object must be materialized by the long-lived service. Cache hits, ST and inactive-service
+/// paths remain synchronous.
+#[cfg(feature = "multithreading")]
+pub fn await_canonical_object<'gc>(
+    ctx: &mut impl ReflectionIntrinsicHost<'gc>,
+    key: dotnet_vm_ops::effects::CanonicalKey,
+) -> Option<dotnet_vm_data::StepResult> {
+    ctx.reflection_await_canonical(key)
+}
+
 pub fn get_runtime_method_obj<'gc>(
     ctx: &mut impl ReflectionIntrinsicHost<'gc>,
     method: MethodDescription,
@@ -441,4 +518,47 @@ pub fn get_runtime_field_obj<'gc>(
     let obj_ref = alloc_reflection_obj(ctx, WellKnown::SupportFieldInfo, index);
 
     ctx.reflection_cache_runtime_field_obj(field, lookup, obj_ref)
+}
+
+/// Materialize a complete runtime method in the caller's arena without guest execution.
+#[cfg(feature = "multithreading")]
+pub fn materialize_runtime_method_obj<'gc>(
+    ctx: &mut impl ReflectionIntrinsicHost<'gc>,
+    method: MethodDescription,
+    lookup: GenericLookup,
+) -> Result<ObjectRef<'gc>, TypeResolutionError> {
+    if let Some(obj) = ctx.reflection_cached_runtime_method_obj(&method, &lookup) {
+        return Ok(obj);
+    }
+
+    let index = get_runtime_method_index(ctx, method.clone(), lookup.clone());
+
+    let is_ctor = method.method().runtime_special_name
+        && (method.method().name == ".ctor" || method.method().name == ".cctor");
+    let class = if is_ctor {
+        WellKnown::SupportConstructorInfo
+    } else {
+        WellKnown::SupportMethodInfo
+    };
+
+    let obj_ref = try_alloc_reflection_obj(ctx, class, index)?;
+
+    Ok(ctx.reflection_cache_runtime_method_obj(method, lookup, obj_ref))
+}
+
+/// Materialize a complete runtime field in the caller's arena without guest execution.
+#[cfg(feature = "multithreading")]
+pub fn materialize_runtime_field_obj<'gc>(
+    ctx: &mut impl ReflectionIntrinsicHost<'gc>,
+    field: FieldDescription,
+    lookup: GenericLookup,
+) -> Result<ObjectRef<'gc>, TypeResolutionError> {
+    if let Some(obj) = ctx.reflection_cached_runtime_field_obj(&field, &lookup) {
+        return Ok(obj);
+    }
+
+    let index = get_runtime_field_index(ctx, field.clone(), lookup.clone()) as usize;
+    let obj_ref = try_alloc_reflection_obj(ctx, WellKnown::SupportFieldInfo, index)?;
+
+    Ok(ctx.reflection_cache_runtime_field_obj(field, lookup, obj_ref))
 }

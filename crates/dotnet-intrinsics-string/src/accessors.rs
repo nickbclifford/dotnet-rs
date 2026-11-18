@@ -107,7 +107,7 @@ pub fn intrinsic_field_string_empty<'gc, T: StringIntrinsicHost<'gc>>(
     _type_generics: Arc<[ConcreteType]>,
     _is_address: bool,
 ) -> StepResult {
-    ctx.push_interned_string(&[]);
+    ctx.push_empty_string();
     StepResult::Continue
 }
 

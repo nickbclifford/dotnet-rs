@@ -9,7 +9,7 @@ use dotnet_utils::{ByteOffset, StackSlotIndex};
 use dotnet_value::pointer::FrameHomeSerial;
 use dotnet_value::{
     StackValue,
-    object::{Object as ObjectInstance, ObjectHandle, ObjectRef},
+    object::{Object as ObjectInstance, ObjectRef},
     pointer::{ManagedPtr, RetainedPtr},
 };
 use gc_arena::{Collect, collect::Trace};
@@ -22,18 +22,6 @@ pub struct BasePointer {
     pub arguments: StackSlotIndex,
     pub locals: StackSlotIndex,
     pub stack: StackSlotIndex,
-}
-
-/// Continuation for multicast invocations excluded from native effects transport.
-/// Admitted invocations use the native activation stack instead.
-#[derive(Collect)]
-#[collect(no_drop)]
-pub struct MulticastState<'gc> {
-    pub targets: ObjectHandle<'gc>,
-    pub next_index: usize,
-    pub args: Vec<StackValue<'gc>>,
-    /// Set when a type initializer is running for the current target; the step then retries.
-    pub retrying_initializer: bool,
 }
 
 pub const STACKFRAME_EXCEPTION_INLINE_CAPACITY: usize = 2;
@@ -76,7 +64,6 @@ pub struct StackFrame<'gc> {
     pub exception_stack: ExceptionStack<'gc>,
     pub pinned_locals: PinnedLocals,
     pub is_finalizer: bool,
-    pub multicast_state: Option<MulticastState<'gc>>,
     pub native_return: Option<NativeReturnDestination>,
     /// Homes of the locals and arguments this frame's method addresses with `ldloca` and
     /// `ldarga`.
@@ -104,7 +91,6 @@ impl<'gc> StackFrame<'gc> {
             exception_stack: SmallVec::new(),
             pinned_locals,
             is_finalizer: false,
-            multicast_state: None,
             native_return: None,
             homes: FrameHomes::default(),
             constructor_result: None,
@@ -127,7 +113,6 @@ impl<'gc> StackFrame<'gc> {
         self.exception_stack.clear();
         self.pinned_locals = pinned_locals;
         self.is_finalizer = false;
-        self.multicast_state = None;
         self.native_return = None;
         self.constructor_result = None;
         self.sync_lock = None;
@@ -142,7 +127,6 @@ impl<'gc> StackFrame<'gc> {
         self.exception_stack.clear();
         self.pinned_locals.clear();
         self.is_finalizer = false;
-        self.multicast_state = None;
         self.native_return = None;
         self.constructor_result = None;
         self.sync_lock = None;
@@ -150,17 +134,14 @@ impl<'gc> StackFrame<'gc> {
 }
 
 // SAFETY: F5.TracesEveryGcRef — `StackFrame` traces all GC-managed fields it can contain:
-// `exception_stack` entries, optional `multicast_state`, the synchronized-method `sync_lock`, and the references serialized in its
-// local `homes`. The native return destination
-// contains only an ID and generation. // Retry state for byref monitor fallbacks and Thread.Join contains only static metadata and time.
-// Constructor completion also carries only static metadata; its
-// receiver bytes are traced through the caller's homes.
+// `exception_stack` entries, the synchronized-method `sync_lock`, and references serialized in
+// local `homes`. The native return destination contains only an ID and generation. Constructor
+// completion carries only static metadata; its receiver bytes are traced through the caller's homes.
 unsafe impl<'gc> Collect<'gc> for StackFrame<'gc> {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         for exception in &self.exception_stack {
             exception.trace(cc);
         }
-        self.multicast_state.trace(cc);
         self.sync_lock.trace(cc);
         self.homes.trace(cc);
     }

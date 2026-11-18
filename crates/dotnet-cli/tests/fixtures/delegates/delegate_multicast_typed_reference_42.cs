@@ -2,7 +2,7 @@ using System;
 
 public delegate void Update(TypedReference value);
 public static class Program {
-    static void First(TypedReference value) { __refvalue(value, int) += 10; }
+    static void First(TypedReference value) { __refvalue(value, int) += 10; GC.Collect(); GC.WaitForPendingFinalizers(); }
     static void Second(TypedReference value) { __refvalue(value, int) += 30; }
     public static int Main() {
         int number = 2;

@@ -983,10 +983,9 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         }
 
         // Avoid tail-call frame replacement for special frames that have deferred-return semantics
-        // in `return_frame()` (cctor initialization, finalizer processing, multicast, etc.).
+        // in `return_frame()` (cctor initialization, finalizer processing, native returns, etc.).
         if frame.state.info_handle.is_cctor
             || frame.is_finalizer
-            || frame.multicast_state.is_some()
             || frame.native_return.is_some()
             || frame.constructor_result.is_some()
         {

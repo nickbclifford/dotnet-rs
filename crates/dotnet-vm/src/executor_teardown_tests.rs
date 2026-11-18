@@ -209,8 +209,15 @@ fn retired_shutdown_waits_for_inflight_collection_and_lease() {
     assert!(removed);
     assert!(rejected);
     assert!(held_up_shutdown);
-    assert_eq!(phase_during_drain, "shutting down");
-    assert_eq!(completion.phase(), "drained");
+    assert!(matches!(phase_during_drain, "shutting down" | "releasing"));
+    assert_eq!(
+        completion.phase(),
+        if phase_during_drain == "releasing" {
+            "released"
+        } else {
+            "drained"
+        }
+    );
 }
 
 #[cfg(feature = "multithreading")]
@@ -1192,9 +1199,8 @@ mod ownership {
     }
 }
 
-/// A retired owner may not free its arena while another owner can still run a finalizer: that
-/// finalizer can allocate and collect, and a trace reads owner identity through references into
-/// every arena (F1.RetiredCollectionExclusion).
+/// Without a completed sweep proving emptiness, shutdown retains this arena while another
+/// owner can still finalize and collect (F1.RetiredCollectionExclusion).
 #[cfg(feature = "multithreading")]
 #[test]
 fn retired_owner_stays_registered_while_another_owner_finalizes() {
@@ -1304,4 +1310,665 @@ fn shutdown_waits_for_finalizing_worker_and_joins_workers_it_starts() {
         finished_late.load(AtomicOrdering::SeqCst),
         "shutdown returned before the worker started by a finalizer finished"
     );
+}
+
+/// Retirement drops only execution-local roots; child records and shared handles still own
+/// their objects. Weak witnesses observe the production retired-owner collection path.
+#[cfg(feature = "multithreading")]
+#[test]
+fn retired_owner_clears_dead_local_roots() {
+    use dotnet_utils::gc::GCHandleType;
+    use dotnet_value::pointer::HeapManagedPtrDecodeCache;
+    use std::{
+        sync::mpsc,
+        time::{Duration, Instant},
+    };
+
+    let state = shared();
+    let _cleanup = ShutdownOnDrop(state.clone());
+    let worker_state = state.clone();
+    let (ready, receiver) = mpsc::channel();
+    let completion = state.workers.spawn_owner(move |running| {
+        let mut executor = Executor::new(worker_state);
+        let witnesses = executor
+            .with_arena(|arena| {
+                arena.mutate_root(|gc, engine| {
+                    // SAFETY: F1.GcHandleRooted — the objects and handle remain in this root mutation.
+                    let handle = unsafe { crate::test_utils::test_gc_handle(gc, engine) };
+                    let objects: Vec<_> = (0..7)
+                        .map(|_| {
+                            ObjectRef::new(
+                                handle,
+                                HeapStorage::Str(CLRString::from("retirement payload")),
+                            )
+                        })
+                        .collect();
+                    let witnesses: Vec<_> = objects
+                        .iter()
+                        .map(|&object| {
+                            engine
+                                .stack
+                                .shared
+                                .gc_handles
+                                .alloc(object, GCHandleType::Weak)
+                        })
+                        .collect();
+                    engine.stack.execution.evaluation_stack.push_obj(objects[0]);
+                    engine.stack.local.managed_threads.set_current(objects[1]);
+                    engine
+                        .stack
+                        .heap_managed_ptr_decode_cache
+                        .insert_heap_handle(1, objects[2]);
+                    let resolution = dotnet_types::resolution::ResolutionS::NULL;
+                    engine
+                        .stack
+                        .local
+                        .reflection
+                        .runtime_asms
+                        .borrow_mut()
+                        .insert(resolution, objects[3]);
+                    for (index, retained) in [(4, false), (5, true)] {
+                        engine.stack.local.managed_threads.records_write().insert(
+                            objects[index],
+                            crate::threading::local::ManagedThreadRecord::new(
+                                objects[index],
+                                StdArc::new(std::sync::atomic::AtomicBool::new(retained)),
+                            ),
+                        );
+                    }
+                    engine
+                        .stack
+                        .shared
+                        .gc_handles
+                        .alloc(objects[6], GCHandleType::Normal);
+                    witnesses
+                })
+            })
+            .unwrap();
+        ready.send(witnesses).unwrap();
+        executor.serve_retired(running.complete(ExecutorResult::Exited(0)));
+    });
+    let witnesses = receiver.recv_timeout(Duration::from_secs(30)).unwrap();
+    let mut collector = Executor::new(state.clone());
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        collector.perform_full_gc().unwrap();
+        let alive: Vec<_> = collector
+            .with_arena_ref(|arena| {
+                arena.mutate(|_, engine| {
+                    witnesses
+                        .iter()
+                        .map(|&index| {
+                            // SAFETY: F1.GcHandleRooted — only nullness is inspected within the mutation.
+                            unsafe { engine.stack.shared.gc_handles.get(index) }
+                                .unwrap()
+                                .0
+                                .0
+                                .is_some()
+                        })
+                        .collect()
+                })
+            })
+            .unwrap();
+        assert!(
+            alive[5],
+            "retirement must preserve an active child's record"
+        );
+        assert!(
+            alive[6],
+            "retirement must preserve authoritative shared roots"
+        );
+        if alive[..5].iter().all(|&alive| !alive) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "dead retirement roots remain: {alive:?}"
+        );
+        std::thread::yield_now();
+    }
+    assert_eq!(completion.phase(), "retired");
+    assert!(matches!(
+        completion.take_outcome(),
+        Some(Ok(ExecutorResult::Exited(0)))
+    ));
+    drop(collector);
+    state.shutdown_workers();
+}
+
+/// All Gc allocations, not just registered heap objects, disappear after dead-root cleanup
+/// and a complete coordinated sweep. This owner remains registered until normal teardown.
+#[cfg(feature = "multithreading")]
+#[test]
+fn retired_root_cleanup_reaches_zero_after_sweep() {
+    let mut executor = Executor::new(shared());
+    let drops = StdArc::new(AtomicUsize::new(0));
+    allocate_witness(&mut executor, drops.clone());
+    executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: F1.GcHandleRooted — the object is rooted in the current execution segment.
+                let handle = unsafe { crate::test_utils::test_gc_handle(gc, engine) };
+                let object = ObjectRef::new(handle, HeapStorage::Str(CLRString::from("temporary")));
+                engine.stack.execution.evaluation_stack.push_obj(object);
+            })
+        })
+        .unwrap();
+    executor.clear_retired_roots();
+    executor.perform_full_gc().unwrap();
+    assert_eq!(drops.load(AtomicOrdering::SeqCst), 1);
+    assert_eq!(
+        executor
+            .with_arena_ref(|arena| arena.metrics().total_gc_count())
+            .unwrap(),
+        0
+    );
+    // Cleanup is also safe after an empty finalizer/error segment and after a collection.
+    executor.clear_retired_roots();
+    executor.perform_full_gc().unwrap();
+    assert_eq!(
+        executor
+            .with_arena_ref(|arena| arena.metrics().total_gc_count())
+            .unwrap(),
+        0
+    );
+}
+
+/// A real coordinated sweep clears weak references before unregistration; lease drain
+/// happens with the collection and lifecycle locks available, preserving consumed outcomes.
+#[cfg(feature = "multithreading")]
+#[test]
+fn empty_retired_owner_unregisters_then_drains_before_shutdown() {
+    use dotnet_utils::gc::{GCHandleType, try_acquire_lease};
+    use std::{
+        sync::mpsc,
+        time::{Duration, Instant},
+    };
+    let state = shared();
+    let _cleanup = ShutdownOnDrop(state.clone());
+    let worker_state = state.clone();
+    let (ready, receiver) = mpsc::channel();
+    let completion = state.workers.spawn_owner(move |running| {
+        let mut executor = Executor::new(worker_state);
+        let weak = executor
+            .with_arena(|arena| {
+                arena.mutate_root(|gc, engine| {
+                    // SAFETY: F1.GcHandleRooted — the handle is used within its arena root mutation.
+                    let handle = unsafe { crate::test_utils::test_gc_handle(gc, engine) };
+                    let object =
+                        ObjectRef::new(handle, HeapStorage::Str(CLRString::from("temporary")));
+                    engine.stack.execution.evaluation_stack.push_obj(object);
+                    engine
+                        .stack
+                        .shared
+                        .gc_handles
+                        .alloc(object, GCHandleType::Weak)
+                })
+            })
+            .unwrap();
+        ready.send((executor.thread_id, weak)).unwrap();
+        executor.serve_retired(running.complete(ExecutorResult::Exited(42)));
+    });
+    let (id, weak) = receiver.recv_timeout(Duration::from_secs(30)).unwrap();
+    let lease = try_acquire_lease(id).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while completion.phase() != "retired" {
+        assert!(Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    assert!(matches!(
+        completion.take_outcome(),
+        Some(Ok(ExecutorResult::Exited(42)))
+    ));
+    let mut collector = Executor::new(state.clone());
+    collector.perform_full_gc().unwrap();
+    while lease.is_valid() {
+        assert!(Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    assert_eq!(completion.phase(), "releasing");
+    assert!(completion.is_finished());
+    assert!(completion.take_outcome().is_none());
+    assert!(state.gc_coordinator.try_exclude_collection(|| ()).is_some());
+    assert_eq!(state.thread_manager.thread_count(), 1);
+    assert!(try_acquire_lease(id).is_none());
+    collector
+        .with_arena_ref(|arena| {
+            arena.mutate(|_, engine| {
+                // SAFETY: F1.GcHandleRooted — inspect only nullness inside the live collector mutation.
+                let target = unsafe { engine.stack.shared.gc_handles.get(weak) }.unwrap();
+                assert!(target.0.0.is_none());
+            })
+        })
+        .unwrap();
+    drop(lease);
+    while completion.phase() == "releasing" {
+        assert!(Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    assert_eq!(completion.phase(), "released");
+    drop(collector);
+    state.shutdown_workers();
+    state.shutdown_workers();
+    assert_eq!(completion.phase(), "released");
+}
+
+#[cfg(feature = "multithreading")]
+#[test]
+fn empty_retired_owner_failed_or_unwound_drain_is_leaked() {
+    use dotnet_utils::gc::try_acquire_lease;
+    use std::{
+        sync::mpsc,
+        time::{Duration, Instant},
+    };
+    for unwind in [false, true] {
+        let state = shared();
+        let _cleanup = ShutdownOnDrop(state.clone());
+        let worker_state = state.clone();
+        let (ready, receiver) = mpsc::channel();
+        let completion = state.workers.spawn_owner(move |running| {
+            let executor = Executor::new(worker_state);
+            let lease = try_acquire_lease(executor.thread_id).unwrap();
+            if unwind {
+                OWNERSHIP_PANIC.set(Some("drain"));
+            }
+            ready.send(executor.thread_id).unwrap();
+            executor.serve_retired(running.complete(ExecutorResult::Exited(42)));
+            drop(lease);
+        });
+        let id = receiver.recv_timeout(Duration::from_secs(30)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while completion.phase() != "retired" {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        let mut collector = Executor::new(state.clone());
+        collector.perform_full_gc().unwrap();
+        while completion.phase() != "leaked" {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        // A fault before exact unregistration deliberately retains its registration too.
+        assert_eq!(try_acquire_lease(id).is_some(), unwind);
+        assert_eq!(state.thread_manager.thread_count(), 1);
+        assert!(matches!(
+            completion.take_outcome(),
+            Some(Ok(ExecutorResult::Exited(42)))
+        ));
+        drop(collector);
+        state.shutdown_workers();
+        assert_eq!(completion.phase(), "leaked");
+        if unwind {
+            dotnet_utils::gc::cross_arena::unregister_arena(id);
+        }
+    }
+}
+
+#[cfg(feature = "multithreading")]
+#[test]
+fn retired_pool_and_finalizer_owners_stay_registered_when_empty() {
+    use dotnet_utils::gc::try_acquire_lease;
+    use std::{
+        sync::mpsc,
+        time::{Duration, Instant},
+    };
+    for finalizer in [false, true] {
+        let state = shared();
+        let _cleanup = ShutdownOnDrop(state.clone());
+        let worker_state = state.clone();
+        let (ready, receiver) = mpsc::channel();
+        let run = move |running: crate::threading::workers::RunningWorker| {
+            let executor = Executor::new(worker_state);
+            ready.send(executor.thread_id).unwrap();
+            executor.serve_retired(running.complete(ExecutorResult::Exited(0)));
+        };
+        let completion = if finalizer {
+            state.workers.spawn_finalizer_owner(run)
+        } else {
+            state.workers.spawn_pool_owner(run)
+        };
+        let id = receiver.recv_timeout(Duration::from_secs(30)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while completion.phase() != "retired" {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        let mut collector = Executor::new(state.clone());
+        for _ in 0..3 {
+            collector.perform_full_gc().unwrap();
+        }
+        assert!(try_acquire_lease(id).is_some());
+        assert_eq!(completion.phase(), "retired");
+        drop(collector);
+        state.shutdown_workers();
+        assert_eq!(completion.phase(), "drained");
+    }
+}
+
+/// Even with no local Gc allocations, pending work and retained child records forbid release.
+#[cfg(feature = "multithreading")]
+#[test]
+fn empty_retired_owner_retains_pending_work_and_unstarted_children() {
+    use dotnet_utils::gc::try_acquire_lease;
+    use std::{
+        sync::mpsc,
+        time::{Duration, Instant},
+    };
+    for pending in [false, true] {
+        let state = shared();
+        let _cleanup = ShutdownOnDrop(state.clone());
+        // Abort leaves pending work queued rather than executing a synthetic null finalizer.
+        if pending {
+            state.abort_signal().request_abort();
+        }
+        let worker_state = state.clone();
+        let (ready, receiver) = mpsc::channel();
+        let completion = state.workers.spawn_owner(move |running| {
+            let mut executor = Executor::new(worker_state);
+            executor
+                .with_arena(|arena| {
+                    arena.mutate_root(|_, engine| {
+                        if pending {
+                            engine
+                                .stack
+                                .local
+                                .heap
+                                .pending_finalization
+                                .borrow_mut()
+                                .push(ObjectRef(None));
+                        } else {
+                            engine.stack.local.managed_threads.records_write().insert(
+                                ObjectRef(None),
+                                crate::threading::local::ManagedThreadRecord::new(
+                                    ObjectRef(None),
+                                    StdArc::new(std::sync::atomic::AtomicBool::new(true)),
+                                ),
+                            );
+                        }
+                    })
+                })
+                .unwrap();
+            ready.send(executor.thread_id).unwrap();
+            executor.serve_retired(running.complete(ExecutorResult::Exited(0)));
+        });
+        let id = receiver.recv_timeout(Duration::from_secs(30)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while completion.phase() != "retired" {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        let mut collector = Executor::new(state.clone());
+        for _ in 0..3 {
+            collector.perform_full_gc().unwrap();
+        }
+        assert!(try_acquire_lease(id).is_some());
+        assert_eq!(completion.phase(), "retired");
+        drop(collector);
+        state.shutdown_workers();
+        assert_eq!(completion.phase(), "drained");
+    }
+}
+
+/// A live executor reaps the native owner after its empty arena is released.
+#[cfg(feature = "multithreading")]
+#[test]
+fn empty_retired_arena_releases_before_shutdown() {
+    use dotnet_utils::gc::try_acquire_lease;
+    use std::{
+        sync::mpsc,
+        time::{Duration, Instant},
+    };
+
+    let state = shared();
+    let _cleanup = ShutdownOnDrop(state.clone());
+    let worker_state = state.clone();
+    let (ready, receiver) = mpsc::channel();
+    let drops = StdArc::new(AtomicUsize::new(0));
+    let worker_drops = drops.clone();
+    let completion = state.workers.spawn_owner(move |running| {
+        let mut executor = Executor::new(worker_state);
+        allocate_witness(&mut executor, worker_drops);
+        ready.send(executor.thread_id).unwrap();
+        executor.serve_retired(running.complete(ExecutorResult::Exited(42)));
+    });
+    let id = receiver.recv_timeout(Duration::from_secs(30)).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while completion.phase() != "retired" {
+        assert!(Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    let mut collector = Executor::new(state.clone());
+    collector.perform_full_gc().unwrap();
+    while !completion.is_joined() {
+        collector.wait_for_foreground_workers();
+        assert!(Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    assert_eq!(completion.phase(), "released");
+    assert_eq!(drops.load(AtomicOrdering::SeqCst), 1);
+    assert!(try_acquire_lease(id).is_none());
+    assert_eq!(state.thread_manager.thread_count(), 1);
+    let arenas = state.gc_coordinator.arena_gc_pressure_snapshot();
+    assert_eq!(arenas.len(), 1);
+    assert_eq!(arenas[0].0, collector.thread_id);
+    assert!(matches!(
+        completion.take_outcome(),
+        Some(Ok(ExecutorResult::Exited(42)))
+    ));
+    drop(collector);
+}
+
+/// Observe only the TIDs created by this test, independent of host helper threads.
+#[cfg(all(feature = "multithreading", target_os = "linux", not(miri)))]
+#[test]
+fn sequential_empty_workers_keep_native_resources_bounded() {
+    use dotnet_utils::gc::try_acquire_lease;
+    use std::{
+        collections::HashSet,
+        sync::mpsc,
+        time::{Duration, Instant},
+    };
+
+    let state = shared();
+    let _cleanup = ShutdownOnDrop(state.clone());
+    let mut collector = Executor::new(state.clone());
+    let mut tids = HashSet::new();
+    for _ in 0..1_000 {
+        let worker_state = state.clone();
+        let (ready, receiver) = mpsc::channel();
+        let completion = state.workers.spawn_owner(move |running| {
+            let mut executor = Executor::new(worker_state);
+            allocate_witness(&mut executor, StdArc::new(AtomicUsize::new(0)));
+            let tid = std::fs::read_link("/proc/thread-self").unwrap();
+            let tid = tid.file_name().unwrap().to_string_lossy().into_owned();
+            ready.send((executor.thread_id, tid)).unwrap();
+            executor.serve_retired(running.complete(ExecutorResult::Exited(42)));
+        });
+        let (id, tid) = receiver.recv_timeout(Duration::from_secs(30)).unwrap();
+        tids.insert(tid);
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while completion.phase() != "retired" {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        collector.perform_full_gc().unwrap();
+        while !completion.is_joined() {
+            collector.wait_for_foreground_workers();
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert_eq!(completion.phase(), "released");
+        assert!(try_acquire_lease(id).is_none());
+        assert_eq!(state.thread_manager.thread_count(), 1);
+        let arenas = state.gc_coordinator.arena_gc_pressure_snapshot();
+        assert_eq!(arenas.len(), 1);
+        assert_eq!(arenas[0].0, collector.thread_id);
+        assert!(matches!(
+            completion.take_outcome(),
+            Some(Ok(ExecutorResult::Exited(42)))
+        ));
+        loop {
+            let live = std::fs::read_dir("/proc/self/task")
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .filter(|tid| tids.contains(tid))
+                .count();
+            assert!(live <= 1, "previous worker OS threads must remain bounded");
+            if live == 0 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "joined OS thread remains visible"
+            );
+            std::thread::yield_now();
+        }
+    }
+    drop(collector);
+}
+
+/// Collection remains possible while release waits for a lease; shutdown and the live reaper
+/// must coordinate the single native join without changing a consumed completion.
+#[cfg(feature = "multithreading")]
+#[test]
+fn release_drain_allows_collection_and_races_shutdown_reaper() {
+    use dotnet_utils::gc::try_acquire_lease;
+    use std::{
+        sync::mpsc,
+        time::{Duration, Instant},
+    };
+
+    let state = shared();
+    let _cleanup = ShutdownOnDrop(state.clone());
+    let worker_state = state.clone();
+    let drops = StdArc::new(AtomicUsize::new(0));
+    let worker_drops = drops.clone();
+    let (ready, receiver) = mpsc::channel();
+    let completion = state.workers.spawn_owner(move |running| {
+        let mut executor = Executor::new(worker_state);
+        allocate_witness(&mut executor, worker_drops);
+        ready.send(executor.thread_id).unwrap();
+        executor.serve_retired(running.complete(ExecutorResult::Exited(23)));
+    });
+    let id = receiver.recv_timeout(Duration::from_secs(30)).unwrap();
+    let lease = try_acquire_lease(id).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while completion.phase() != "retired" {
+        assert!(Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    assert!(matches!(
+        completion.take_outcome(),
+        Some(Ok(ExecutorResult::Exited(23)))
+    ));
+    let mut collector = Executor::new(state.clone());
+    collector.perform_full_gc().unwrap();
+    while lease.is_valid() {
+        assert!(Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    assert_eq!(completion.phase(), "releasing");
+    collector.perform_full_gc().unwrap();
+    assert_eq!(completion.phase(), "releasing");
+    assert_eq!(drops.load(AtomicOrdering::SeqCst), 1);
+    assert!(try_acquire_lease(id).is_none());
+    drop(collector);
+
+    let (done, received) = mpsc::channel();
+    let shutdown_state = state.clone();
+    let shutdown = std::thread::spawn(move || {
+        shutdown_state.shutdown_workers();
+        done.send(()).unwrap();
+    });
+    while state.workers.joins_in_progress() == 0 {
+        assert!(Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    let (other_done, other_received) = mpsc::channel();
+    let other_state = state.clone();
+    let other = std::thread::spawn(move || {
+        other_state.shutdown_workers();
+        other_done.send(()).unwrap();
+    });
+    let reap_state = state.clone();
+    let reaper = std::thread::spawn(move || reap_state.workers.reap_released());
+    let early = received.recv_timeout(Duration::from_millis(100)).is_ok();
+    let other_early = other_received
+        .recv_timeout(Duration::from_millis(100))
+        .is_ok();
+    drop(lease);
+    let finished = early || received.recv_timeout(Duration::from_secs(30)).is_ok();
+    let other_finished =
+        other_early || other_received.recv_timeout(Duration::from_secs(30)).is_ok();
+    shutdown.join().unwrap();
+    other.join().unwrap();
+    reaper.join().unwrap();
+    assert!(!early && !other_early);
+    assert!(finished && other_finished);
+    assert_eq!(completion.phase(), "released");
+    assert!(completion.is_joined());
+    assert_eq!(state.workers.joins_completed(), 1);
+    assert!(completion.take_outcome().is_none());
+    state.shutdown_workers();
+    assert_eq!(state.workers.joins_completed(), 1);
+}
+
+/// Competing live and shutdown reapers may claim the released handle in either order.
+#[cfg(all(feature = "multithreading", not(miri)))]
+#[test]
+fn released_worker_live_reaper_races_shutdown() {
+    use std::{
+        sync::{Barrier, mpsc},
+        time::{Duration, Instant},
+    };
+
+    for _ in 0..16 {
+        let state = shared();
+        let _cleanup = ShutdownOnDrop(state.clone());
+        let worker_state = state.clone();
+        let (ready, receiver) = mpsc::channel();
+        let completion = state.workers.spawn_owner(move |running| {
+            let mut executor = Executor::new(worker_state);
+            allocate_witness(&mut executor, StdArc::new(AtomicUsize::new(0)));
+            ready.send(()).unwrap();
+            executor.serve_retired(running.complete(ExecutorResult::Exited(37)));
+        });
+        receiver.recv_timeout(Duration::from_secs(30)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while completion.phase() != "retired" {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        let mut collector = Executor::new(state.clone());
+        collector.perform_full_gc().unwrap();
+        while completion.phase() != "released" {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        drop(collector);
+        let barrier = StdArc::new(Barrier::new(3));
+        let reaper_state = state.clone();
+        let reaper_barrier = barrier.clone();
+        let reaper = std::thread::spawn(move || {
+            reaper_barrier.wait();
+            reaper_state.workers.reap_released();
+        });
+        let shutdown_state = state.clone();
+        let shutdown_barrier = barrier.clone();
+        let shutdown = std::thread::spawn(move || {
+            shutdown_barrier.wait();
+            shutdown_state.shutdown_workers();
+        });
+        barrier.wait();
+        reaper.join().unwrap();
+        shutdown.join().unwrap();
+        assert_eq!(state.workers.joins_completed(), 1);
+        assert!(completion.is_joined());
+        assert_eq!(completion.phase(), "released");
+        assert!(matches!(
+            completion.take_outcome(),
+            Some(Ok(ExecutorResult::Exited(37)))
+        ));
+        assert!(completion.take_outcome().is_none());
+    }
 }

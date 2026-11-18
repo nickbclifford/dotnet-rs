@@ -850,34 +850,6 @@ fn retired_owner_wakes_for_collection_and_shutdown() {
 }
 
 #[test]
-fn abort_excludes_new_finalizing_after_entry_teardown() {
-    loom::model(|| {
-        let aborted = Arc::new(AtomicBool::new(false));
-        let lifecycle = Arc::new(loom::sync::Mutex::new(false));
-        let torn_down = Arc::new(AtomicBool::new(false));
-        let worker_abort = aborted.clone();
-        let worker_lifecycle = lifecycle.clone();
-        let worker_torn_down = torn_down.clone();
-        let worker = thread::spawn(move || {
-            let mut finalizing = worker_lifecycle.lock().unwrap();
-            if !worker_abort.load(Ordering::Acquire) {
-                *finalizing = true;
-                drop(finalizing);
-                assert!(!worker_torn_down.load(Ordering::Acquire));
-                *worker_lifecycle.lock().unwrap() = false;
-            }
-        });
-        aborted.store(true, Ordering::Release);
-        let finalizing = lifecycle.lock().unwrap();
-        if !*finalizing {
-            torn_down.store(true, Ordering::Release);
-        }
-        drop(finalizing);
-        worker.join().unwrap();
-    });
-}
-
-#[test]
 fn shutdown_removes_registration_before_draining_leases() {
     use loom::sync::{Condvar, Mutex};
 

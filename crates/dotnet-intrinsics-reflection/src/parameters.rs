@@ -4,6 +4,8 @@ use dotnet_types::{
     error::ExecutionError, generics::GenericLookup, members::MethodDescription,
     runtime::RuntimeType,
 };
+#[cfg(feature = "multithreading")]
+use dotnet_value::StackValue;
 use dotnet_value::object::ObjectRef;
 use dotnet_vm_data::StepResult;
 use dotnet_vm_ops::SupportSlotOps;
@@ -18,6 +20,44 @@ pub fn runtime_parameter_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc
     method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
+    #[cfg(feature = "multithreading")]
+    {
+        use dotnet_vm_ops::effects::CanonicalKey;
+        match method.method().name.as_ref() {
+            "GetParameterType" | "GetMember" => {
+                if let StackValue::ObjectRef(receiver) = ctx.peek_stack_at(0)
+                    && let Ok((member, lookup, position)) = resolve_runtime_parameter(ctx, receiver)
+                {
+                    let key = if method.method().name == "GetMember" {
+                        CanonicalKey::Method(member, lookup)
+                    } else {
+                        let parameter = &member.signature().parameters[position].1;
+                        let runtime_type = match parameter {
+                            ParameterType::Value(ty) => ctx
+                                .reflection_make_runtime_type_for_method(
+                                    member.clone(),
+                                    &lookup,
+                                    ty,
+                                ),
+                            ParameterType::Ref(ty) => RuntimeType::ByRef(Box::new(
+                                ctx.reflection_make_runtime_type_for_method(
+                                    member.clone(),
+                                    &lookup,
+                                    ty,
+                                ),
+                            )),
+                            ParameterType::TypedReference => RuntimeType::TypedReference,
+                        };
+                        CanonicalKey::Type(runtime_type)
+                    };
+                    if let Some(step) = crate::common::await_canonical_object(ctx, key) {
+                        return step;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
     let method_name = &*method.method().name;
 
     match method_name {

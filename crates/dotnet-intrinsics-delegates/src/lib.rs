@@ -12,8 +12,8 @@
 //! ## Host Trait
 //!
 //! VM contexts integrating this crate must implement [`DelegateInvokeHost<'gc>`]
-//! for delegate-specific runtime hooks (method lookup, call-frame setup,
-//! `MethodInfo` construction, and runtime `MethodInfo` object projection).
+//! for delegate-specific runtime hooks (method lookup, dispatch, and runtime
+//! `MethodInfo` object projection).
 //! `try_delegate_dispatch` also requires the broader
 //! `dotnet_vm_ops::ops::DelegateIntrinsicHost<'gc>` contract for stack,
 //! exception, loader, and frame-state operations used by delegate dispatch.
@@ -23,11 +23,9 @@
 //! `#[dotnet_intrinsic]` handlers in this crate are registered into generated
 //! intrinsic tables.
 
-use dotnet_types::{
-    error::TypeResolutionError, generics::GenericLookup, members::MethodDescription,
-};
+use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_value::object::ObjectRef;
-use dotnet_vm_data::{MethodInfo, StepResult};
+use dotnet_vm_data::StepResult;
 
 pub mod helpers;
 pub mod invoke;
@@ -56,18 +54,6 @@ pub trait DelegateInvokeHost<'gc> {
 
     /// Caches a classification that was computed from stable method metadata.
     fn cache_delegate_dispatch_kind(&self, method: MethodDescription, kind: DelegateDispatchKind);
-
-    fn delegate_method_info(
-        &self,
-        method: MethodDescription,
-        lookup: &GenericLookup,
-    ) -> Result<MethodInfo<'static>, TypeResolutionError>;
-
-    fn delegate_call_frame(
-        &mut self,
-        method: MethodInfo<'static>,
-        generic_inst: GenericLookup,
-    ) -> Result<(), TypeResolutionError>;
 
     fn delegate_lookup_method_by_index(&self, index: usize) -> (MethodDescription, GenericLookup);
 

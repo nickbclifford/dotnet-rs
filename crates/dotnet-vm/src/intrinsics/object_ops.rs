@@ -2,7 +2,8 @@ use crate::{
     StepResult,
     error::ExecutionError,
     stack::ops::{
-        EvalStackOps, ExceptionOps, LoaderOps, ReflectionOps, TypedStackOps, VmReflectionOps,
+        EvalStackOps, ExceptionOps, LoaderOps, ReflectionLookupOps, ReflectionOps, TypedStackOps,
+        VmReflectionOps,
     },
 };
 use dotnet_assemblies::AssemblyLoader;
@@ -496,12 +497,39 @@ fn runtime_type_from_heap(loader: &AssemblyLoader, object_ref: ObjectRef<'_>) ->
 #[dotnet_intrinsic("System.Type System.Object::GetType()")]
 pub(super) fn object_get_type<
     'gc,
-    T: TypedStackOps<'gc> + ExceptionOps<'gc> + ReflectionOps<'gc> + VmReflectionOps<'gc> + LoaderOps,
+    T: TypedStackOps<'gc>
+        + ExceptionOps<'gc>
+        + ReflectionOps<'gc>
+        + ReflectionLookupOps<'gc>
+        + VmReflectionOps<'gc>
+        + LoaderOps,
 >(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
+    #[cfg(feature = "multithreading")]
+    {
+        let candidate = match ctx.peek_stack_at(0) {
+            StackValue::ObjectRef(object) if object.0.is_some() => {
+                Some(runtime_type_from_heap(ctx.loader().as_ref(), object))
+            }
+            StackValue::ManagedPtr(pointer) if !pointer.is_null() => Some(
+                pointer
+                    .owner()
+                    .map(|owner| runtime_type_from_heap(ctx.loader().as_ref(), owner))
+                    .unwrap_or_else(|| runtime_type_from_desc(pointer.inner_type())),
+            ),
+            StackValue::ValueType(value) => Some(runtime_type_from_desc(value.description.clone())),
+            _ => None,
+        };
+        if let Some(target) = candidate
+            && let Some(step) =
+                ctx.await_reflection_object(crate::stack::ops::ReflectionObjectKey::Type(&target))
+        {
+            return step;
+        }
+    }
     let this = ctx.pop();
     let rt = match this {
         StackValue::ObjectRef(this_ref) => {

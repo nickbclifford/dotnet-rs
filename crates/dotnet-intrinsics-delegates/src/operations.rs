@@ -88,6 +88,16 @@ pub fn delegate_get_method<'gc, T: DelegateEqualsHost<'gc> + DelegateInvokeHost<
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
+    #[cfg(feature = "multithreading")]
+    if let StackValue::ObjectRef(receiver) = ctx.peek_stack_at(0)
+        && receiver.0.is_some()
+    {
+        let method_index = DelegateView::new(ctx, receiver).method_index();
+        let (target_method, target_lookup) = ctx.delegate_lookup_method_by_index(method_index);
+        if let Some(step) = ctx.await_runtime_method_object(&target_method, &target_lookup) {
+            return step;
+        }
+    }
     let this = match pop_object_ref(ctx, ArgPolicy::ManagedNullNre) {
         Ok(this) => this,
         Err(step) => return step,

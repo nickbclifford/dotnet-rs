@@ -73,6 +73,22 @@ fn executor() -> Executor {
         "ReadByRef",
         Some(make_test_method!(max_stack: 1, instructions: vec![Instruction::LoadConstantInt32(0), Instruction::Return])),
     ));
+    let mut typed_signature = parameterless_i32_signature();
+    typed_signature
+        .parameters
+        .push(Parameter(vec![], ParameterType::TypedReference));
+    res.push_method(
+        type_idx,
+        Method::new(
+            Accessibility::Public,
+            typed_signature,
+            "AcceptTypedReference",
+            Some(make_test_method!(max_stack: 1, instructions: vec![
+                Instruction::LoadArgument(0), Instruction::ReadTypedReferenceType, Instruction::Pop,
+                Instruction::LoadConstantInt32(0), Instruction::Return
+            ])),
+        ),
+    );
     let res = loader.register_owned_assembly(res);
     let ty = TypeDescription::new(res.clone(), type_idx);
     let index = ty
@@ -1994,6 +2010,196 @@ fn native_activation_rejects_each_changed_caller_component() {
 
 thread_local! {
     static CALL_TARGET: std::cell::RefCell<Option<MethodDescription>> = const { std::cell::RefCell::new(None) };
+}
+
+thread_local! {
+    static TYPED_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn native_typed_reference_calls(
+    mut fx: dotnet_vm_ops::effects::VmEffects,
+) -> dotnet_vm_ops::effects::NativeFuture {
+    let method = CALL_TARGET.with(|slot| slot.borrow().as_ref().unwrap().clone());
+    Box::pin(async move {
+        let (_, arguments) = fx.vm().await?.prepare_multicast()?;
+        for index in 0..2 {
+            fx.call(dotnet_vm_ops::effects::NativeCall {
+                method: method.clone(),
+                generics: GenericLookup::default(),
+                arguments: vec![arguments[0].clone()],
+            })
+            .await?;
+            TYPED_CALLS.set(index + 1);
+            if index == 0 {
+                fx.yield_now().await?;
+            }
+        }
+        let mut vm = fx.vm().await?;
+        vm.with(|region| {
+            let StackValue::TypedRef(slot) = region.fetch(&arguments[0])? else {
+                panic!("expected typed reference");
+            };
+            assert_eq!(**slot.type_desc(), TypeDescription::NULL);
+            let address = slot.value().observe_address().expect("live frame home");
+            // SAFETY: F10.FrameHomeChecked — the caller's four-byte home remains live
+            // throughout both child calls and has exactly this initialized range.
+            unsafe { address.as_ptr().cast::<i32>().write_unaligned(42) };
+            Ok::<_, VmError>(())
+        })??;
+        vm.push_new_string(vec![65])
+    })
+}
+
+#[test]
+fn native_typed_reference_local_survives_collection_between_calls() {
+    use crate::stack::ops::LocalOps;
+    use dotnet_value::{
+        ManagedPtr, TypedReferenceSlot,
+        layout::{FieldKey, FieldLayout, FieldLayoutManager, LayoutManager, Scalar},
+    };
+    use dotnet_vm_data::frame_homes::{FrameHomeLayout, FrameHomes, VariableHome};
+    use dotnet_vm_ops::effects::{NativeDispatchMode, NativeIntrinsicHost};
+    let mut executor = executor();
+    let method = substring_method(&executor, true);
+    TYPED_CALLS.set(0);
+    let (start, serial) = executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: F1.GcHandleRooted — the engine is the live arena root.
+                let gc = unsafe { test_gc_handle(gc, engine) };
+                let frames = &mut engine.stack.execution.frame_stack;
+                let parent = frames
+                    .current_frame()
+                    .state
+                    .info_handle
+                    .source
+                    .parent
+                    .clone();
+                let index = parent
+                    .definition()
+                    .methods
+                    .iter()
+                    .position(|m| m.name == "AcceptTypedReference")
+                    .unwrap();
+                CALL_TARGET.with(|slot| {
+                    *slot.borrow_mut() = Some(MethodDescription::new(
+                        parent.clone(),
+                        GenericLookup::default(),
+                        parent.resolution.clone(),
+                        MethodMemberIndex::Method(index),
+                    ))
+                });
+                let serial = frames.issue_home_serial();
+                let local_layout = Arc::new(LayoutManager::Scalar(Scalar::Int32));
+                let field = FieldLayout {
+                    position: 0usize.into(),
+                    layout: local_layout.clone(),
+                };
+                let layout = FieldLayoutManager {
+                    fields: [(
+                        FieldKey {
+                            owner: parent.clone(),
+                            name: "local".into(),
+                        },
+                        field,
+                    )]
+                    .into_iter()
+                    .collect(),
+                    total_size: 4,
+                    alignment: 4,
+                    gc_desc: Default::default(),
+                    has_ref_fields: false,
+                };
+                frames.current_frame_mut().homes = FrameHomes::allocate(
+                    Arc::new(FrameHomeLayout::new(
+                        layout,
+                        Box::new([Some(VariableHome {
+                            offset: 0,
+                            layout: local_layout,
+                            value_type: None,
+                            scalar_type: None,
+                        })]),
+                        Box::new([]),
+                    )),
+                    serial,
+                )
+                .unwrap();
+                let (address, _) = frames.home_block(serial).unwrap();
+                let pointer = ManagedPtr::new_frame_home(
+                    address,
+                    TypeDescription::NULL,
+                    serial,
+                    ByteOffset::new(0),
+                    false,
+                );
+                let mut ctx = engine.ves_context(gc);
+                ctx.set_local(crate::LocalIndex::new(0), StackValue::Int32(2))
+                    .unwrap();
+                ctx.push(StackValue::null());
+                ctx.push(StackValue::TypedRef(TypedReferenceSlot::new(
+                    pointer.into(),
+                    Arc::new(TypeDescription::NULL),
+                )));
+                ctx.push(StackValue::Int32(0));
+                (
+                    ctx.start_native(
+                        method,
+                        NativeDispatchMode::InlineCall,
+                        &GenericLookup::default(),
+                        None,
+                        Some(native_test_fallback),
+                        native_typed_reference_calls,
+                    ),
+                    serial,
+                )
+            })
+        })
+        .unwrap();
+    assert!(matches!(
+        start,
+        StepResult::NativeSuspended(_) | StepResult::Yield
+    ));
+    let mut collected = false;
+    for _ in 0..50 {
+        if TYPED_CALLS.get() == 1 && !collected {
+            collect(&mut executor);
+            collected = true;
+        }
+        let result = resume(&mut executor);
+        assert!(!matches!(result, StepResult::Error(_)), "{result:?}");
+        if executor
+            .with_arena(|arena| {
+                arena.mutate(|_, engine| engine.stack.execution.call_state.native.is_empty())
+            })
+            .unwrap()
+        {
+            break;
+        }
+    }
+    assert!(collected);
+    assert_eq!(TYPED_CALLS.get(), 2);
+    executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                assert!(engine.stack.execution.call_state.native.is_empty());
+                assert!(
+                    engine
+                        .stack
+                        .execution
+                        .frame_stack
+                        .home_block(serial)
+                        .is_some()
+                );
+                // SAFETY: F1.GcHandleRooted — the engine remains the live arena root.
+                let gc = unsafe { test_gc_handle(gc, engine) };
+                assert!(matches!(
+                    engine.ves_context(gc).get_local(crate::LocalIndex::new(0)),
+                    StackValue::Int32(42)
+                ));
+            })
+        })
+        .unwrap();
+    CALL_TARGET.with(|slot| *slot.borrow_mut() = None);
 }
 
 fn native_managed_call_body(
@@ -4020,7 +4226,7 @@ fn native_initializer_recursion_does_not_wait_for_same_thread() {
                         .init(
                             subject,
                             &ctx.with_generics(&GenericLookup::default()),
-                            ctx.thread_id.get()
+                            crate::stack::ThreadOps::thread_id(&ctx)
                         )
                         .unwrap(),
                     crate::statics::StaticInitResult::Recursive
@@ -4031,6 +4237,139 @@ fn native_initializer_recursion_does_not_wait_for_same_thread() {
     executor.shared.abort_signal().request_abort();
     assert!(matches!(executor.run(), ExecutorResult::Error(_)));
     CALL_TARGET.with(|slot| *slot.borrow_mut() = None);
+}
+
+#[cfg(not(feature = "multithreading"))]
+#[test]
+fn pending_finalizer_retries_after_monitor_is_released() {
+    use crate::sync::{SyncBlockOps, SyncManagerOps};
+
+    let (mut executor, _) = boundary_executor_with_initializer(false, true);
+    enqueue_test_finalizer(&mut executor);
+    executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: F1.GcHandleRooted — the engine remains rooted for this mutation.
+                let gc = unsafe { test_gc_handle(gc, engine) };
+                let owner = crate::stack::ThreadOps::thread_id(&engine.ves_context(gc));
+                let (_, block) = engine.stack.shared.sync_blocks.create_sync_block();
+                assert!(block.try_enter(owner));
+                assert!(block.try_enter(owner));
+                assert_eq!(engine.process_pending_finalizers(gc), StepResult::Continue);
+                assert!(engine.stack.local.heap.has_pending_finalizers());
+                assert!(block.exit(owner));
+                assert_eq!(engine.process_pending_finalizers(gc), StepResult::Continue);
+                assert!(block.exit(owner));
+                assert_eq!(
+                    engine.process_pending_finalizers(gc),
+                    StepResult::FramePushed
+                );
+                assert!(engine.stack.parked_finalizer_caller.is_some());
+            })
+        })
+        .unwrap();
+}
+
+#[cfg(not(feature = "multithreading"))]
+#[test]
+fn finalizer_cannot_reenter_parked_initializer_fast_paths() {
+    use crate::stack::native_effects::InitializerResume;
+    use crate::stack::ops::{StaticFieldAction, StaticFieldKind, VmResolutionOps};
+    use crate::statics::StaticInitResult;
+    use dotnet_types::members::FieldDescription;
+
+    for field_path in [false, true] {
+        let (mut executor, _) = boundary_executor_with_initializer(false, true);
+        let mut assembly = Resolution::new(Module::new("OwnerSubject.dll"));
+        assembly.assembly = Some(Assembly::new("OwnerSubject"));
+        let index = assembly.push_type_definition(TypeDefinition::new(None, "Subject"));
+        assembly.push_field(
+            index,
+            Field::static_member(
+                Accessibility::Public,
+                "Value",
+                MemberType::Base(Box::new(BaseType::Int32)),
+            ),
+        );
+        let mut signature = parameterless_i32_signature();
+        signature.return_type = ReturnType(vec![], None);
+        let mut cctor = Method::new(
+            Accessibility::Private,
+            signature,
+            ".cctor",
+            Some(make_test_method!(max_stack: 0, instructions: vec![Instruction::Return])),
+        );
+        cctor.runtime_special_name = true;
+        assembly.push_method(index, cctor);
+        let assembly = executor.shared.loader.register_owned_assembly(assembly);
+        let subject = TypeDescription::new(assembly.clone(), index);
+        let field = FieldDescription::new(subject.clone(), assembly, 0);
+        let claim = executor
+            .with_arena(|arena| {
+                arena.mutate_root(|gc, engine| {
+                    // SAFETY: F1.GcHandleRooted — the engine remains rooted for this mutation.
+                    let gc = unsafe { test_gc_handle(gc, engine) };
+                    let ctx = engine.ves_context(gc);
+                    match ctx
+                        .shared
+                        .statics
+                        .init(
+                            subject.clone(),
+                            &ctx.with_generics(&GenericLookup::default()),
+                            crate::stack::ThreadOps::thread_id(&ctx),
+                        )
+                        .unwrap()
+                    {
+                        StaticInitResult::Execute(_, claim) => claim,
+                        other => panic!("expected a new initializer claim: {other:?}"),
+                    }
+                })
+            })
+            .unwrap();
+        enqueue_test_finalizer(&mut executor);
+        let result = executor
+            .with_arena(|arena| {
+                arena.mutate_root(|gc, engine| {
+                    // SAFETY: F1.GcHandleRooted — the engine remains rooted for this mutation.
+                    let gc = unsafe { test_gc_handle(gc, engine) };
+                    assert_eq!(engine.process_pending_finalizers(gc), StepResult::Continue);
+                    assert!(engine.stack.parked_finalizer_caller.is_none());
+                    assert!(engine.stack.local.heap.has_pending_finalizers());
+                    assert_eq!(
+                        engine.process_pending_finalizers_with_force(gc, true),
+                        StepResult::FramePushed
+                    );
+                    let mut ctx = engine.ves_context(gc);
+                    assert!(matches!(
+                        ctx.shared
+                            .statics
+                            .init(
+                                subject.clone(),
+                                &ctx.with_generics(&GenericLookup::default()),
+                                crate::stack::ThreadOps::thread_id(&ctx)
+                            )
+                            .unwrap(),
+                        StaticInitResult::WouldDeadlock
+                    ));
+                    if field_path {
+                        ctx.start_static_field_effect(StaticFieldAction {
+                            field,
+                            generics: GenericLookup::default(),
+                            kind: StaticFieldKind::Load { volatile: false },
+                        })
+                    } else {
+                        ctx.initialize_type_then(
+                            subject,
+                            &GenericLookup::default(),
+                            InitializerResume::Retry,
+                        )
+                    }
+                })
+            })
+            .unwrap();
+        assert!(matches!(result, StepResult::Error(_)), "{result:?}");
+        drop(claim);
+    }
 }
 
 #[test]
@@ -5697,6 +6036,16 @@ fn finalizer_exception_cannot_reach_interrupted_handler() {
         StepResult::Exception
     );
     enqueue_test_finalizer(&mut executor);
+    let caller_identity = executor
+        .with_arena(|arena| {
+            arena.mutate(|_, engine| {
+                (
+                    engine.stack.thread_id.get(),
+                    engine.stack.local.managed_threads.current_id(),
+                )
+            })
+        })
+        .unwrap();
     let result = executor
         .with_arena(|arena| {
             arena.mutate_root(|gc, engine| {
@@ -5726,8 +6075,19 @@ fn finalizer_exception_cannot_reach_interrupted_handler() {
     assert!(matches!(result, StepResult::MethodThrew(_)), "{result:?}");
     executor
         .with_arena(|arena| {
-            arena.mutate(|_, engine| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: F1.GcHandleRooted — the engine remains rooted for this mutation.
+                let gc = unsafe { test_gc_handle(gc, engine) };
                 assert!(engine.stack.parked_finalizer_caller.is_none());
+                assert_eq!(
+                    crate::stack::ThreadOps::thread_id(&engine.ves_context(gc)),
+                    caller_identity.0
+                );
+                assert_eq!(
+                    engine.stack.local.managed_threads.current_id(),
+                    caller_identity.1
+                );
+                assert_eq!(engine.stack.thread_id.get(), caller_identity.0);
                 assert!(matches!(
                     engine.stack.execution.exception_mode,
                     ExceptionState::ExecutingHandler(_)
@@ -5751,6 +6111,8 @@ fn finalizer_segment_resolves_parked_homes_and_preserves_serials() {
             arena.mutate_root(|gc, engine| {
                 // SAFETY: F1.GcHandleRooted — the engine remains rooted for this mutation.
                 let gc = unsafe { test_gc_handle(gc, engine) };
+                let caller_identity = crate::stack::ThreadOps::thread_id(&engine.ves_context(gc));
+                let caller_managed = engine.stack.local.managed_threads.current_id();
                 let frames = &mut engine.stack.execution.frame_stack;
                 let serial = frames.issue_home_serial();
                 let block = dotnet_value::layout::FieldLayoutManager {
@@ -5772,13 +6134,35 @@ fn finalizer_segment_resolves_parked_homes_and_preserves_serials() {
                     engine.process_pending_finalizers(gc),
                     StepResult::FramePushed
                 );
+                #[cfg(not(feature = "multithreading"))]
+                {
+                    assert_ne!(
+                        crate::stack::ThreadOps::thread_id(&engine.ves_context(gc)),
+                        caller_identity
+                    );
+                    assert_ne!(
+                        engine.stack.local.managed_threads.current_id(),
+                        caller_managed
+                    );
+                }
+                #[cfg(feature = "multithreading")]
+                {
+                    assert_eq!(
+                        crate::stack::ThreadOps::thread_id(&engine.ves_context(gc)),
+                        caller_identity
+                    );
+                    assert_eq!(
+                        engine.stack.local.managed_threads.current_id(),
+                        caller_managed
+                    );
+                }
                 let next = engine.stack.execution.frame_stack.issue_home_serial();
                 assert!(next.get() > serial.get());
                 let ctx = engine.ves_context(gc);
                 assert!(ctx.frame_home_block(serial).is_some());
                 assert!(frame_home_window(&ctx, serial, 0, 8).is_ok());
                 assert!(frame_home_window(&ctx, serial, 8, 1).is_err());
-                (serial, next)
+                (serial, next, caller_identity, caller_managed)
             })
         })
         .unwrap();
@@ -5792,6 +6176,11 @@ fn finalizer_segment_resolves_parked_homes_and_preserves_serials() {
                 let next = engine.stack.execution.frame_stack.issue_home_serial();
                 assert!(next.get() > serial.1.get());
                 assert!(engine.ves_context(gc).frame_home_block(serial.0).is_some());
+                assert_eq!(
+                    crate::stack::ThreadOps::thread_id(&engine.ves_context(gc)),
+                    serial.2
+                );
+                assert_eq!(engine.stack.local.managed_threads.current_id(), serial.3);
             })
         })
         .unwrap();
@@ -6876,7 +7265,7 @@ fn static_fields_complete_without_activation(recursive: bool) {
                     .init(
                         subject.clone(),
                         &ctx.with_generics(&generics),
-                        ctx.thread_id.get(),
+                        crate::stack::ThreadOps::thread_id(&ctx),
                     )
                     .unwrap()
                 else {
@@ -8011,4 +8400,265 @@ fn resumed_native_reflection_rejects_surplus_lookup_after_child() {
         })
         .unwrap();
     CALL_TARGET.with(|slot| *slot.borrow_mut() = None);
+}
+
+#[cfg(feature = "multithreading")]
+#[test]
+fn thread_static_gc_on_worker_exit() {
+    use crate::stack::ops::{RawMemoryOps, ThreadOps, VmResolutionOps};
+    use crate::threading::ThreadManagerOps;
+    use dotnet_value::{layout::FieldLayoutManager, object::Object, storage::FieldStorage};
+    use std::time::{Duration, Instant};
+
+    struct Shutdown(Arc<SharedGlobalState>);
+    impl Drop for Shutdown {
+        fn drop(&mut self) {
+            self.0.abort_signal().request_abort();
+            self.0.shutdown_workers();
+        }
+    }
+    let (mut executor, _) = boundary_executor(false);
+    let shared = executor.shared.clone();
+    let _shutdown = Shutdown(shared.clone());
+    let mut assembly = Resolution::new(Module::new("ThreadStaticRoot.dll"));
+    assembly.assembly = Some(Assembly::new("ThreadStaticRoot"));
+    let index = assembly.push_type_definition(TypeDefinition::new(None, "Subject"));
+    assembly.push_field(
+        index,
+        Field::static_member(
+            Accessibility::Public,
+            "Value",
+            MemberType::Base(Box::new(BaseType::Object)),
+        ),
+    );
+    let assembly = shared.loader.register_owned_assembly(assembly);
+    let subject = TypeDescription::new(assembly, index);
+    let method = executor
+        .with_arena_ref(|arena| {
+            arena.mutate(|_, e| {
+                e.stack
+                    .execution
+                    .frame_stack
+                    .current_frame()
+                    .state
+                    .info_handle
+                    .source
+                    .clone()
+            })
+        })
+        .unwrap();
+    let worker_subject = subject.clone();
+    let worker_shared = shared.clone();
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let completion = shared.workers.spawn_owner(move |running| {
+        WORKER_START_TEST_HOOK.with(|slot| {
+            *slot.borrow_mut() = Some(Box::new(move |worker| {
+                let id = worker.thread_id.as_u64();
+                worker
+                    .with_arena(|arena| {
+                        arena.mutate_root(|gc, engine| {
+                            // SAFETY: F1.GcHandleRooted — this mutation holds the owning arena root.
+                            let gc = unsafe { test_gc_handle(gc, engine) };
+                            let mut ctx = engine.ves_context(gc);
+                            let generics = GenericLookup::default();
+                            ctx.shared
+                                .statics
+                                .init(
+                                    worker_subject.clone(),
+                                    &ctx.with_generics(&generics),
+                                    ctx.thread_id(),
+                                )
+                                .unwrap();
+                            let storage = ctx
+                                .shared
+                                .statics
+                                .get_for_thread(worker_subject.clone(), &generics, id, id)
+                                .unwrap();
+                            let ty = ctx.shared.loader.corlib_type("System.Object").unwrap();
+                            let layout = Arc::new(FieldLayoutManager {
+                                fields: Default::default(),
+                                total_size: 0,
+                                alignment: 1,
+                                gc_desc: Default::default(),
+                                has_ref_fields: false,
+                            });
+                            let object = ObjectRef::new(
+                                gc,
+                                HeapStorage::Obj(Box::new(Object::new_with_finalizer_flag(
+                                    ty,
+                                    generics,
+                                    FieldStorage::new(layout, vec![]),
+                                    true,
+                                ))),
+                            );
+                            ctx.register_new_object(&object);
+                            assert_eq!(ctx.shared.gc_handles.alloc(object, GCHandleType::Weak), 0);
+                            let mut bytes = vec![0; std::mem::size_of::<usize>()];
+                            object.write(&mut bytes);
+                            let metadata = dotnet_value::pointer::StaticMetadata {
+                                type_desc: worker_subject.clone(),
+                                generics: GenericLookup::default(),
+                                thread_id: Some(id),
+                            };
+                            let origin = dotnet_value::pointer::PointerOrigin::Static(
+                                std::sync::Arc::new(metadata),
+                            );
+                            // SAFETY: F10.RawMemoryAccessValid — the initialized slot is one object reference wide.
+                            unsafe { ctx.write_bytes(origin, ByteOffset::new(0), &bytes) }.unwrap();
+                            drop(storage);
+                        })
+                    })
+                    .unwrap();
+                ready_tx.send(id).unwrap();
+                loop {
+                    worker
+                        .shared
+                        .thread_manager
+                        .safe_point(worker.thread_id, &worker.shared.gc_coordinator);
+                    match release_rx.recv_timeout(Duration::from_millis(1)) {
+                        Ok(()) => break,
+                        Err(mpsc::RecvTimeoutError::Timeout) => {}
+                        Err(_) => panic!("owner release disconnected"),
+                    }
+                }
+                ExecutorResult::Exited(0)
+            }))
+        });
+        Executor::run_thread_start(worker_shared, method, GenericLookup::default(), running);
+    });
+    let id = ready_rx.recv_timeout(Duration::from_secs(60)).unwrap();
+    collect(&mut executor);
+    assert_eq!(shared.finalizers.snapshot(), 0);
+    executor
+        .with_arena_ref(|arena| {
+            arena.mutate(|_, engine| {
+                // SAFETY: F1.GcHandleRooted — the live arena mutation confines the handle observation.
+                let handle = unsafe { engine.stack.shared.gc_handles.get(0) };
+                assert!(handle.unwrap().0.0.is_some());
+            })
+        })
+        .unwrap();
+    release_tx.send(()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !completion.is_finished() && Instant::now() < deadline {
+        std::thread::yield_now();
+    }
+    assert!(completion.is_finished());
+    let metadata = dotnet_value::pointer::StaticMetadata {
+        type_desc: subject,
+        generics: GenericLookup::default(),
+        thread_id: Some(id),
+    };
+    assert!(shared.statics.get_for_metadata(&metadata, id).is_err());
+    executor.start_finalizer_thread();
+    collect(&mut executor);
+    let generation = shared.finalizers.snapshot();
+    assert_eq!(generation, 1);
+    executor
+        .with_arena_ref(|arena| {
+            arena.mutate(|_, engine| {
+                // SAFETY: F1.GcHandleRooted — the live arena mutation confines the handle observation.
+                let handle = unsafe { engine.stack.shared.gc_handles.get(0) };
+                assert!(handle.is_none_or(|(object, _)| object.0.is_none()));
+            })
+        })
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !shared.finalizers.completed(generation) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(shared.finalizers.completed(generation));
+    shared.gc_handles.free(0);
+}
+
+#[cfg(feature = "multithreading")]
+#[test]
+fn thread_static_cleanup_on_worker_error_and_unwind() {
+    use crate::stack::ops::{ThreadOps, VmResolutionOps};
+    use std::time::{Duration, Instant};
+    let (executor, _) = boundary_executor(false);
+    let shared = executor.shared.clone();
+    let mut assembly = Resolution::new(Module::new("WorkerStaticError.dll"));
+    assembly.assembly = Some(Assembly::new("WorkerStaticError"));
+    let index = assembly.push_type_definition(TypeDefinition::new(None, "Subject"));
+    assembly.push_field(
+        index,
+        Field::static_member(
+            Accessibility::Public,
+            "Value",
+            MemberType::Base(Box::new(BaseType::Int32)),
+        ),
+    );
+    let subject = TypeDescription::new(shared.loader.register_owned_assembly(assembly), index);
+    let method = executor
+        .with_arena_ref(|arena| {
+            arena.mutate(|_, e| {
+                e.stack
+                    .execution
+                    .frame_stack
+                    .current_frame()
+                    .state
+                    .info_handle
+                    .source
+                    .clone()
+            })
+        })
+        .unwrap();
+    for panic in [false, true] {
+        let state = shared.clone();
+        let ty = subject.clone();
+        let method = method.clone();
+        let (send, receive) = mpsc::channel();
+        let completion = shared.workers.spawn_owner(move |running| {
+            WORKER_START_TEST_HOOK.with(|slot| {
+                *slot.borrow_mut() = Some(Box::new(move |worker| {
+                    let id = worker.thread_id.as_u64();
+                    worker
+                        .with_arena(|arena| {
+                            arena.mutate_root(|gc, engine| {
+                                // SAFETY: F1.GcHandleRooted — this mutation holds the owning arena root.
+                                let gc = unsafe { test_gc_handle(gc, engine) };
+                                let ctx = engine.ves_context(gc);
+                                let lookup = GenericLookup::default();
+                                ctx.shared
+                                    .statics
+                                    .init(ty.clone(), &ctx.with_generics(&lookup), ctx.thread_id())
+                                    .unwrap();
+                                ctx.shared
+                                    .statics
+                                    .get_for_thread(ty, &lookup, id, id)
+                                    .unwrap();
+                            })
+                        })
+                        .unwrap();
+                    send.send(id).unwrap();
+                    assert!(!panic, "injected worker unwind");
+                    ExecutorResult::Error(
+                        ExecutionError::InternalError("injected worker error".into()).into(),
+                    )
+                }))
+            });
+            Executor::run_thread_start(state, method, GenericLookup::default(), running);
+        });
+        let id = receive.recv_timeout(Duration::from_secs(30)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !completion.is_finished() && Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert!(completion.is_finished());
+        let metadata = dotnet_value::pointer::StaticMetadata {
+            type_desc: subject.clone(),
+            generics: GenericLookup::default(),
+            thread_id: Some(id),
+        };
+        assert!(shared.statics.get_for_metadata(&metadata, id).is_err());
+        let result = completion.take_outcome().unwrap();
+        if panic {
+            assert!(result.is_err());
+        } else {
+            assert!(matches!(result, Ok(ExecutorResult::Error(_))));
+        }
+    }
+    shared.shutdown_workers();
 }

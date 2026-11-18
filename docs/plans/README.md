@@ -10,7 +10,7 @@ In priority order. Each plan's own `Status:` line is the only record of its stat
 
 | ID | Plan | Note |
 |---|---|---|
-| 26 | [Thread lifecycle reclamation, single-threaded finalizer identity and the multicast fallback](26-thread-lifecycle-and-multicast-fallback.md) | Not started; closes the multicast-fallback, single-threaded finalizer, thread-static, Loom and per-worker resource entries below |
+| 26 | [Thread lifecycle reclamation, single-threaded finalizer identity and the multicast fallback](26-thread-lifecycle-and-multicast-fallback.md) | Lifecycle reclamation, finalizer identity, multicast transport and production registry modeling |
 | 23 | [Runtime behavior gaps: static field reflection, Math FCalls, Array.Fill, Span.CopyTo, signed byref offsets and generic arity](23-runtime-behavior-gaps.md) | Validated runtime surface and remaining limits are recorded in the plan |
 | 25 | [Implement `DynamicMethod`](25-dynamicmethod-implementation.md) | Complete except eviction of unreachable dynamic methods (deferred, see Not yet planned) |
 | 24 | [Investigate Reflection.Emit and `DynamicMethod`](24-reflection-emit-investigation.md) | Complete; decision is a `DynamicMethod` implementation (plan 25), no `TypeBuilder`; the access violation is fixed |
@@ -20,7 +20,7 @@ In priority order. Each plan's own `Status:` line is the only record of its stat
 | 19 | [Reflection invocation matches the CLR](19-reflection-invoke-clr-parity.md) | Complete; wrapping, byref returns, success-only copy-back and ambiguity match the CLR |
 | 20 | [Shared GC handles and a dedicated finalizer thread](20-gc-handles-and-finalizer-thread.md) | Complete; shared handle table, cross-arena resurrection and the dedicated finalizer thread |
 | 17 | [Inspection-driven code quality refactor](17-inspection-quality-refactor.md) | Ordered semantic, readability and dependency slices with an inspection ledger |
-| 16 | [Retire legacy continuations and move suspending intrinsics to effects](16-retire-legacy-continuations.md) | Complete (slices 1–8); the multicast continuation for excluded shapes is deliberately kept |
+| 16 | [Retire legacy continuations and move suspending intrinsics to effects](16-retire-legacy-continuations.md) | Complete (slices 1–8); multicast continuation subsequently removed by plan 26 |
 | 15 | [CoreLib `Task` and the thread pool](15-corelib-task-and-thread-pool.md) | CoreLib tasks/resources, capped background pool workers, unnamed events and managed timers are active |
 | 14 | [Canonical reflection objects across threads](14-canonical-reflection-objects.md) | Complete; shared canonical type, member and assembly objects |
 | 13 | [Async intrinsic API: the body is the implementation](13-async-intrinsic-api.md) | Complete; body validation, inline dispatch and optional fallbacks verified; measured Substring fast path retained |
@@ -75,6 +75,10 @@ Evidence and IDs (p01…, R01…) are defined in the
   - An Expression tree built from C# that captures a local or sets a field in an object
     initializer stops in `FieldInfo.GetFieldFromHandle`.
   - `Type.GetType(string)` and `Assembly.GetType(string)` hit the `QCall` DLL error.
+- **Generic field declaring type:** `DeclaringType` on a field obtained from a constructed
+  generic type returns the generic type definition rather than the constructed type. For example,
+  `typeof(G<int>).GetField("Value").DeclaringType` is not reference-equal to `typeof(G<int>)`,
+  unlike the CLR.
 - **Delegate creation gaps:** `MethodInfo.CreateDelegate<T>(object target)` (a closed delegate)
   stops with "Reflection runtime type object missing index field", so the target appears to be read
   where the delegate type is expected; the static `Delegate.CreateDelegate(Type, MethodInfo)` and
@@ -97,17 +101,6 @@ Evidence and IDs (p01…, R01…) are defined in the
   former EF gap backlog and userland roadmap were deleted. Pick the next application rung
   (for example EF Core SQLite, which [COMPATIBILITY.md](../COMPATIBILITY.md) lists as
   unvalidated) and record its failures here before planning fixes.
-- **Fallback continuations for excluded shapes:** `MulticastState` remains for ref-struct
-  values and byref targets containing managed pointers, byref returns and `TypedReference`.
-  Non-null heap, frame-home, static, unmanaged and MT cross-arena byref arguments with
-  pointer-free targets use native effects; transient byrefs are invalid. The managed-body-only
-  cctor and span equality slow path routes remain non-inline. Non-inline
-  intrinsics use a registered fallback or return `NotImplemented` when absent. Plan 16 retired every other
-  legacy continuation (reflection return, monitor retry, static-init retry, yield-retry
-  intrinsics, `VmContinuation::RetryInstruction`). Substring retains
-  its measured valid-small fast path ([plan 13](13-async-intrinsic-api.md#substring-fast-path-measurement)).
-- **Single-threaded finalizer identity:** without `multithreading`, finalizers run on the
-  interrupted managed context and share its thread identity, including monitor and initializer ownership.
 - **Positive managed-pointer offsets beyond the compact range:** `ManagedPtr` uses signed 32-bit
   displacements, so positive offsets above `i32::MAX` are not representable. Negative offsets
   may be formed and carried, but access remains checked against the owner's extent; this does not
@@ -130,13 +123,10 @@ Evidence and IDs (p01…, R01…) are defined in the
   (`ThreadSafeLock::borrow_mut_unbarriered`). Fold into R09/R12 and R10/R11.
 - **Resumable bulk operations and barriers:** `cpblk`/`initblk`/`Memmove`/`Array.Copy`/`Fill`
   that keep progress across safepoints and apply GC write barriers to reference slots (R10/R11).
-- **Retired-worker resource cost:** each completed explicit managed worker retains one OS thread
-  and one arena until VM shutdown; process-wide arena IDs are capped at 65,535. Pool workers never
-  retire between requests and are capped at `max(2, available_parallelism)`. Earlier safe retirement
-  remains unplanned.
-- **Thread-static retention:** thread-static storage and its object references remain rooted until
-  VM shutdown, including after an explicit worker exits, so outstanding byrefs remain valid.
-  Reclaiming these values when no byref can reach them remains unplanned.
+- **Retired-worker arena-ID capacity:** arena IDs are monotonic and capped at 65,535 per process;
+  they are not recycled because owner-keyed state and pointer/registration identities may outlive
+  an individual execution. Plan 26 releases eligible empty worker arenas and OS threads, but does
+  not alter the ID cap or release arenas that retain live objects.
 - **String benchmark is code-placement sensitive in MT:** `string` moved +7% in plan 16 slice 6
   (and +33%, then −8%, in slice 3) with unchanged instruction counts, because its hot
   `IsNullOrWhiteSpace` loop shifts across cache-line boundaries as the binary changes. Measured
@@ -145,12 +135,6 @@ Evidence and IDs (p01…, R01…) are defined in the
   fast time on the two layouts tried; check more layouts and the `dispatch` bench before adding
   it to the bench profile. Until then, compare `perf stat` instructions before attributing a
   `string` change to a commit.
-- **Loom model coverage:** the hand-written `loom_stw.rs` model does not compile the production
-  `WorkerRegistry` and does not cover every stop-the-world, retirement or shutdown interleaving.
-  `dotnet-vm` has compiled under `cfg(loom)` with `multithreading` since 6e29f56d, but no model
-  drives it yet; only `dotnet-runtime-memory/tests/loom_shared_tables.rs` drives production types
-  (`SharedGcHandles`, `Finalizers`). It does not model the owner-partition color reads as data races: loom does not
-  track gc-arena's mark colors.
 
 ## Writing a plan
 

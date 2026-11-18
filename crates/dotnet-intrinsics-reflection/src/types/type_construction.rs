@@ -16,6 +16,51 @@ use dotnet_vm_ops::effects::{
 };
 use dotnet_vm_ops::ops::TypedStackOps;
 
+/// Resolve newly returned type wrappers while the original receiver/arguments are still rooted
+/// on the evaluation stack. The handler executes only after the service's table is authoritative.
+#[cfg(feature = "multithreading")]
+pub(crate) fn preflight_runtime_type_construction<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    method: &MethodDescription,
+) -> Option<StepResult> {
+    use dotnet_vm_ops::effects::CanonicalKey;
+
+    let name = method.method().name.as_ref();
+    let count = method.signature().parameters.len();
+    if !matches!(name, "MakeGenericType" | "MakeByRefType" | "MakeArrayType") {
+        return None;
+    }
+    let StackValue::ObjectRef(receiver) = ctx.peek_stack_at(count) else {
+        return None;
+    };
+    let target = crate::common::resolve_runtime_type(ctx, receiver).ok()?;
+    let output = match name {
+        "MakeByRefType" => RuntimeType::ByRef(Box::new(target)),
+        "MakeArrayType" => RuntimeType::Vector(Box::new(target)),
+        "MakeGenericType" => {
+            let td = match target {
+                RuntimeType::Type(td) | RuntimeType::Generic(td, _) => td,
+                _ => return None,
+            };
+            let StackValue::ObjectRef(args) = ctx.peek_stack_at(0) else {
+                return None;
+            };
+            args.0?;
+            let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
+            let args = args
+                .try_as_vector(|vector| vector.object_ref_elements(&gc).collect::<Vec<_>>())
+                .ok()?;
+            let runtime_types = args
+                .into_iter()
+                .map(|arg| crate::common::resolve_runtime_type(ctx, arg).ok())
+                .collect::<Option<Vec<_>>>()?;
+            RuntimeType::Generic(td, runtime_types)
+        }
+        _ => unreachable!(),
+    };
+    crate::common::await_canonical_object(ctx, CanonicalKey::Type(output))
+}
+
 #[dotnet_intrinsic(
     "static void System.Runtime.CompilerServices.RuntimeHelpers::RunClassConstructor(System.RuntimeTypeHandle)"
 )]

@@ -116,6 +116,25 @@ pub trait ResolutionContextHost<'gc>: TypeLayoutOps {
 }
 
 pub trait ReflectionRegistryHost<'gc> {
+    /// Verify a newly allocated canonical candidate before publishing it.
+    #[cfg(all(feature = "multithreading", debug_assertions))]
+    fn reflection_assert_canonical_owner(&self, object: ObjectRef<'gc>);
+
+    /// Whether a newly materialized assembly must be requested from another arena.
+    fn reflection_assembly_requires_homing(&self) -> bool {
+        false
+    }
+
+    /// Whether a newly materialized runtime type must be requested from another arena.
+    fn reflection_type_requires_homing(&self) -> bool {
+        false
+    }
+
+    /// Whether a newly materialized runtime method must be requested from another arena.
+    fn reflection_method_requires_homing(&self) -> bool {
+        false
+    }
+
     fn reflection_cached_runtime_assembly(&self, resolution: ResolutionS)
     -> Option<ObjectRef<'gc>>;
 
@@ -198,6 +217,14 @@ pub trait ReflectionRegistryHost<'gc> {
         lookup: GenericLookup,
         object: ObjectRef<'gc>,
     ) -> ObjectRef<'gc>;
+
+    /// Suspend the current instruction before operand commitment when a canonical object is
+    /// missing and the long-lived service owns its materialization.
+    #[cfg(feature = "multithreading")]
+    fn reflection_await_canonical(
+        &mut self,
+        key: dotnet_vm_ops::effects::CanonicalKey,
+    ) -> Option<dotnet_vm_data::StepResult>;
 }
 
 /// Access to the same static slots used by field instructions.

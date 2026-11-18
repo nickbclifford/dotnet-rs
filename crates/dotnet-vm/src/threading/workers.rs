@@ -5,12 +5,18 @@ use crate::ExecutorResult;
 use dotnet_utils::sync::{Arc, Mutex};
 #[cfg(feature = "multithreading")]
 use dotnet_value::object::ObjectPtr;
+#[cfg(all(feature = "multithreading", loom))]
+use loom::sync::{Condvar as SignalCondvar, Mutex as SignalMutex};
+#[cfg(all(feature = "multithreading", loom))]
+use loom::thread::{self, JoinHandle};
 #[cfg(feature = "multithreading")]
 use std::collections::HashMap;
 #[cfg(feature = "multithreading")]
-use std::sync::{Arc as StdArc, Condvar as StdCondvar, Mutex as StdMutex, atomic::AtomicBool};
-#[cfg(feature = "multithreading")]
-use std::thread::JoinHandle;
+use std::sync::{Arc as StdArc, atomic::AtomicBool};
+#[cfg(all(feature = "multithreading", not(loom)))]
+use std::sync::{Condvar as SignalCondvar, Mutex as SignalMutex};
+#[cfg(all(feature = "multithreading", not(loom)))]
+use std::thread::{self, JoinHandle};
 
 type Outcome = std::thread::Result<ExecutorResult>;
 
@@ -20,6 +26,8 @@ enum Lifecycle {
     Completed(Option<Outcome>),
     Retired(Option<Outcome>),
     Finalizing(Option<Outcome>),
+    Releasing(Option<Outcome>),
+    Released(Option<Outcome>),
     ShuttingDown(Option<Outcome>),
     Drained(Option<Outcome>),
     Leaked(Option<Outcome>),
@@ -31,13 +39,18 @@ struct Entry {
     handle: Option<JoinHandle<()>>,
     background: bool,
     finalizer: bool,
+    release_allowed: bool,
 }
 
 #[cfg(feature = "multithreading")]
 #[derive(Default)]
 struct RegistryState {
     entries: Vec<Entry>,
-    completion_signal: StdArc<(StdMutex<()>, StdCondvar)>,
+    reap_ready: Vec<usize>,
+    joins_in_progress: usize,
+    #[cfg(test)]
+    joins_completed: usize,
+    completion_signal: StdArc<(SignalMutex<()>, SignalCondvar)>,
     // Keys and delegate pointers are inert: their allocations remain rooted by arena-local
     // records while the worker can use them, and the registry never dereferences them.
     // Completed entries may outlive their allocations and are replaced on address reuse.
@@ -78,6 +91,8 @@ impl WorkerCompletion {
             Lifecycle::Completed(_)
                 | Lifecycle::Retired(_)
                 | Lifecycle::Finalizing(_)
+                | Lifecycle::Releasing(_)
+                | Lifecycle::Released(_)
                 | Lifecycle::ShuttingDown(_)
                 | Lifecycle::Drained(_)
                 | Lifecycle::Leaked(_)
@@ -90,6 +105,8 @@ impl WorkerCompletion {
             Lifecycle::Completed(outcome)
             | Lifecycle::Retired(outcome)
             | Lifecycle::Finalizing(outcome)
+            | Lifecycle::Releasing(outcome)
+            | Lifecycle::Released(outcome)
             | Lifecycle::ShuttingDown(outcome)
             | Lifecycle::Drained(outcome)
             | Lifecycle::Leaked(outcome) => outcome.take(),
@@ -115,12 +132,20 @@ impl WorkerCompletion {
     }
 
     #[cfg(test)]
+    pub(crate) fn is_joined(&self) -> bool {
+        let state = self.state.lock();
+        state.entries[self.index].handle.is_none() && state.joins_in_progress == 0
+    }
+
+    #[cfg(test)]
     pub(crate) fn phase(&self) -> &'static str {
         match self.state.lock().entries[self.index].lifecycle {
             Lifecycle::Running => "running",
             Lifecycle::Completed(_) => "completed",
             Lifecycle::Retired(_) => "retired",
             Lifecycle::Finalizing(_) => "finalizing",
+            Lifecycle::Releasing(_) => "releasing",
+            Lifecycle::Released(_) => "released",
             Lifecycle::ShuttingDown(_) => "shutting down",
             Lifecycle::Drained(_) => "drained",
             Lifecycle::Leaked(_) => "leaked",
@@ -218,7 +243,7 @@ impl WorkerRegistry {
                 metadata.background
             });
         let published = Arc::clone(&self.state);
-        let handle = std::thread::spawn(move || {
+        let handle = thread::spawn(move || {
             let token = RunningWorker {
                 state: Arc::clone(&published),
                 index,
@@ -232,6 +257,8 @@ impl WorkerRegistry {
                     Lifecycle::Completed(outcome)
                     | Lifecycle::Retired(outcome)
                     | Lifecycle::Finalizing(outcome)
+                    | Lifecycle::Releasing(outcome)
+                    | Lifecycle::Released(outcome)
                     | Lifecycle::ShuttingDown(outcome)
                     | Lifecycle::Drained(outcome)
                     | Lifecycle::Leaked(outcome) => outcome.take(),
@@ -241,12 +268,17 @@ impl WorkerRegistry {
                 drop(state);
                 notify_completion(&signal);
             }
+            let mut state = published.lock();
+            if matches!(state.entries[index].lifecycle, Lifecycle::Released(_)) {
+                state.reap_ready.push(index);
+            }
         });
         state.entries.push(Entry {
             lifecycle: Lifecycle::Running,
             handle: Some(handle),
             background,
             finalizer,
+            release_allowed: !pool_background && !finalizer,
         });
         WorkerCompletion {
             state: Arc::clone(&self.state),
@@ -267,18 +299,40 @@ impl WorkerRegistry {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, not(loom)))]
     fn spawn(&self, run: impl FnOnce() -> ExecutorResult + Send + 'static) -> WorkerCompletion {
         self.spawn_with_completion_hook(run, || {})
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, not(loom)))]
     pub(crate) fn has_running(&self) -> bool {
         self.state
             .lock()
             .entries
             .iter()
             .any(|entry| matches!(entry.lifecycle, Lifecycle::Running))
+    }
+
+    // The included-source model uses this; the separately compiled VM lib test does not.
+    #[cfg(all(test, loom))]
+    #[allow(dead_code)]
+    pub(crate) fn unjoined_count(&self) -> usize {
+        self.state
+            .lock()
+            .entries
+            .iter()
+            .filter(|entry| entry.handle.is_some())
+            .count()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn joins_in_progress(&self) -> usize {
+        self.state.lock().joins_in_progress
+    }
+
+    #[cfg(test)]
+    pub(crate) fn joins_completed(&self) -> usize {
+        self.state.lock().joins_completed
     }
 
     /// Whether no worker can run managed code: none is `Running` or `Finalizing`, and
@@ -325,9 +379,40 @@ impl WorkerRegistry {
         })
     }
 
+    /// Join released owners only after their worker closure has finished all arena work.
+    /// Taking handles and accounting for joins share the shutdown lock; joining itself does not.
+    pub(crate) fn reap_released(&self) {
+        let handles = {
+            let mut state = self.state.lock();
+            let ready = std::mem::take(&mut state.reap_ready);
+            let mut handles = Vec::new();
+            for index in ready {
+                let entry = &mut state.entries[index];
+                if let Some(handle) = entry.handle.as_ref() {
+                    if handle.thread().id() != thread::current().id() && join_ready(handle) {
+                        handles.push(entry.handle.take().expect("observed handle"));
+                    } else {
+                        state.reap_ready.push(index);
+                    }
+                }
+            }
+            state.joins_in_progress += handles.len();
+            handles
+        };
+        for handle in handles {
+            let _ = handle.join();
+            let mut state = self.state.lock();
+            state.joins_in_progress -= 1;
+            #[cfg(test)]
+            {
+                state.joins_completed += 1;
+            }
+        }
+    }
+
     /// Waits until no worker can run managed code, signals the retired owners, then joins every
     /// native thread, including workers that a retired owner starts while finishing finalizers
-    /// after the signal.
+    /// after the signal. Concurrent shutdown callers also wait for each other's claimed joins.
     pub(crate) fn shutdown(&self, signal: impl FnOnce()) {
         // The caller has stopped being a GC participant before waiting here. A `Finalizing`
         // worker can start another worker, so it must finish before the handle set is final.
@@ -335,25 +420,62 @@ impl WorkerRegistry {
             if Self::quiescent_locked(&self.state.lock()) {
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(1));
+            shutdown_backoff();
         }
         signal();
         loop {
-            let handles = self
-                .state
-                .lock()
-                .entries
-                .iter_mut()
-                .filter_map(|entry| entry.handle.take())
-                .collect::<Vec<_>>();
+            let handles = {
+                let mut state = self.state.lock();
+                let handles = state
+                    .entries
+                    .iter_mut()
+                    .filter_map(|entry| entry.handle.take())
+                    .collect::<Vec<_>>();
+                // Account for the claim atomically with removal so another shutdown cannot
+                // observe an empty registry and return before these joins complete.
+                state.joins_in_progress += handles.len();
+                handles
+            };
             if handles.is_empty() {
-                break;
+                if self.state.lock().joins_in_progress == 0 {
+                    break;
+                }
+                shutdown_backoff();
             }
             for handle in handles {
                 let _ = handle.join();
+                let mut state = self.state.lock();
+                state.joins_in_progress -= 1;
+                #[cfg(test)]
+                {
+                    state.joins_completed += 1;
+                }
             }
         }
     }
+}
+
+// Native reapers must not park a GC participant behind a thread's TLS destructors.
+#[cfg(all(feature = "multithreading", not(loom)))]
+fn join_ready(handle: &JoinHandle<()>) -> bool {
+    handle.is_finished()
+}
+
+// Loom has no is_finished operation. The queued worker has finished its modeled closure;
+// joining may schedule its final return, which remains outside the registry lock.
+#[cfg(all(feature = "multithreading", loom))]
+fn join_ready(_handle: &JoinHandle<()>) -> bool {
+    true
+}
+
+#[cfg(all(feature = "multithreading", not(loom)))]
+fn shutdown_backoff() {
+    thread::sleep(std::time::Duration::from_millis(1));
+}
+
+#[cfg(all(feature = "multithreading", loom))]
+fn shutdown_backoff() {
+    thread::yield_now();
 }
 
 /// Only the owner that completed managed execution may enter the retirement service.
@@ -382,6 +504,14 @@ impl RunningWorker {
     }
 
     pub(crate) fn complete(self, result: ExecutorResult) -> CompletedWorker {
+        self.complete_with_cleanup(result, || {})
+    }
+
+    pub(crate) fn complete_with_cleanup(
+        self,
+        result: ExecutorResult,
+        cleanup: impl FnOnce(),
+    ) -> CompletedWorker {
         let signal = {
             let mut state = self.state.lock();
             assert!(matches!(
@@ -389,6 +519,8 @@ impl RunningWorker {
                 Lifecycle::Running
             ));
             state.entries[self.index].lifecycle = Lifecycle::Completed(Some(Ok(result)));
+            // Completion is not observable while this lock covers owner cleanup.
+            cleanup();
             state.completion_signal.clone()
         };
         notify_completion(&signal);
@@ -397,7 +529,7 @@ impl RunningWorker {
 }
 
 #[cfg(feature = "multithreading")]
-fn notify_completion(signal: &(StdMutex<()>, StdCondvar)) {
+fn notify_completion(signal: &(SignalMutex<()>, SignalCondvar)) {
     // Check completion while holding this same lock, so notification cannot be lost
     // between the check and parking on the condition variable.
     let _guard = signal.0.lock().unwrap_or_else(|e| e.into_inner());
@@ -420,9 +552,28 @@ impl CompletedWorker {
 
 #[cfg(feature = "multithreading")]
 impl RetiredWorker {
-    pub(crate) fn begin_finalizing(&self, shared: &crate::state::SharedGlobalState) -> bool {
+    /// The caller holds collection exclusion and has rechecked a post-sweep empty arena.
+    pub(crate) fn begin_release(&self) -> Option<ReleasingWorker> {
         let mut state = self.0.state.lock();
-        if shared.is_abort_requested() {
+        let entry = &mut state.entries[self.0.index];
+        if !entry.release_allowed {
+            return None;
+        }
+        let Lifecycle::Retired(outcome) = &mut entry.lifecycle else {
+            return None;
+        };
+        entry.lifecycle = Lifecycle::Releasing(outcome.take());
+        Some(ReleasingWorker {
+            state: self.0.state.clone(),
+            index: self.0.index,
+            finished: false,
+        })
+    }
+
+    // Evaluate abort while holding the lifecycle lock shared with quiescence checks.
+    pub(crate) fn begin_finalizing(&self, aborted: impl FnOnce() -> bool) -> bool {
+        let mut state = self.0.state.lock();
+        if aborted() {
             return false;
         }
         let entry = &mut state.entries[self.0.index];
@@ -462,6 +613,45 @@ impl RetiredWorker {
         } else {
             Lifecycle::Leaked(outcome.take())
         };
+    }
+}
+
+/// Owns the terminal transition while storage is extracted and exact leases drain.
+/// Unwinding leaves a stable Leaked entry, including an already consumed outcome.
+#[cfg(feature = "multithreading")]
+pub(crate) struct ReleasingWorker {
+    state: Arc<Mutex<RegistryState>>,
+    index: usize,
+    finished: bool,
+}
+
+#[cfg(feature = "multithreading")]
+impl ReleasingWorker {
+    pub(crate) fn finish(mut self, drained: bool) {
+        self.publish(drained);
+        self.finished = true;
+    }
+
+    fn publish(&self, drained: bool) {
+        let mut state = self.state.lock();
+        let entry = &mut state.entries[self.index];
+        let Lifecycle::Releasing(outcome) = &mut entry.lifecycle else {
+            panic!("release completion requires a releasing worker");
+        };
+        entry.lifecycle = if drained {
+            Lifecycle::Released(outcome.take())
+        } else {
+            Lifecycle::Leaked(outcome.take())
+        };
+    }
+}
+
+#[cfg(feature = "multithreading")]
+impl Drop for ReleasingWorker {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.publish(false);
+        }
     }
 }
 
@@ -508,10 +698,53 @@ impl WorkerRegistry {
     pub(crate) fn shutdown(&self) {}
 }
 
-#[cfg(all(test, feature = "multithreading"))]
+#[cfg(all(test, feature = "multithreading", not(loom)))]
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn completion_observation_waits_for_owner_cleanup() {
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            mpsc,
+        };
+        let registry = WorkerRegistry::default();
+        let closed = StdArc::new(AtomicBool::new(false));
+        let worker_closed = closed.clone();
+        let (entered, inside) = mpsc::channel();
+        let (release, held) = mpsc::channel();
+        let completion = registry.spawn_owner(move |running| {
+            let completed = running.complete_with_cleanup(ExecutorResult::Exited(0), || {
+                entered.send(()).unwrap();
+                held.recv().unwrap();
+                worker_closed.store(true, Ordering::Release);
+            });
+            completed.retire();
+        });
+        inside.recv_timeout(Duration::from_secs(5)).unwrap();
+        let observer = completion.clone();
+        let observed_closed = closed.clone();
+        let (ready, started) = mpsc::channel();
+        let (done, result) = mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            ready.send(()).unwrap();
+            done.send((
+                observer.is_finished(),
+                observed_closed.load(Ordering::Acquire),
+            ))
+            .unwrap();
+        });
+        started.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(result.recv_timeout(Duration::from_millis(20)).is_err());
+        release.send(()).unwrap();
+        assert_eq!(
+            result.recv_timeout(Duration::from_secs(5)).unwrap(),
+            (true, true)
+        );
+        thread.join().unwrap();
+        registry.shutdown(|| {});
+    }
 
     #[test]
     fn completion_wait_wakes_on_publication_and_after_publication() {
@@ -560,9 +793,9 @@ mod tests {
                     handle: None,
                     background: false,
                     finalizer: false,
+                    release_allowed: true,
                 }],
-                threads: HashMap::new(),
-                completion_signal: Default::default(),
+                ..RegistryState::default()
             }));
             let completion = WorkerCompletion {
                 state: state.clone(),
@@ -603,9 +836,9 @@ mod tests {
                 handle: None,
                 background: false,
                 finalizer: false,
+                release_allowed: true,
             }],
-            threads: HashMap::new(),
-            completion_signal: Default::default(),
+            ..RegistryState::default()
         }));
         let retired = RunningWorker {
             state: state.clone(),
@@ -617,7 +850,7 @@ mod tests {
             dotnet_assemblies::AssemblyLoader::new_bare("worker-abort-test".into()).unwrap();
         let shared = crate::state::SharedGlobalState::new(Arc::new(loader));
         shared.abort_signal().request_abort();
-        assert!(!retired.begin_finalizing(&shared));
+        assert!(!retired.begin_finalizing(|| shared.is_abort_requested()));
         assert!(matches!(
             state.lock().entries[0].lifecycle,
             Lifecycle::Retired(_)
@@ -632,9 +865,9 @@ mod tests {
                 handle: None,
                 background: false,
                 finalizer: false,
+                release_allowed: true,
             }],
-            threads: HashMap::new(),
-            completion_signal: Default::default(),
+            ..RegistryState::default()
         }));
         let completion = WorkerCompletion {
             state: state.clone(),
@@ -646,7 +879,7 @@ mod tests {
         let loader =
             dotnet_assemblies::AssemblyLoader::new_bare("worker-finalizing-test".into()).unwrap();
         let shared = crate::state::SharedGlobalState::new(Arc::new(loader));
-        assert!(retired.begin_finalizing(&shared));
+        assert!(retired.begin_finalizing(|| shared.is_abort_requested()));
         assert!(completion.is_finished());
         assert!(matches!(
             completion.take_outcome(),
@@ -667,9 +900,9 @@ mod tests {
                 handle: None,
                 background: false,
                 finalizer: false,
+                release_allowed: true,
             }],
-            threads: HashMap::new(),
-            completion_signal: Default::default(),
+            ..RegistryState::default()
         }));
         let completion = WorkerCompletion {
             state: state.clone(),
@@ -681,7 +914,7 @@ mod tests {
         let loader =
             dotnet_assemblies::AssemblyLoader::new_bare("worker-shutdown-test".into()).unwrap();
         let shared = crate::state::SharedGlobalState::new(Arc::new(loader));
-        assert!(retired.begin_finalizing(&shared));
+        assert!(retired.begin_finalizing(|| shared.is_abort_requested()));
         let rejected =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| retired.begin_shutdown()));
         assert!(rejected.is_err());
@@ -706,6 +939,7 @@ mod tests {
             handle: None,
             background: false,
             finalizer: false,
+            release_allowed: true,
         });
         assert!(!registry.is_quiescent(|| true));
         let running = RunningWorker {
@@ -720,7 +954,7 @@ mod tests {
         let loader =
             dotnet_assemblies::AssemblyLoader::new_bare("worker-quiescence-test".into()).unwrap();
         let shared = crate::state::SharedGlobalState::new(Arc::new(loader));
-        assert!(retired.begin_finalizing(&shared));
+        assert!(retired.begin_finalizing(|| shared.is_abort_requested()));
         // The finalizer predicate must not decide the answer while a worker can still run.
         assert!(!registry.is_quiescent(|| true));
         retired.finish_finalizing();
@@ -737,6 +971,7 @@ mod tests {
             handle: None,
             background: false,
             finalizer: false,
+            release_allowed: true,
         });
         let canceled = Cell::new(false);
         assert!(!registry.foreground_quiescent(|| true, || canceled.set(true)));
@@ -757,6 +992,7 @@ mod tests {
             handle: None,
             background: true,
             finalizer: true,
+            release_allowed: false,
         });
         let canceled = Cell::new(false);
         assert!(registry.foreground_quiescent(|| true, || canceled.set(true)));

@@ -130,7 +130,20 @@ pub trait IntrinsicDispatchOps<'gc> {
     ) -> StepResult;
 }
 
+/// Borrowed reflection lookup key; owned transport is created only for a miss.
+#[cfg(feature = "multithreading")]
+pub enum ReflectionObjectKey<'a> {
+    Type(&'a RuntimeType),
+    Method(&'a MethodDescription, &'a GenericLookup),
+    Field(&'a FieldDescription, &'a GenericLookup),
+    Property(&'a MethodDescription, &'a GenericLookup),
+}
+
 pub trait ReflectionLookupOps<'gc> {
+    /// Return a retry activation on a shared-table miss that needs owner materialization.
+    #[cfg(feature = "multithreading")]
+    fn await_reflection_object(&mut self, key: ReflectionObjectKey<'_>) -> Option<StepResult>;
+
     fn get_runtime_method_index(
         &mut self,
         method: MethodDescription,

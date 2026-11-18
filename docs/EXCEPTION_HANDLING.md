@@ -112,7 +112,7 @@ flowchart LR
 - When `rethrow` is called, it passes `true`. `begin_throwing` will then check if the exception object already contains a stack trace. If it does, it skips generating a new one, thereby preserving the original trace from the initial throw site.
 
 ### Interaction with Delegates
-- Multicast targets run as separate calls. Exceptions cross the native boundary on the effects path or the dummy `Invoke` frame on the fallback path; later targets do not run.
+- Multicast targets run as separate calls through native effects. Exceptions cross the native boundary; later targets do not run.
 
 ## Implementation Details
 

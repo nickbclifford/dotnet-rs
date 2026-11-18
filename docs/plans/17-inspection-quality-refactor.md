@@ -17,8 +17,9 @@ representation knowledge. Inspections cover only one feature configuration.
 The ordered slices below are the approved boundaries. Preserve guest behavior, public APIs,
 feature gating and the predicates in [the invariant registry](../INVARIANT_REGISTRY.md). Plans
 [15](15-corelib-task-and-thread-pool.md) and [16](16-retire-legacy-continuations.md) govern active
-Task, pool, timer and effects paths; the restricted multicast fallback remains. Numeric domain
-unification, dependency upgrades and new project-wide lints are outside this refactor.
+Task, pool, timer and effects paths. The multicast fallback was subsequently removed by
+[plan 26](26-thread-lifecycle-and-multicast-fallback.md). Numeric domain unification, dependency
+upgrades and new project-wide lints are outside this refactor.
 
 ## Design
 

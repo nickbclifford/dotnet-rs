@@ -92,31 +92,18 @@ pub fn intrinsic_field_info_get_name<'gc, T: ReflectionIntrinsicHost<'gc>>(
     StepResult::Continue
 }
 
-#[dotnet_intrinsic("System.Type DotnetRs.FieldInfo::GetDeclaringType()")]
-pub fn intrinsic_field_info_get_declaring_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
-    ctx: &mut T,
-    _method: MethodDescription,
-    _generics: &GenericLookup,
-) -> StepResult {
-    let obj_ref = ctx.pop_obj();
-    let (field, _) = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_field(ctx, obj_ref));
-    let rt_obj = crate::common::get_runtime_type(ctx, RuntimeType::Type(field.parent));
-    ctx.push_obj(rt_obj);
-    StepResult::Continue
-}
-
-#[dotnet_intrinsic("System.Type DotnetRs.FieldInfo::GetFieldType()")]
-pub fn intrinsic_field_info_get_field_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
-    ctx: &mut T,
-    _method: MethodDescription,
-    _generics: &GenericLookup,
-) -> StepResult {
-    let obj_ref = ctx.pop_obj();
-    let (field, lookup) =
-        dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_field(ctx, obj_ref));
+/// Resolve the type represented by a field accessor without consuming its receiver.
+pub fn runtime_field_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &T,
+    receiver: ObjectRef<'gc>,
+    declaring: bool,
+) -> Result<RuntimeType, dotnet_types::error::VmError> {
+    let (field, lookup) = crate::common::resolve_runtime_field(ctx, receiver)?;
+    if declaring {
+        return Ok(RuntimeType::Type(field.parent));
+    }
     let field_type: dotnetdll::prelude::MethodType = field.field().return_type.clone().into();
-
-    let runtime_type = lookup
+    Ok(lookup
         .make_concrete(
             field.resolution(),
             field_type.clone(),
@@ -124,11 +111,117 @@ pub fn intrinsic_field_info_get_field_type<'gc, T: ReflectionIntrinsicHost<'gc>>
         )
         .ok()
         .and_then(|concrete| runtime_type_from_concrete(ctx.loader().as_ref(), &concrete))
-        .unwrap_or_else(|| ctx.reflection_make_runtime_type_with_lookup(&field_type, &lookup));
+        .unwrap_or_else(|| ctx.reflection_make_runtime_type_with_lookup(&field_type, &lookup)))
+}
 
-    let rt_obj = crate::common::get_runtime_type(ctx, runtime_type);
-    ctx.push_obj(rt_obj);
+fn field_type_select<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &T,
+    operands: NativeOperandView<'_, 'gc>,
+    declaring: bool,
+) -> NativeSelection {
+    if !ctx.reflection_type_requires_homing() {
+        return NativeSelection::Fallback;
+    }
+    let StackValue::ObjectRef(receiver) = operands.peek_at(0) else {
+        return NativeSelection::Fallback;
+    };
+    let Ok(target) = runtime_field_type(ctx, receiver, declaring) else {
+        return NativeSelection::Fallback;
+    };
+    if ctx.reflection_cached_runtime_type(&target).is_some() {
+        return NativeSelection::Fallback;
+    }
+    NativeSelection::Async(NativeInvocation {
+        start: 0,
+        length: 0,
+        parameter_count: 0,
+    })
+}
+
+pub fn declaring_type_select<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &T,
+    operands: NativeOperandView<'_, 'gc>,
+    _: &MethodDescription,
+    _: &GenericLookup,
+) -> NativeSelection {
+    field_type_select(ctx, operands, true)
+}
+pub fn field_type_selector<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &T,
+    operands: NativeOperandView<'_, 'gc>,
+    _: &MethodDescription,
+    _: &GenericLookup,
+) -> NativeSelection {
+    field_type_select(ctx, operands, false)
+}
+
+fn field_type_fallback<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    declaring: bool,
+) -> StepResult {
+    let receiver = ctx.pop_obj();
+    let target = dotnet_vm_ops::vm_try!(runtime_field_type(ctx, receiver, declaring));
+    let object = crate::common::get_runtime_type(ctx, target);
+    ctx.push_obj(object);
     StepResult::Continue
+}
+pub fn declaring_type_fallback<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _: MethodDescription,
+    _: &GenericLookup,
+) -> StepResult {
+    field_type_fallback(ctx, true)
+}
+pub fn field_type_fallback_handler<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _: MethodDescription,
+    _: &GenericLookup,
+) -> StepResult {
+    field_type_fallback(ctx, false)
+}
+
+#[cfg(feature = "multithreading")]
+async fn field_type_async(mut fx: VmEffects, declaring: bool) -> NativeResult {
+    let (receiver, target) = {
+        let mut vm = fx.vm().await?;
+        let receiver = vm.pop_object()?;
+        let target =
+            vm.with(|region| region.reflection_field_type_target(&receiver, declaring))??;
+        (receiver, target)
+    };
+    fx.await_canonical(dotnet_vm_ops::effects::CanonicalKey::Type(target.clone()))
+        .await?;
+    fx.vm()
+        .await?
+        .with(|region| region.reflection_type_complete(target))??;
+    drop(receiver);
+    Ok(())
+}
+
+#[dotnet_intrinsic("System.Type DotnetRs.FieldInfo::GetDeclaringType()", select = declaring_type_select, fallback = declaring_type_fallback)]
+pub async fn declaring_type_async(fx: VmEffects) -> NativeResult {
+    #[cfg(feature = "multithreading")]
+    {
+        field_type_async(fx, true).await
+    }
+    #[cfg(not(feature = "multithreading"))]
+    {
+        let _ = fx;
+        unreachable!("single-threaded field accessor does not suspend")
+    }
+}
+
+#[dotnet_intrinsic("System.Type DotnetRs.FieldInfo::GetFieldType()", select = field_type_selector, fallback = field_type_fallback_handler)]
+pub async fn field_type_access_async(fx: VmEffects) -> NativeResult {
+    #[cfg(feature = "multithreading")]
+    {
+        field_type_async(fx, false).await
+    }
+    #[cfg(not(feature = "multithreading"))]
+    {
+        let _ = fx;
+        unreachable!("single-threaded field accessor does not suspend")
+    }
 }
 
 fn push_boxed_constant<'gc, T: ReflectionIntrinsicHost<'gc>>(
@@ -246,7 +339,7 @@ pub async fn static_field_set(fx: VmEffects) -> NativeResult {
 }
 
 async fn static_field_access(mut fx: VmEffects) -> NativeResult {
-    let (field, lookup, value) = fx
+    let (field, lookup, _pointer_type, value) = fx
         .vm()
         .await?
         .with(|region| region.reflection_static_target())??;
@@ -263,6 +356,13 @@ async fn static_field_access(mut fx: VmEffects) -> NativeResult {
             return Err(NativeFailure::Managed(wrapper));
         }
         Err(error) => return Err(error),
+    }
+    #[cfg(feature = "multithreading")]
+    if value.is_none()
+        && let Some(pointer_type) = _pointer_type
+    {
+        fx.await_canonical(dotnet_vm_ops::effects::CanonicalKey::Type(pointer_type))
+            .await?;
     }
     fx.vm()
         .await?
@@ -339,6 +439,28 @@ pub fn intrinsic_field_info_get_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
+    #[cfg(feature = "multithreading")]
+    if let StackValue::ObjectRef(this) = ctx.peek_stack_at(1)
+        && let Ok((field, lookup)) = crate::common::resolve_runtime_field(ctx, this)
+        && !field.field().static_member
+        && !field.field().literal
+        && let Ok(concrete) = lookup.make_concrete(
+            field.resolution(),
+            field.field().return_type.clone(),
+            ctx.loader().as_ref(),
+        )
+        && matches!(
+            concrete.get(),
+            dotnetdll::prelude::BaseType::ValuePointer(..)
+        )
+        && let Some(pointer_type) = runtime_type_from_concrete(ctx.loader().as_ref(), &concrete)
+        && let Some(step) = crate::common::await_canonical_object(
+            ctx,
+            dotnet_vm_ops::effects::CanonicalKey::Type(pointer_type),
+        )
+    {
+        return step;
+    }
     // Argument layout: `this` (FieldInfo), then `obj`. Pop in reverse order.
     let obj = ctx.pop();
     let this = ctx.pop_obj();

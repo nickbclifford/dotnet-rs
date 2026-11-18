@@ -28,7 +28,8 @@ pub struct HeapManagedPtrDecodeCacheStats {
 /// It stores an [`ObjectRef`] rather than an object data pointer. Consequently a
 /// hit must still borrow current storage through the handle and apply the
 /// encoded offset. Entries are traced with the owning CallStack and are cleared
-/// by [`super::GCArena::finish_cycle`] after each completed collection cycle.
+/// by [`super::GCArena::finish_cycle`] after each completed collection cycle, or
+/// by retired-owner cleanup once the execution segment can no longer use them.
 pub struct HeapManagedPtrDecodeCache<'gc> {
     entries: HashMap<usize, ObjectRef<'gc>>,
     insertion_order: VecDeque<usize>,

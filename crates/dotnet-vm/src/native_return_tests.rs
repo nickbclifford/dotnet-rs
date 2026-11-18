@@ -11,6 +11,8 @@ enum ReturnCase {
     Enum,
     Aggregate,
     ByRef,
+    ByRefBad,
+    ByRefTransient,
     StringInvoke,
     DelegateString,
     DelegateOtherString,
@@ -67,7 +69,10 @@ fn method(executor: &Executor, case: ReturnCase) -> MethodDescription {
     }
     let owner = res.push_type_definition(owner);
     let ty = match case {
-        ReturnCase::Int32 | ReturnCase::ByRef => BaseType::Int32,
+        ReturnCase::Int32
+        | ReturnCase::ByRef
+        | ReturnCase::ByRefBad
+        | ReturnCase::ByRefTransient => BaseType::Int32,
         ReturnCase::Int64 => BaseType::Int64,
         ReturnCase::NativeInt => BaseType::IntPtr,
         ReturnCase::Float32 => BaseType::Float32,
@@ -88,15 +93,24 @@ fn method(executor: &Executor, case: ReturnCase) -> MethodDescription {
     let mut sig = parameterless_i32_signature();
     sig.parameters.push(Parameter(
         vec![],
-        ParameterType::Value(MethodType::Base(Box::new(BaseType::Int32))),
+        if matches!(case, ReturnCase::ByRef) {
+            ParameterType::Ref(MethodType::Base(Box::new(BaseType::Int32)))
+        } else {
+            ParameterType::Value(MethodType::Base(Box::new(BaseType::Int32)))
+        },
     ));
     sig.return_type = ReturnType(
         vec![],
-        Some(if matches!(case, ReturnCase::ByRef) {
-            ParameterType::Ref(ty)
-        } else {
-            ParameterType::Value(ty)
-        }),
+        Some(
+            if matches!(
+                case,
+                ReturnCase::ByRef | ReturnCase::ByRefBad | ReturnCase::ByRefTransient
+            ) {
+                ParameterType::Ref(ty)
+            } else {
+                ParameterType::Value(ty)
+            },
+        ),
     );
     let name = if matches!(case, ReturnCase::StringInvoke | ReturnCase::DelegateString) {
         "Invoke"
@@ -117,8 +131,43 @@ fn return_body(mut fx: VmEffects) -> dotnet_vm_ops::effects::NativeFuture {
     ENTERED.set(true);
     Box::pin(async move {
         let mut vm = fx.vm().await?;
+        if matches!(CASE.get(), ReturnCase::ByRef) {
+            let value = vm.pop_pointer()?;
+            return vm.push_value(NativeValue::Value(value));
+        }
         vm.discard_scalars(1)?;
         let value = vm.with(|region| {
+            if matches!(CASE.get(), ReturnCase::ByRefTransient) {
+                use dotnet_value::{
+                    ManagedPtr,
+                    layout::{FieldLayoutManager, GcDesc},
+                    object::Object,
+                    storage::FieldStorage,
+                };
+                let layout = Arc::new(FieldLayoutManager {
+                    fields: Default::default(),
+                    total_size: 4,
+                    alignment: 1,
+                    gc_desc: GcDesc::default(),
+                    has_ref_fields: false,
+                });
+                let object = Object::new(
+                    TypeDescription::NULL,
+                    GenericLookup::default(),
+                    FieldStorage::new(layout, vec![0; 4]),
+                );
+                let address = object
+                    .with_data(|data| std::ptr::NonNull::new(data.as_ptr().cast_mut()).unwrap());
+                return region.root(StackValue::ManagedPtr(
+                    ManagedPtr::new_transient(
+                        Some(address),
+                        TypeDescription::NULL,
+                        object,
+                        ByteOffset::new(0),
+                    )
+                    .into(),
+                ));
+            }
             let value = match CASE.get() {
                 ReturnCase::Int32 => StackValue::Int32(17),
                 ReturnCase::Int64 | ReturnCase::Enum => StackValue::Int64(42),
@@ -199,13 +248,11 @@ fn native_activation_scalar_and_enum_returns() {
 
 #[test]
 fn native_activation_unsupported_returns_preserve_operands() {
-    for case in [ReturnCase::Aggregate, ReturnCase::ByRef] {
-        let (result, entered, stack, height) = run(case);
-        assert!(matches!(result, StepResult::Error(_)), "{case:?}");
-        assert!(!entered, "{case:?}");
-        assert_eq!(stack, vec![StackValue::Int32(99)], "{case:?}");
-        assert_eq!(height, 1, "{case:?}");
-    }
+    let (result, entered, stack, height) = run(ReturnCase::Aggregate);
+    assert!(matches!(result, StepResult::Error(_)));
+    assert!(!entered);
+    assert_eq!(stack, vec![StackValue::Int32(99)]);
+    assert_eq!(height, 1);
 }
 
 #[test]
@@ -217,4 +264,66 @@ fn native_activation_delegate_string_output_is_not_selected_by_method_name() {
         assert_eq!(result, StepResult::Jump(1), "{case:?}");
         assert_eq!(values, vec![StackValue::null()], "{case:?}");
     }
+}
+
+#[test]
+fn native_activation_byref_return_preserves_alias_and_rejects_invalid_results() {
+    use dotnet_value::{ManagedPtr, pointer::PointerOrigin};
+    use std::ptr::NonNull;
+
+    let mut executor = executor();
+    let method = method(&executor, ReturnCase::ByRef);
+    CASE.set(ReturnCase::ByRef);
+    let mut target = 40_i32;
+    executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: F1.GcHandleRooted — the engine is the live arena root during this mutation.
+                let gc = unsafe { test_gc_handle(gc, engine) };
+                let address = NonNull::from(&mut target).cast::<u8>();
+                let pointer =
+                    ManagedPtr::new(Some(address), TypeDescription::NULL, None, false, None);
+                let mut ctx = engine.ves_context(gc);
+                ctx.push(StackValue::ManagedPtr(pointer.into()));
+                assert_eq!(
+                    ctx.start_native(
+                        method,
+                        NativeDispatchMode::InlineCall,
+                        &GenericLookup::default(),
+                        None,
+                        Some(native_test_fallback),
+                        return_body
+                    ),
+                    StepResult::Jump(1)
+                );
+                let StackValue::ManagedPtr(returned) = ctx.pop() else {
+                    panic!("expected byref")
+                };
+                assert!(matches!(returned.origin(), PointerOrigin::Unmanaged));
+                assert_eq!(returned.observe_address(), Some(address));
+                // SAFETY: F10.RawMemoryAccessValid — address points to the live, exclusively borrowed i32.
+                unsafe {
+                    returned
+                        .observe_address()
+                        .unwrap()
+                        .cast::<i32>()
+                        .as_ptr()
+                        .write(42)
+                };
+            })
+        })
+        .unwrap();
+    assert_eq!(target, 42);
+    drop(executor);
+
+    let (result, entered, _, _) = run(ReturnCase::ByRefBad);
+    assert!(entered);
+    assert!(matches!(result, StepResult::Error(_)));
+}
+
+#[test]
+fn native_activation_rejects_transient_byref_return() {
+    let (result, entered, _, _) = run(ReturnCase::ByRefTransient);
+    assert!(entered);
+    assert!(matches!(result, StepResult::Error(_)));
 }

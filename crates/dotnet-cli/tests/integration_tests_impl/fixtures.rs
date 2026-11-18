@@ -97,22 +97,18 @@ fn multicast_selection_precedes_operand_commitment() {
     #[derive(Default)]
     struct Counts {
         asynchronous: AtomicUsize,
-        argument: AtomicUsize,
-        result: AtomicUsize,
+        unexpected: AtomicUsize,
     }
     struct Capture(SyncArc<Counts>);
     #[derive(Default)]
     struct Fields {
         path: Option<String>,
-        reason: Option<String>,
     }
     impl Visit for Fields {
         fn record_debug(&mut self, _: &Field, _: &dyn std::fmt::Debug) {}
         fn record_str(&mut self, field: &Field, value: &str) {
-            match field.name() {
-                "multicast_path" => self.path = Some(value.to_owned()),
-                "reason" => self.reason = Some(value.to_owned()),
-                _ => {}
+            if field.name() == "multicast_path" {
+                self.path = Some(value.to_owned());
             }
         }
     }
@@ -120,42 +116,46 @@ fn multicast_selection_precedes_operand_commitment() {
         fn on_event(&self, event: &Event<'_>, _: Context<'_, S>) {
             let mut fields = Fields::default();
             event.record(&mut fields);
-            match (fields.path.as_deref(), fields.reason.as_deref()) {
-                (Some("async"), _) => {
+            match fields.path.as_deref() {
+                Some("async") => {
                     self.0.asynchronous.fetch_add(1, Ordering::Relaxed);
                 }
-                (Some("fallback"), Some("argument")) => {
-                    self.0.argument.fetch_add(1, Ordering::Relaxed);
+                Some(_) => {
+                    self.0.unexpected.fetch_add(1, Ordering::Relaxed);
                 }
-                (Some("fallback"), Some("return")) => {
-                    self.0.result.fetch_add(1, Ordering::Relaxed);
-                }
-                _ => {}
+                None => {}
             }
         }
     }
+    // Guard the source path as well as the emitted events: deleting a counter alone
+    // must not permit a legacy selection branch to return unnoticed.
+    let selector = include_str!("../../../dotnet-vm/src/stack/native_effects.rs");
+    assert!(!selector.contains(concat!("multicast_path = ", "\"fallback\"")));
+    assert!(!selector.contains(concat!("multicast_", "state")));
     for (fixture, expected) in [
-        ("delegate_multicast_42.cs", (1, 0, 0)),
-        ("delegate_multicast_many_42.cs", (1, 0, 0)),
-        ("delegate_multicast_refs_42.cs", (2, 0, 0)),
-        ("delegate_multicast_finalizers_42.cs", (2, 0, 0)),
-        ("delegate_multicast_filters_42.cs", (4, 0, 0)),
-        ("delegate_multicast_static_ref_filters_42.cs", (2, 0, 0)),
-        ("delegate_multicast_cctor_42.cs", (1, 0, 0)),
-        ("delegate_multicast_ref_cctor_42.cs", (1, 0, 0)),
-        ("delegate_multicast_scalar_42.cs", (1, 0, 0)),
-        ("delegate_multicast_reflection_42.cs", (10, 0, 0)),
-        ("delegate_multicast_static_ref_42.cs", (1, 0, 0)),
-        ("delegate_multicast_static_ref_cctor_42.cs", (1, 0, 0)),
-        ("delegate_multicast_aggregate_42.cs", (1, 0, 0)),
-        ("delegate_multicast_values_42.cs", (5, 0, 0)),
-        ("delegate_multicast_ref_struct_42.cs", (0, 2, 1)),
-        ("delegate_multicast_byref_return_42.cs", (0, 0, 1)),
-        ("delegate_multicast_typed_reference_42.cs", (0, 1, 0)),
-        ("delegate_multicast_unmanaged_ref_42.cs", (2, 0, 0)),
-        ("delegate_multicast_gc_collect_42.cs", (3, 0, 0)),
+        ("delegate_multicast_42.cs", 1),
+        ("delegate_multicast_many_42.cs", 1),
+        ("delegate_multicast_refs_42.cs", 2),
+        ("delegate_multicast_finalizers_42.cs", 2),
+        ("delegate_multicast_filters_42.cs", 4),
+        ("delegate_multicast_static_ref_filters_42.cs", 2),
+        ("delegate_multicast_cctor_42.cs", 1),
+        ("delegate_multicast_ref_cctor_42.cs", 1),
+        ("delegate_multicast_scalar_42.cs", 1),
+        ("delegate_multicast_reflection_42.cs", 10),
+        ("delegate_multicast_static_ref_42.cs", 1),
+        ("delegate_multicast_static_ref_cctor_42.cs", 1),
+        ("delegate_multicast_aggregate_42.cs", 1),
+        ("delegate_multicast_values_42.cs", 5),
+        ("delegate_multicast_ref_struct_42.cs", 3),
+        ("delegate_multicast_span_42.cs", 4),
+        ("delegate_multicast_pointer_42.cs", 2),
+        ("delegate_multicast_byref_return_42.cs", 1),
+        ("delegate_multicast_typed_reference_42.cs", 1),
+        ("delegate_multicast_unmanaged_ref_42.cs", 2),
+        ("delegate_multicast_gc_collect_42.cs", 3),
         #[cfg(feature = "multithreading")]
-        ("delegate_multicast_contended_42.cs", (1, 0, 0)),
+        ("delegate_multicast_contended_42.cs", 1),
     ] {
         let harness = TestHarness::get();
         let path = format!("tests/fixtures/delegates/{fixture}");
@@ -168,13 +168,14 @@ fn multicast_selection_precedes_operand_commitment() {
             });
         assert_eq!(result.exit_code, 42, "{fixture}: {:?}", result.stderr);
         assert_eq!(
-            (
-                counts.asynchronous.load(Ordering::Relaxed),
-                counts.argument.load(Ordering::Relaxed),
-                counts.result.load(Ordering::Relaxed)
-            ),
+            counts.asynchronous.load(Ordering::Relaxed),
             expected,
             "{fixture}"
+        );
+        assert_eq!(
+            counts.unexpected.load(Ordering::Relaxed),
+            0,
+            "{fixture}: unexpected multicast selection"
         );
     }
 }
@@ -561,6 +562,32 @@ multi_arena_test!(
 );
 
 include!(concat!(env!("OUT_DIR"), "/tests.rs"));
+
+#[cfg(not(feature = "multithreading"))]
+#[test]
+fn finalizer_wait_with_owned_monitor_reports_deadlock() {
+    let harness = TestHarness::get();
+    let dll = harness.ensure_dll(Path::new(
+        "tests/debug_fixtures/finalizer_forced_monitor_deadlock.cs",
+    ));
+    let resolution = harness.loader.load_resolution_from_file(&dll).unwrap();
+    #[allow(
+        clippy::arc_with_non_send_sync,
+        reason = "single-threaded executor owns the state"
+    )]
+    let shared = Arc::new(state::SharedGlobalState::new(Arc::clone(&harness.loader)));
+    let result =
+        harness.run_with_shared_timeout(resolution, shared, std::time::Duration::from_secs(10));
+    assert_eq!(result.exit_code, 255, "{result:?}");
+    assert!(
+        result
+            .stderr
+            .as_deref()
+            .unwrap_or_default()
+            .contains("monitor entry would deadlock in single-threaded mode"),
+        "{result:?}"
+    );
+}
 
 #[test]
 #[cfg(all(feature = "multithreading", not(feature = "fuzzing")))]

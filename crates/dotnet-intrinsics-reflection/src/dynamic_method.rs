@@ -18,8 +18,9 @@ use dotnet_types::{
     resolution::ResolutionS,
     runtime::{RuntimeType, runtime_type_from_concrete},
 };
-use dotnet_value::object::ObjectRef;
+use dotnet_value::{StackValue, object::ObjectRef};
 use dotnet_vm_data::StepResult;
+use dotnet_vm_ops::effects::{NativeResult, VmEffects};
 use dotnetdll::{
     binary::signature::kinds::CallingConvention,
     prelude::*,
@@ -1084,9 +1085,61 @@ impl Prefixes {
 }
 
 #[dotnet_intrinsic(
-    "static System.Reflection.MethodInfo DotnetRs.RecordingILGenerator::CompileRecorded(string, System.Type, System.Type[], int[], long[], object[], System.Type[], int[], int[], System.Type[], int)"
+    "static System.Reflection.MethodInfo DotnetRs.RecordingILGenerator::CompileRecorded(string, System.Type, System.Type[], int[], long[], object[], System.Type[], int[], int[], System.Type[], int)",
+    select = compile_recorded_select,
+    fallback = compile_recorded_fallback
 )]
-pub fn compile_recorded<'gc, T: ReflectionIntrinsicHost<'gc>>(
+pub async fn compile_recorded_native(mut fx: VmEffects) -> NativeResult {
+    let prepared = {
+        let mut vm = fx.vm().await?;
+        vm.with(|region| region.reflection_compile_recorded_target())?
+    };
+    let (method, lookup) = match prepared {
+        Ok(target) => target,
+        Err(error) => return Err(error),
+    };
+    #[cfg(feature = "multithreading")]
+    {
+        fx.await_canonical(dotnet_vm_ops::effects::CanonicalKey::Method(
+            method.clone(),
+            lookup.clone(),
+        ))
+        .await?;
+        return fx
+            .vm()
+            .await?
+            .with(|region| region.reflection_method_complete(&method, &lookup))?;
+    }
+    #[cfg(not(feature = "multithreading"))]
+    {
+        let _ = (method, lookup);
+        Err(dotnet_vm_ops::effects::NativeFailure::Host(
+            dotnet_types::error::ExecutionError::InternalError(
+                "recorded reflection activation requires multithreading".into(),
+            )
+            .into(),
+        ))
+    }
+}
+
+pub fn compile_recorded_select<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &T,
+    _operands: dotnet_vm_ops::effects::NativeOperandView<'_, 'gc>,
+    _method: &MethodDescription,
+    _generics: &GenericLookup,
+) -> dotnet_vm_ops::effects::NativeSelection {
+    if ctx.reflection_method_requires_homing() {
+        dotnet_vm_ops::effects::NativeSelection::Async(dotnet_vm_ops::effects::NativeInvocation {
+            start: 0,
+            length: 0,
+            parameter_count: 11,
+        })
+    } else {
+        dotnet_vm_ops::effects::NativeSelection::Fallback
+    }
+}
+
+pub fn compile_recorded_fallback<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -1120,6 +1173,38 @@ pub fn compile_recorded<'gc, T: ReflectionIntrinsicHost<'gc>>(
             &format!("DynamicMethod: {msg}"),
         ),
     }
+}
+
+/// Build the recorded method from the native activation's rooted operands without consuming or
+/// re-reading guest arguments. The caller clears the activation operands only after this returns.
+pub fn compile_recorded_from_operands<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    operands: &[StackValue<'gc>],
+) -> Result<MethodDescription, String> {
+    let object = |index: usize| match operands.get(index) {
+        Some(StackValue::ObjectRef(object)) => Ok(*object),
+        _ => Err(format!("argument {index} is not an object reference")),
+    };
+    let max_stack = match operands.get(10) {
+        Some(StackValue::Int32(value)) => *value,
+        _ => return Err("maxstack is not an Int32".into()),
+    };
+    build(
+        ctx,
+        [
+            object(0)?,
+            object(1)?,
+            object(2)?,
+            object(3)?,
+            object(4)?,
+            object(5)?,
+            object(6)?,
+            object(7)?,
+            object(8)?,
+            object(9)?,
+        ],
+        max_stack,
+    )
 }
 
 fn build<'gc, T: ReflectionIntrinsicHost<'gc>>(
