@@ -1,8 +1,8 @@
-# CLI test cleanup evidence
+# CLI test cleanup
 
-This record reconciles CLI-1 through CLI-23 in the [CLI audit](cli.md). Guest fixtures remain
-generated and selected by `build.rs` unless the row names a handwritten test. The verification
-section records executed checks and links the combined repository verification.
+Dispositions for findings CLI-1 through CLI-23 of the [27a audit](../27a-test-audit.md) (the
+finding texts are in git). Guest fixtures remain generated and selected by `build.rs` unless the
+row names a handwritten test.
 
 ## Finding dispositions
 
@@ -32,19 +32,8 @@ section records executed checks and links the combined repository verification.
 | CLI-22 | Generated multi-arena tests accept attributes, and `build.rs` passes the missing-artifact ignore to them just as it does to ordinary fixture tests. Prebuilt mode still rejects missing artifacts. |
 | CLI-23 | `run_cli`, handwritten CLR runs, and the F# build use the concurrent, bounded process capture. The partial-output/pipe-drain deadline control remains. |
 
-## Validation
+## Evidence limits and open items
 
-Focused checks passed:
-
-- `CARGO_TARGET_DIR=/tmp/dotnet-rs-27b-cli-reflection-target CARGO_NET_OFFLINE=true cargo test -p dotnet-intrinsics-reflection --lib type_fit_error_tests::reference_type_fit_preserves_resolution_errors_as_host_vm_errors` (1 passed).
-- `DOTNET_USE_PREBUILT_FIXTURES=1 DOTNET_FIXTURES_BASE=/home/nick/Desktop/dotnet-rs/target/debug/dotnet-fixtures CARGO_TARGET_DIR=/tmp/dotnet-rs-27b-cli-generic-target CARGO_NET_OFFLINE=true CARGO_BUILD_JOBS=4 cargo nextest run -p dotnet-cli --no-default-features --features multithreading,generic-constraint-validation -E 'test(generic_constraints_fail_0)'` (1 passed).
-- Isolated fuzz nextest passed (230 passed, 181 skipped), and full fuzz Clippy with `-D warnings` passed. Both used `/tmp/dotnet-rs-27b-fuzz-target` and prebuilt fixture DLLs.
-- `rustfmt --edition 2024` on changed CLI/reflection Rust files and scoped `git diff --check` passed.
-
-Combined workspace results are recorded in the [test audit ledger](../27-test-audit-ledger.md#combined-cleanup-verification). The fuzz-only static ignores cover fixtures observed to fail on denied native P/Invoke entry points; normal feature registrations remain enabled.
-
-## Evidence limits
-
-The reflection comparer regression exercises the production type-fit helper with valid, mismatched, and missing-type cases, but does not inject a resolution failure through a full interpreter invocation. The `MakeGenericType` fixture checks five invalid constraints and a valid control at the managed API boundary. The reflection argument race remains a stress schedule and does not prove a particular validation/use interleaving. The negative `GC.Collect` behavior divergence is not covered by the renamed smoke and remains a separate runtime finding.
+The reflection comparer regression exercises the production type-fit helper with valid, mismatched, and missing-type cases, but does not inject a resolution failure through a full interpreter invocation. The `MakeGenericType` fixture checks five invalid constraints and a valid control at the managed API boundary. The reflection argument race remains a stress schedule and does not prove a particular validation/use interleaving. The negative `GC.Collect` behavior divergence is not covered by the renamed smoke; it is tracked in the plans README, "Negative GC generation validation".
 
 The stack-trace parameter fixture accepts CLR framework names (`String`, `Int32`) or their exact C# aliases (`string`, `int`) because CLR and VM format the same selected method frames differently. The DynamicMethod offset fixture emits `ldc.i4.s` explicitly so its 17-byte oracle follows fixed instruction encodings.

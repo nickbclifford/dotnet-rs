@@ -181,6 +181,9 @@ once:
 ./check.sh --fast
 ```
 
+`./check.sh --full` runs the whole shared feature matrix and the diagnostic-feature guards; see
+[`docs/CI.md`](docs/CI.md#checksh).
+
 CI selects deeper Miri and fuzz lanes from the changed paths; see
 [`docs/CI.md`](docs/CI.md) for what runs where and how to reproduce a lane locally. Run a deep
 lane locally when you are changing unsafe code it covers or debugging its failure.
@@ -211,7 +214,8 @@ Run `bash scripts/check_doc_drift.sh` and the intra-doc-link check:
 DOTNET_SKIP_BUILD=1 RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" cargo doc --no-deps --no-default-features
 ```
 
-No runtime build, Miri or benchmarks are needed.
+No runtime build, Miri or benchmarks are needed. CI's `doc-lint` job also runs the
+`scripts/tests/` guards; see [`docs/CI.md`](docs/CI.md#source-policy-and-docs).
 
 ## IDE inspection scope
 

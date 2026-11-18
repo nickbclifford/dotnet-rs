@@ -1,51 +1,22 @@
 # Audit test contracts and evidence
 
 **Status:** Complete
-**Outcome:** Every project-owned test family has been inspected, and an audit ledger identifies
-which tests protect intended contracts and which need changes, with concrete evidence and an
-actionable handoff to [27b](27b-test-consolidation.md).
-
-The [audit ledger](27-test-audit-ledger.md) links completed source reviews, findings and verification
-limits. Plan 27b contains the concrete cleanup batches. Test and production code were unchanged.
-
-## Problem
-
-A passing suite can preserve implementation details, compare an implementation with itself, or
-exercise a test-only reconstruction while the production path is broken. Test-count ceilings can
-also turn additions into routine threshold increases without improving the suite.
-
-Initial inspection found candidates, not confirmed defects:
-
-- `intrinsics_codegen_guard_tests` matches generated handler calls and recomputes hashed symbols.
-- `multicast_selection_precedes_operand_commitment` combines guest results with exact trace counts
-  and source-string exclusions in `integration_tests_impl/fixtures.rs`.
-- `arena_lifetime_transport` scans source for particular pointer conversions and buffer types.
-- `loom_workers` compiles the production registry; inspect whether its surrounding model establishes
-  conditions that production is actually responsible for establishing.
-
-These examples seed the review; they do not bound it. Infrastructure is generally satisfactory;
-the primary question is what the tests demonstrate.
+**Outcome:** Every project-owned test family was inspected, and the
+[audit ledger](27-test-audit-ledger.md) identifies which tests protect intended contracts and which
+needed changes, with evidence and a handoff to [27b](27b-test-consolidation.md).
 
 ## Scope
 
-Inspect all project-owned Rust unit/integration tests, doctests and compile-fail probes; C#/IL
-fixtures and host-project assertions; Python/shell and build/code-generation tests; Loom models;
-Miri/provenance controls; and fuzz targets, properties and regression replay. Include ignored,
-feature-gated and diagnostic tests, test helpers, and benchmark correctness assertions. Inspect
-corpus selection and replay semantics; individual opaque corpus blobs need review only where
-their origin or claimed regression matters. Exclude dependencies and generated artifacts as
-independent review units; review their project-owned generators and consumers.
+All project-owned Rust unit and integration tests, doctests and compile-fail probes; C#/IL fixtures
+and host-project assertions; Python, shell and build/code-generation tests; Loom models; Miri and
+provenance controls; and fuzz targets, properties and replay, including ignored, feature-gated and
+diagnostic tests, helpers and benchmark correctness assertions. Dependencies and generated
+artifacts were reviewed only through their project-owned generators and consumers. Test and
+production code were unchanged by the audit itself.
 
-Read runner configuration enough to establish discovery, feature coverage, skipping and result
-interpretation. Infrastructure redesign, new testing frameworks, comprehensive new feature
-coverage, and performance optimization are outside scope.
+## Review criteria
 
-Audit changes belong in the ledger. Test consolidation and routine rewrites belong in 27b.
-A small production defect found directly on the inspected path may be fixed with a focused
-regression test and the relevant checks. Larger defects go in the plans README's "Not yet planned"
-section, linked from the finding; do not expand this audit into a runtime rewrite.
-
-## Design
+These criteria are durable; the short form is in [CONTRIBUTING](../../CONTRIBUTING.md#tests).
 
 Review each test against these questions:
 
@@ -81,52 +52,10 @@ ignores or incomplete execution. Retain useful execution guards; identify manual
 counts that can instead derive from an authoritative case set without losing coverage checks.
 Resource timeouts and bounded model exploration are separate concerns, not test-count quotas.
 
-## Slices
+## Outcome
 
-### 1. Establish review coverage
-
-Create `27-test-audit-ledger.md` beside these plans when execution begins. Record the baseline
-revision, test source locations, discovery/generation routes, configurations and review progress.
-Inventory test families by crate/subsystem and test form, including disabled and manually invoked
-paths. Enumerate the test symbols/cases covered by each review entry, or reference a reproducible
-discovery list. Group common cases to keep the ledger small, but inspect their assertions and setup;
-a file-level skim or a sample is not a completed review. Counts are informational only.
-
-### 2. Inspect contracts and challenge doubtful evidence
-
-Work through the inventory, prioritizing the seed candidates, self-derived expectations,
-test-only models, count guards, and safety/lifecycle tests. Review each family against the questions
-above. Trace helpers and production callers as needed. For doubtful claims, use a focused run,
-reference comparison or temporary local fault injection to distinguish a real weakness from a
-superficial smell. Restore deliberate faults; do not introduce a mutation framework or require a
-mutation for every test. Separate observed results from inspection conclusions and unverified
-hypotheses. Existing baseline failures are recorded rather than silently accepted as passes.
-
-For each actionable finding record the test symbols, intended contract and its basis, concrete
-weakness, a bug it would miss or valid change it would reject, recommended disposition, retained
-coverage/replacement needed, and relevant verification commands. Use dispositions such as keep,
-rewrite, merge, remove or investigate; keep entries need only a brief rationale per coherent family.
-Rank actionable findings by false confidence and impact, not line count or ease of deletion.
-
-### 3. Close the audit and hand off
-
-Reconcile the inventory with the checkout, including changes since the baseline. Resolve
-"investigate" entries into supported conclusions or explicit blockers; do not present uncertainty
-as a confirmed deletion candidate. Add the ordered cleanup batches and finding references to 27b
-using the actual findings. Record any production fixes and separately tracked defects. Keep the
-ledger as the shared record rather than copying it into both plans.
-
-## Done when
-
-Every inventoried test family has a completed review with traceable case coverage, and every
-actionable finding has evidence, a disposition and a destination. Any incomplete review is an
-explicit blocker to declaring the audit complete. 27b contains concrete cleanup batches and
-verification requirements. Completion does not depend on finding a minimum number of problems,
-reducing the suite, or running every expensive lane when inspection does not require it.
-
-## Ask the maintainer only if
-
-The intended contract cannot be resolved from the agreed scope, specification or existing
-requirements; a fix would change supported guest behavior/public compatibility or weaken a safety
-requirement; or a larger change is needed to complete the agreed audit. Routine test dispositions
-and directly related small production fixes do not require another approval.
+Findings CLI-1–23, LIB-1–25, TOOLS-1–7, VM-1–9, VI-1–5 and VP-1–4 were recorded with their
+contract basis, weakness, counterexample and disposition; their final dispositions are in the
+cleanup records listed in the [ledger](27-test-audit-ledger.md). The suspected panic swallowing in
+the fuzz executor target was refuted (libfuzzer-sys installs an aborting panic hook), so VM-1 is
+not actionable.

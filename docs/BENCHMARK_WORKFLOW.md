@@ -15,7 +15,14 @@ Recommended quick validation command:
 cargo bench --profile bench-fat -p dotnet-benchmarks --bench end_to_end -- --sample-size 10
 ```
 
-The end-to-end suite includes both focused runtime loops and heavier framework workloads:
+Other bench targets in `crates/dotnet-benchmarks/Cargo.toml` are `cold_start`, `metadata_load`,
+`static_fields`, `substring`, `runtime_type`, `runtime_primitives` and `managed_ptr_serde`.
+
+End-to-end case names are the `name:` fields of `BENCHMARK_CASES` in
+`crates/dotnet-benchmarks/src/lib.rs` (except `load_dominated`, which `cold_start` runs);
+fixtures live under `crates/dotnet-benchmarks/fixtures/`.
+The suite includes both focused runtime loops and heavier framework workloads. Cases whose
+behavior is not obvious from the name:
 
 - `exception_messages`: thrown default aggregate and cancellation exceptions and message lookup
   in a fresh VM (the comparison baseline).
@@ -29,6 +36,18 @@ The end-to-end suite includes both focused runtime loops and heavier framework w
 - `json_dom`: repeated `System.Text.Json` DOM parse and property traversal.
 - `linq_pipeline`: filtering, projection, grouping, ordering, and aggregation over an in-memory dataset.
 - `ef_inmemory`: EF Core InMemory model discovery, change tracking, save, and translated query execution.
+- `gc_handle_ops`, `weak_reference_get`, `conditional_weak_table_ops`: `GCHandle`,
+  `WeakReference<T>` and `ConditionalWeakTable` operations (`fixtures/gc_handles/`).
+
+`resource_warm_lookup` is the known slow warm path (see "Warm resource lookup" in the
+[plans README](plans/README.md#not-yet-planned)).
+
+With `--features bench-instrumentation`, `end_to_end` also runs a `gc_pause_p99` group that
+reports the p99 GC pause of the `gc` and `gc_cross_arena` cases as a custom Criterion measurement:
+
+```bash
+cargo bench --profile bench-fat -p dotnet-benchmarks --features bench-instrumentation --bench end_to_end
+```
 
 Run one case by passing its name after `--`:
 
@@ -199,7 +218,7 @@ unwinds on optimized code.
 
 ### Backend: samply (default) or perf
 
-`--backend auto` (the default) picks **samply** when it is installed and
+`--backend auto` (the default for `profile_perf.sh`; `bench.fish` defaults to `perf`) picks **samply** when it is installed and
 `kernel.perf_event_paranoid ≤ 1`, otherwise the **perf** path. On a dense `bench json` both now
 capture ~44k clean main-thread samples; samply additionally symbolicates libc/system libraries
 itself and serves the Firefox Profiler natively (see the samply section below). Force a backend
@@ -294,6 +313,15 @@ If `perf record` fails with a permissions error, check the local
 `kernel.perf_event_paranoid` setting or run the script in an environment where
 perf events are permitted.
 
+### Capturing a trace corpus (`bench.fish`)
+
+`./bench.fish [options] [benchmark ...]` (repo root) captures one trace per `end_to_end` case
+through `profile_perf.sh`, into a new corpus directory with a `runs.tsv` index. Without
+positional arguments it captures its default case list (see the script), sampling slow cases at a
+lower frequency. `--resume` skips cases already marked ok, and `--standard-baseline NAME` also
+saves a clean, unprofiled `bench-fat` Criterion baseline. `./bench.fish --help` lists the options
+and their `TRACE_*` environment equivalents.
+
 ## Alternative: samply (native Firefox Profiler backend)
 
 [`samply`](https://github.com/mstange/samply) (`cargo install samply`) is a Rust sampling profiler
@@ -373,7 +401,7 @@ Skip the PGO-use test build step:
 - The script stores generated/merged artifacts under the selected `--target-dir` and rewrites stale profile files for repeatable runs.
 - Keep this PGO path optional; ordinary timing comparisons still use standard `bench-thin`/`bench-fat` commands.
 
-Historical comparisons are retained in git at commit `747ac78d`. Current plans retain
-accepted performance costs and unresolved measurement limits. Retrieve old reports with
-`git ls-tree -r --name-only 747ac78d docs` and `git show 747ac78d:<path>`; local
-`target/` artifacts and `/tmp` logs are volatile and are not preserved by git.
+Historical comparisons are retained in git (see
+[Where things are decided](../CONTRIBUTING.md#where-things-are-decided)). Current plans retain
+accepted performance costs and unresolved measurement limits; local `target/` artifacts and
+`/tmp` logs are volatile and are not preserved by git.

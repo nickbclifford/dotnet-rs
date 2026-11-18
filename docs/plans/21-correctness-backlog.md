@@ -1,169 +1,46 @@
 # Correctness backlog: byte-read bounds, pointer slots, feature forwarding, thread IDs and the timer flake
 
-**Status:** Complete (2026-11-13)
+**Status:** Complete
 **Outcome:** An overflowing heap byte read returns `BoundsCheck`, every CTS write into a pointer
 slot either stores the address or fails loudly, the standalone reflection feature compiles, the
-managed-ID counter goes through `dotnet_utils::sync`, and `threading_timer_callback_pool_thread_42` is either fixed
-with a recorded cause or closed with captured evidence.
+managed-ID counter goes through `dotnet_utils::sync`, and `threading_timer_callback_pool_thread_42`
+is closed with captured evidence.
 
-Closes these README "Not yet planned" entries: **Heap byte-read overflow**, **Standalone
-reflection validation feature**, **Managed-thread local ID synchronization facade**, **Pointer
-statics and `ManagedPtr` serialization** (the open remainder), and **Timer pool-thread fixture under load**.
-String interning (the `string.Empty` bullet) is [plan 22](22-string-interning.md).
+## What changed
 
-## Problem
+- **Checked heap byte reads.** `RawMemoryAccess::read_bytes` and the other pre-check additions in
+  `crates/dotnet-runtime-memory/src/access.rs` use checked arithmetic, so offset `usize::MAX`
+  returns `MemoryAccessError::BoundsCheck` instead of panicking.
+- **Pointer-slot writes.** Callers choose the native-word encoding from the destination type
+  (`CliToCts::pointer_slot_address`), and the pointer arm of `CTSValue::write` is exhaustive: a
+  `ManagedPtr::SIZE` slot gets the serialized pointer, a one-word slot the address, and nothing is
+  silently zero-filled.
+- **Feature forwarding.** `dotnet-intrinsics-reflection/generic-constraint-validation` forwards to
+  `dotnet-types`.
+- **Managed-ID counter.** `NEXT_MANAGED_ID` (`crates/dotnet-vm/src/threading/local.rs`) uses the
+  `dotnet_utils::sync` atomics with a checked `fetch_update`, so Loom builds swap it out;
+  allocation stays monotonic and panics on exhaustion.
+- **Fuzzing fixtures.** The fuzzing build's sandbox denies every native entry point by design.
+  `fixture_test!` now skips a fixture under `fuzzing` when its failure is a denied `SystemNative_*`
+  call (or the `TimerQueue` type-initializer wrapper), instead of a hand-maintained ignore list;
+  any other failure still fails.
 
-- **Heap byte-read overflow.** `RawMemoryAccess::read_bytes`
-  (`crates/dotnet-runtime-memory/src/access.rs`) computes `start + dest.len()` unchecked, so a
-  heap-origin `VesContext::read_bytes` (`crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs`)
-  with offset `usize::MAX` and a one-byte destination panics instead of returning
-  `MemoryAccessError::BoundsCheck`. The static and frame-home origins already use
-  `checked_window`/`frame_home_window`.
-- **Pointer-slot writes after 611fcccb.** `ldsfld`/`stsfld` of pointer statics now use native
-  words. Other `new_cts_value(..).write(..)` callers can still build a `CTSValue::Value(Pointer)`
-  for a pointer-typed destination: reflection `FieldInfo.SetValue`
-  (`crates/dotnet-intrinsics-reflection/src/fields.rs`), `stobj` without references
-  (`instructions/objects/mod.rs`), `stfld` (`instructions/objects/fields.rs`), array element stores
-  (`crates/dotnet-intrinsics-core/src/array_ops.rs`) and enum/type queries
-  (`types/type_queries.rs`). `CTSValue::write` (`crates/dotnet-value/src/object/types.rs`)
-  handles a one-word slot by storing the address, but any other slot shorter than
-  `ManagedPtr::SIZE` is silently zero-filled, and an unobservable address is silently written as
-  0.
-- **Standalone feature.** `cargo check -p dotnet-intrinsics-reflection --features
-  generic-constraint-validation` fails: the crate's feature is `[]`, but it calls
-  `GenericLookup::validate_constraints`, which `dotnet-types/generic-constraint-validation`
-  defines. Only `dotnet-vm`'s feature forwards both.
-- **Managed-ID counter.** `threading/local.rs::NEXT_MANAGED_ID` is a `std::sync::atomic::AtomicI32`
-  that uses `try_update`, bypassing the `dotnet_utils::sync` facade that Loom builds swap out.
-  `threading/basic.rs::allocate_managed_thread_id` already uses the facade with `fetch_update`
-  (Loom 0.7.2 has no `try_update`).
-- **Timer fixture flake.** `threading_timer_callback_pool_thread_42` failed twice in full
-  parallel `dotnet-cli` runs on 2026-11-11 and never in isolation. The failure message was not
-  captured: the diff harness's VM exit-code assertion prints no VM stderr, and a hang ends as a
-  nextest timeout with no indication of where it stopped.
+## Timer flake (not reproduced)
 
-## Scope
+`threading_timer_callback_pool_thread_42` failed twice in full parallel runs and never in
+isolation. Two multithreaded and two single-threaded full `dotnet-cli` runs alongside 24
+CPU-saturating processes passed all 1,872 tests, with no cause found. The diff harness now prints
+the VM's stderr on an exit-code mismatch and reports partial stdout and stderr when a separately
+timed CLR or VM subprocess exceeds its deadline, so a recurrence captures its message.
 
-In: the five items above. String interning is [plan 22](22-string-interning.md).
+## Checks
 
-Out:
-- The broader shared raw-memory access protocol (R09/R12) and the native call boundary (R06/R07).
-  Slice 1 only fixes arithmetic, not access ordering.
-- Unrelated timer or pool redesign. If slice 5 finds the cause outside the timer/pool path, fix it
-  only if the fix stays within one slice. Otherwise record the cause in the README and stop.
+```bash
+cargo check -p dotnet-intrinsics-reflection --no-default-features --features generic-constraint-validation
+cargo run -p xtask -- matrix test-features      # the ten feature configurations
+```
 
-## Design
-
-- **Bounds:** use checked arithmetic for every `offset + len` in `access.rs` that runs before a
-  bounds check (`read_bytes`, and audit the rest of the file, e.g. the field walk near
-  `f_start + field.layout.size()`). Overflow returns the same `BoundsCheck` error as an
-  out-of-range access. Move `checked_window` down to `dotnet-runtime-memory` if that lets both
-  layers share it. Keep the owner and write-barrier distinctions unchanged.
-- **Pointer slots:** make the pointer case of `CTSValue::write` exhaustive. A slot of exactly
-  `ManagedPtr::SIZE` gets the serialized pointer, a one-word slot gets the address, and any other
-  length is a caller bug and gets a `debug_assert!`/`unreachable!`, not a fill. An unobservable
-  address (transient, or an origin with no stable address) must not silently become null. Either
-  resolve each caller to the native-word path, as `stsfld` now does, or return an error from a
-  fallible write, so the destination type decides the encoding rather than the codec guessing from
-  the slot length.
-- **Feature forwarding:** support standalone features. Make
-  `dotnet-intrinsics-reflection/generic-constraint-validation` forward to
-  `dotnet-types/generic-constraint-validation` (and to `dotnet-runtime-resolver` if it calls into
-  it), as `dotnet-runtime-resolver` already does.
-- **Managed ID:** move `NEXT_MANAGED_ID` to `dotnet_utils::sync` atomics with `fetch_update` and
-  `checked_add`. Allocation stays monotonic and still panics on exhaustion. Reconcile the
-  `threading/basic.rs` comment that explains why that counter uses `fetch_update`.
-
-## Slices
-
-1. **Checked heap byte reads (complete).** Fix `read_bytes` and any other unchecked pre-check additions in
-   `access.rs`. Add a `dotnet-vm` unit test where a heap-origin `VesContext::read_bytes` at
-   `usize::MAX` with a one-byte destination returns `BoundsCheck`, plus the multithreading
-   cross-arena origin if it shares the path. Run the `miri-value` lane and
-   `fuzz-raw-memory-access` smoke.
-2. **Feature forwarding (implemented).** Fix the manifest. Then `cargo check -p dotnet-intrinsics-reflection
-   --features generic-constraint-validation` and `--no-default-features` pass. Add that check to
-   CI next to the existing feature checks if a per-crate feature matrix already exists. The CI
-   matrices are workspace-wide, so the standalone check is recorded here:
-   `cargo check -p dotnet-intrinsics-reflection --no-default-features --features generic-constraint-validation`.
-   The CLI/VM matrix passed nine configurations; the `fuzzing` configuration had six CLI fixture
-   failures (483 passed), including `arrays_jagged_interface_cast_42` with a missing
-   `SystemNative_SetErrNo` entry point. The isolated fixture also failed. This configuration does
-   not enable the reflection validation feature; the matrix requirement remains open.
-3. **Managed-ID facade (implemented).** Migrated the counter to the sync facade with a Loom-local
-   lazy static and checked `fetch_update`. Added exhaustion and concurrent allocation tests.
-   `cargo test -p dotnet-vm`, both Loom CI lanes, the concurrent allocation Loom model, and the
-   `thread_identity_start_42` and `thread_cross_start_42` diff fixtures pass. Both clippy feature
-   sets and doc drift pass. Nine CLI/VM matrix configurations pass; the `fuzzing` run has six
-   CLI fixture failures (484 passed), including the same missing `SystemNative_SetErrNo` noted
-   in slice 2, so the full matrix requirement remains open.
-4. **Pointer-slot writes (implemented).** Write a `pointers/pointer_slot_writes_42.cs` diff fixture: reflection
-   `FieldInfo.SetValue`/`GetValue` on instance pointer fields via
-   `System.Reflection.Pointer.Box`, `stobj` of a pointer, pointer-element arrays, a struct with
-   pointer fields stored through `stobj`, and boxed `IntPtr`/`UIntPtr` round trips. Static pointer
-   fields are covered by `pointer_static_fields_match_dotnet`. Fix whatever
-   it exposes by making each caller choose the native-word encoding from the destination type.
-   Then make `CTSValue::write`'s pointer arm exhaustive as described in Design. C# cannot
-   express `stobj` of a pointer, so `pointer_stobj_writes_native_word` exercises that IL directly.
-   The diff fixture passes with and without multithreading. Both clippy configurations, doc drift,
-   all ten VM matrix configurations and nine CLI configurations pass. The fuzzing CLI run has
-   223 passes and six failures from missing `SystemNative_SetErrNo` or `SystemNative_Calloc`
-   entry points; the pointer-slot fixture passes. The full matrix requirement remains open.
-5. **Timer flake (implemented; not reproduced).** First make failures diagnosable. Diff-harness exit-code assertions print the
-   VM's stderr, and a VM run that exceeds a harness-side deadline is killed with its partial
-   output reported, separately from the CLR run. Then reproduce under load: loop the full
-   multithreading `dotnet-cli` integration suite (`cargo nextest run -p dotnet-cli --features
-   multithreading`) alongside a CPU-saturating job, and run the single-threaded suite too, since
-   one recorded failure was single-threaded. Allow about 1,000 fixture executions under load or
-   one working day, whichever comes first.
-   - *Reproduced:* diagnose from the captured output, fix it with a regression fixture or a
-     deterministic unit test, and record the cause here.
-   - *Not reproduced:* record the commands, counts and the improved harness output here, remove
-     the README entry and note that a recurrence now captures its message.
-
-   On 2026-11-13, ran `cargo nextest run -p dotnet-cli --no-default-features --features
-   multithreading --no-fail-fast` twice and the same command without `--features multithreading`
-   twice, with `DOTNET_USE_PREBUILT_FIXTURES=1` and 24 concurrent `nice -n 10 yes > /dev/null`
-   CPU workers. All 1,872 tests passed (529 per multithreading run, 407 per single-threaded run),
-   including over 1,000 fixture and differential tests. The timer's in-process and differential
-   tests each passed twice; both are currently excluded from the single-threaded configuration.
-   No cause was observed. Differential tests now include VM stderr on exit-code mismatch and
-   report partial stdout and stderr when a separately timed CLR or VM subprocess exceeds the
-   harness deadline. A recurrence in that path should therefore capture its message or timeout
-   output; a regression test also verifies that output is drained beyond pipe capacity.
-   Both workspace clippy feature sets and doc drift pass. The CLI/VM matrix passes nine
-   configurations; the fuzzing configuration has 486 passes and the same six CLI failures
-   recorded in slice 4, due to missing `SystemNative_SetErrNo` or `SystemNative_Calloc`.
-   The full matrix requirement therefore remains open until the closing verification below.
-
-**Closing verification (2026-11-13).** The recurring `fuzzing` CLI failures were not P/Invoke
-gaps in the VM: the fuzzing build's `DenySandbox` rejects every native entry point by design, and
-the build-script ignore list of fixtures that reach one had gone stale (34 failures). `fixture_test!`
-now skips a fixture under `fuzzing` when its failure shows a denied `SystemNative_*` call (or the
-TimerQueue type-initializer wrapper), so the list no longer needs maintaining and any other failure
-still fails. The full CLI and VM matrix then passed in all ten feature configurations
-(`cargo run -p xtask -- matrix test-features`), including `fuzzing` (229 CLI, 263 VM tests); the
-standalone `dotnet-intrinsics-reflection` feature check passes; clippy and doc drift pass.
-
-Each slice ends with `cargo clippy --workspace --all-targets -D warnings` (both feature sets),
-the doc-drift check and the full `dotnet-cli` and `dotnet-vm` test matrices passing, because past
-plan commits repeatedly skipped these.
-
-## Done when
-
-- `pointer_slot_writes_42` matches `dotnet` in the diff harness, in both feature sets where
-  applicable.
-- The `usize::MAX` heap-read test returns `BoundsCheck`, and no `access.rs` addition can overflow
-  before its bounds check.
-- `CTSValue::write` has no silent zero-fill path for pointers.
-- The standalone reflection feature compiles.
-- `NEXT_MANAGED_ID` uses the sync facade.
-- The timer entry is resolved by one of slice 5's two outcomes.
-- The README entries listed at the top are removed or updated in the slice that closes each one.
-
-## Ask the maintainer only if
-
-- A pointer-slot caller cannot know its destination type, so the codec must stay guessing from
-  slot length.
-- The timer flake's cause lies in a subsystem another plan owns (STW, pool scheduling) and needs
-  more than one slice to fix.
+`pointers/pointer_slot_writes_42.cs` is a diff fixture; `pointer_stobj_writes_native_word`
+exercises `stobj` of a pointer (which C# cannot express). The thread-ID changes are covered by the
+exhaustion and concurrent-allocation tests and the `thread_identity_start_42` and
+`thread_cross_start_42` diff fixtures.

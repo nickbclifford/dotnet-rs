@@ -1,7 +1,7 @@
 # Tools and benchmark cleanup
 
-This records the implementation of the [tools findings](tools.md) under
-[27b](../27b-test-consolidation.md). Verification below records actual runs and their scope.
+Dispositions for findings TOOLS-1 through TOOLS-7 of the [27a audit](../27a-test-audit.md) (the
+finding texts are in git), implemented under [27b](../27b-test-consolidation.md).
 
 | Finding | Resolution and retained contract |
 |---|---|
@@ -23,34 +23,8 @@ guards.
 
 FieldType compile-fail checks use the existing diagnostic checker with a compiling positive
 control, rustdoc-equivalent snippet wrapping and exact diagnostic-code validation. CI runs the
-checker and doctests in both thread configurations. This implements the tooling part of
-[LIB-15](libraries.md#lib-15-sealed-fieldtype-compile-fail-reason-is-not-verified).
+checker and doctests in both thread configurations. This implements the tooling part of LIB-15 ([library cleanup](cleanup-libraries.md)); stable
+rustdoc cannot check `compile_fail` error numbers itself.
 
 `CONTRIBUTING.md` records the accepted behavioral/internal contract criteria, independent oracles,
 specific failure evidence and deriving execution counts from named required selections.
-
-## Verification
-
-- `python3 -m unittest discover -s scripts/tests -p 'test_*.py'`: passes, including actual
-  runner/guard command expansion and negative controls.
-- `python3 scripts/check_vm_effects_compile_fail.py field-types`, with and without
-  `multithreading`: positive control compiles; both examples fail with their required diagnostic.
-- The native-effects diagnostic checker and both affected crates' doctest suites pass in
-  no-features and multithreading configurations.
-- `cargo bench -p dotnet-benchmarks --bench managed_ptr_serde -- --test`: passes all origin and
-  cache workloads with preflight assertions enabled.
-- Isolated .NET builds and CLR execution of `MemoryBulkOps_0.cs` and `UnsafeBufferOps_0.cs`:
-  both return zero.
-- The actual workflow pointer-arithmetic Miri script: every required name ran, the derived
-  summary guard passed, and all selected tests passed without ignores.
-- `ptr_arith_live_offset_preserves_provenance_strict_core` as an exact multithreading Miri
-  singleton with strict provenance: passes.
-- Advisory tail-call and non-tail-call selectors pass as guarded Miri singletons in both
-  no-features and multithreading configurations.
-- `check_doc_drift.sh`: passes, including its injected negative controls.
-- The actual clean-clippy probe passes with an isolated `CARGO_TARGET_DIR`, exercising the PATH
-  invocation guard across a fresh workspace build. The unchanged clean-build probes that mutate
-  watched sources are outside this focused probe run.
-
-Combined repository checks and the remaining affected deep lanes are recorded in the
-[shared verification ledger](../27-test-audit-ledger.md#combined-cleanup-verification).

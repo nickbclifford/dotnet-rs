@@ -1,242 +1,48 @@
 # Implement `DynamicMethod`
 
-**Status:** Complete except eviction of unreachable dynamic methods, deferred to README "Not yet planned" (2026-11-16)
+**Status:** Complete except eviction of unreachable dynamic methods (plans README, "Not yet planned")
 **Outcome:** `System.Reflection.Emit.DynamicMethod` runs on the VM for every `ILGenerator`
 operation a real library uses: branches and labels, fields, `calli`, filters and faults, generic
 and nested types and callees, byref signatures, and the owner, module and `skipVisibility`
-overloads. System.Text.Json serializes a POCO through its own `ReflectionEmitMemberAccessor`
-(no VM seam), the Linq object-array delegate path handles byref and pointer delegate types, and
-the differential fixtures for all of it match `dotnet`. The Newtonsoft and EF InMemory host rungs
-still match `dotnet` after every slice.
+overloads. System.Text.Json serializes a POCO through its own `ReflectionEmitMemberAccessor` (no VM
+seam), the Linq object-array delegate path handles byref and pointer delegate types, and the
+differential fixtures match `dotnet`. The Newtonsoft and EF InMemory host rungs still match.
 
-Follows [plan 24](24-reflection-emit-investigation.md), whose spike (a recording `DynamicMethod`
-stub and a synthetic one-method module) is the starting point. Closes the README "Not yet planned"
-entry for failures that need `DynamicMethod` (byref delegate types, libraries that pick Emit from
-`IsDynamicCodeSupported`) once slice 4 lands.
-
-## Problem
-
-The spike runs three fixtures but is deliberately narrow
-([plan 24, spike result](24-reflection-emit-investigation.md#spike-result-2026-11-15-all-three-fixtures-pass)):
-
-- **Front end** (`crates/dotnet-assemblies/src/support/DynamicMethod.cs`): the stub's
-  `ILGenerator` records `(opcode, immediate, operand)` and rejects labels and every branch opcode,
-  field operands, `calli`, filters, faults, signature operands and any opcode outside a table of
-  about 70. `maxstack` is fixed at 32. `DynamicMethod.GetParameters`, `MethodHandle`,
-  `ReturnTypeCustomAttributes`, `Define*Parameter` and `GetDynamicILInfo` are missing.
-- **Back end** (`crates/dotnet-intrinsics-reflection/src/dynamic_method.rs`, intrinsic
-  `CompileRecorded`): signatures translate only primitives, `object`, `string`, non-generic
-  non-nested classes and value types, and SZ arrays. Generic callees, generic or nested types and
-  byref parameters or returns are rejected. Every compile adds a resolution to the metadata arena
-  and nothing is evicted.
-- **Semantics:** `owner`, module and `skipVisibility` are validated or ignored. The synthetic method
-  has a declaring type `DynamicMethods` in an assembly `DynamicMethod$N`, where the CLR reports no
-  declaring type. Stack traces were not compared with `dotnet`. Concurrent compiles, GC of delegates
-  over dynamic methods and the `NEXT_DYNAMIC_ASSEMBLY` naming were not tested.
-- **Per-library seams** added by plan 24 slice 3 exist only because `DynamicMethod` did not work
-  (`crates/dotnet-vm/src/intrinsics/linq_expressions.rs`): `CanCompileToIL` and
-  `CanEmitObjectArrayDelegate` return false, `DelegateHelpers.CreateObjectArrayDelegate` runs a
-  support-library thunk table (at most 16 parameters, no byref/pointer/byref-like), and
-  `DefaultJsonTypeInfoResolver.get_MemberAccessor` returns STJ's reflection accessor.
-- **Wall found while reaching `DynamicMethod`** (plan 24 slice 2): STJ's
-  `ReflectionEmitMemberAccessor.CreateParameterlessConstructor` stops at `Type.Module`, because
-  `DotnetRs.RuntimeType.GetModule` is an extern with no intrinsic and `DotnetRs.Module` is empty.
-
-## Scope
-
-In:
-
-- Everything in "Problem" under front end, back end and semantics.
-- Whether the slice 3 seams and the feature values change (slice 4).
-- A `Module` reflection object sufficient for `Type.Module`, `DynamicMethod(name, ..., Module, bool)`
-  and `DynamicMethod.Module`.
-
-Out, with the reason:
-
-- **`AssemblyBuilder`/`TypeBuilder`/`ModuleBuilder`/`MethodBuilder`.** No rung in the plan 24 survey
-  needs them (the only reach is `Expression.GetDelegateType` on byref delegate types, which
-  slice 4 avoids). Reopen under a new plan only when a chosen application rung reaches
-  `TypeBuilder`.
-- **`DynamicILInfo`, `GetDynamicILInfo`, `GetTokenFor` and raw-IL `SetCode`.** These hand the VM IL
-  bytes whose tokens index a `DynamicScope`, which the recording front end deliberately never
-  builds. Supporting them needs a raw-IL decoder (dotnetdll 0.4.0's is private, so this means an
-  upstream change or our own). The survey found no consumer: the libraries that emit use
-  `GetILGenerator`. The stub throws `NotSupportedException` naming the API. Revisit only if a rung
-  needs it.
-- **Enabling `IsDynamicCodeCompiled`/`LambdaCompiler` as a default.** Slice 4 measures and records;
-  a default changes only on host-rung evidence (plan 18 chose the current values that way).
-- Debugger-facing and metadata-inspection members that no rung reads.
+Follows the spike of [plan 24](24-reflection-emit-investigation.md).
 
 ## Design
 
-Keep the spike's architecture: the support-assembly stub records resolved operations, one
-`InternalCall` hands the record to the VM, and the VM builds a one-method `dotnetdll`
-`Resolution`, registers it through `AssemblyLoader::register_owned_assembly` and returns the
-ordinary `MethodInfo`. Everything after that (dispatch, frames, delegates, exception regions,
-`MemberRef` resolution, stack traces) is the existing path.
+The support assembly's `DotnetRs.DynamicMethod` (`crates/dotnet-assemblies/src/support/DynamicMethod.cs`)
+replaces `DynamicMethod` for every caller. Its `ILGenerator` records resolved operations
+(opcode, immediate, operand) following CoreLib's `ILGenerator` contract: `DefineLabel`/`MarkLabel`,
+`BeginExceptionBlock` with the implicit `leave` and `endfinally`, the same exceptions for unmarked
+labels and unclosed blocks, and short-branch targets checked against the signed-byte limit. The
+`CompileRecorded` internal call hands the record to
+`crates/dotnet-intrinsics-reflection/src/dynamic_method.rs`, which builds a one-method `dotnetdll`
+`Resolution` (computing `maxstack` from a stack-depth walk), registers it with
+`AssemblyLoader::register_owned_assembly` and returns an ordinary `MethodInfo`. Dispatch, frames,
+delegates, exception regions, `MemberRef` resolution and stack traces then use the existing paths.
 
-Match the CLR where managed code can observe it:
+- Each synthetic method has its own metadata arena and a runtime marker, so reflection reports a
+  null `DeclaringType` (unless an owner is given) and stack traces show the method name without a
+  synthetic holder. Assembly names come from a checked, process-wide 64-bit counter
+  (`DYNAMIC_ASSEMBLY_ID`) that never reuses or wraps.
+- Signatures cover generic instantiations, nested types (referenced through their enclosing
+  types), generic method callees, and byref parameters and returns.
+- `Type.Module` returns a stable manifest-module object per loaded assembly; owner- and
+  module-hosted methods report it, and anonymous methods share a separate module.
+- STJ runs its own `ReflectionEmitMemberAccessor`; synthetic methods named `.ctor` are classified by
+  their runtime-special-name flag. The Linq generic thunk table stays for the shapes it handles;
+  byref, pointer and more-than-16-parameter delegate types use the framework's
+  `CreateObjectArrayDelegateRefEmit` over `DynamicMethod`.
+- The `dotnet-intrinsics-reflection` → `dotnet-assemblies` dependency edge is deliberate: it adds
+  no cycle (`dotnet-vm-ops` already depends on `dotnet-assemblies`) and names `AssemblyLoader`
+  directly instead of hiding the dependency behind a re-export.
 
-- `ILGenerator` follows CoreLib's `ILGenerator` contract: `DefineLabel`/`MarkLabel`,
-  `BeginExceptionBlock` with the implicit `leave` and `endfinally`, `maxstack` from a stack-depth
-  walk, and the same exception types for unmarked labels and unclosed blocks.
-- The method is static and has no declaring type visible to reflection unless an `owner` is given.
-  With an owner, the method runs with the owner's visibility (slice 3).
+### Dynamic-code switches
 
-### Layering: the `dotnet-intrinsics-reflection` to `dotnet-assemblies` edge
-
-The spike added `dotnet-assemblies` to `crates/dotnet-intrinsics-reflection/Cargo.toml`.
-`docs/ARCHITECTURE.md` ("Trait Architecture") states one layering rule: intrinsic crates depend on
-`dotnet-vm-ops`, never on `dotnet-vm`. The edge respects it and adds no cycle:
-
-- `dotnet-vm-ops` already depends on `dotnet-assemblies` (`crates/dotnet-vm-ops/Cargo.toml`;
-  `LoaderOps::loader` returns `&Arc<AssemblyLoader>`), and `dotnet-intrinsics-reflection` already
-  depends on `dotnet-vm-ops`, so `dotnet-assemblies` was already in its transitive graph.
-- `dotnet-assemblies` depends only on `dotnet-types`, `dotnet-utils` and `dotnet-value`, never on an
-  intrinsic or VM crate. `dotnet-runtime-resolver` has the same direct edge.
-- The crate uses only `AssemblyLoader` and `register_owned_assembly`, which `LoaderOps` already
-  exposes through `ctx.loader()`.
-
-Keep the direct edge. Naming `AssemblyLoader` in the builder's fields is its only purpose, and
-re-exporting the type from `dotnet-vm-ops` would hide a real dependency. The architecture doc lists
-crates flat, so it needs no change.
-
-## Slices
-
-Ordered by demand (STJ and the Linq thunk are the enabled paths that reach `DynamicMethod`), then
-dependency. Each slice keeps the spike fixtures and both host rungs green.
-
-1. **Complete the instruction set.** The spike landed with plan 24 and its fixtures are in
-   `fixtures/reflection/`. Implement labels and all branch opcodes (short and
-   long), `ldfld`/`stfld`/`ldsfld`/`stsfld`/`ldflda` with `FieldInfo` operands, `calli` with a
-   signature operand, filter and fault blocks (first check that dotnetdll's `ExceptionKind` covers
-   both), the full opcode table, and computed `maxstack`. Differential fixtures: a loop with a
-   branch, a field read and write, a `calli`, a filter. Update the limits in the
-   header comments as they shrink.
-2. **Generic and nested types and callees, byref signatures.** Extend the signature translator in
-   `dynamic_method.rs` to generic instantiations, nested types, generic method callees and byref
-   parameters and returns. STJ's accessors and the Linq byref thunk need all four. Fixtures: a call
-   to `List<int>.Add`, a generic method through `MakeGenericMethod`, a nested type's constructor,
-   a `ref int` parameter written back through `Invoke`.
-3. **`Module`, owner and `skipVisibility`; the rest of the stub's API.** Give `Type.Module`,
-   `DynamicMethod.Module` and the `(..., Module, bool)` overload a real object, and implement
-   `GetParameters`, `MethodHandle`, `ReturnTypeCustomAttributes` and `Define*Parameter`. First
-   check whether the VM enforces member visibility at `call`/`ldfld` at all (the spike did not).
-   If it does not, a fixture against `dotnet` records whether a non-`skipVisibility` method
-   touching a private member throws on the CLR and whether matching that needs new enforcement.
-4. **Retire the per-library seams and cover byref delegates.** With 1-3 in place:
-   - Remove the `DefaultJsonTypeInfoResolver.get_MemberAccessor` seam and
-     `DotnetRs.JsonReflectionMemberAccessor`, so STJ runs its own `ReflectionEmitMemberAccessor`
-     (its `IsDynamicCodeSupported` check then matches the CLR). Keep the seam only if the STJ
-     fixtures fail, and record why.
-   - `CreateObjectArrayDelegate` for byref, pointer and more-than-16-parameter delegate types
-     uses the CLR's `DynamicMethod` thunk, with byref arguments written back in a `finally`. This
-     removes the `PlatformNotSupportedException` cases. Keep the generic thunk table for the
-     shapes it handles unless a measurement says otherwise.
-   - `IsDynamicCodeSupported` stays true (EF's NativeAOT check, plan 18). Experiment with
-     `IsDynamicCodeCompiled` true and with `CanCompileToIL` true, and record the Newtonsoft, DI, EF
-     InMemory and expression-fixture results here. A feature value or seam changes only when every
-     host rung still matches `dotnet` on stdout and exit code in the release CLI. Otherwise record
-     why it stays (for example `LambdaCompiler` needs closure types built with `TypeBuilder`,
-     which is out of scope).
-5. **Lifetime, stack traces, GC and threads.** Make compiled dynamic methods collectible: tie the
-   synthetic resolution to the delegate or `DynamicMethod` object's lifetime and evict it from the
-   metadata arena and the descriptor and method-info caches
-   (`docs/TYPE_RESOLUTION_AND_CACHING.md`) once unreachable. Replace the `NEXT_DYNAMIC_ASSEMBLY`
-   naming with one that survives eviction. Compare stack-trace frames (method name and
-   `DeclaringType`) with `dotnet` and match. Add a concurrent-compile fixture under
-   `multithreading` and a fixture that keeps a delegate alive across `GC.Collect`.
-
-Slices 1-3 do not depend on the seam decision and are each useful alone. If slice 1 finds that
-dotnetdll cannot express a required construct, stop and ask the maintainer rather than building a
-decoder.
-
-### Slice 1: upstream prefix and writer fixes
-
-dotnetdll 0.5.0 added `CallVirtualConstrainedTail`, resolving the earlier `constrained.` + `tail.` +
-`callvirt` gap. The promoted `reflection/dynamic_method_constrained_tail_42` fixture now matches
-.NET 10.0.14.
-
-A second valid combination, `constrained.` + `tail.` + `call` to a static abstract interface
-method, returns 42 on .NET in `reflection/dynamic_method_static_constrained_tail_42`.
-dotnetdll 0.5.1 added `CallConstrainedTail`, and the fixture now matches .NET.
-
-A broader [0.5.0 audit](evidence/25-dotnetdll-050-audit.md) records reproducible branch,
-signature, exception-section, and prefix-flag issues for the same upstream release. Several affect
-serialized assemblies rather than this plan's in-memory `Resolution` path. The audit reproductions
-were rerun against 0.5.1: the affected cases now round-trip, and the signature reader no longer
-panics on the formerly truncated output.
-
-The CLR accepts local-only `pinned` markers and superfluous sentinels in method signatures.
-dotnetdll 0.5.1 cannot retain these nonstandard bytes in a resolved parameter. The recorder
-preserves them in `SignatureHelper.GetSignature()` and normalizes them for standard managed calls.
-Differential fixtures cover pinned arguments and sentinels; a CLR compacting-GC probe observed no
-pinning effect for a reference argument in its tested cases. Exact metadata inspection is outside
-this plan. See the [0.5.1 signature-edge probes](evidence/25-dotnetdll-051-signature-edges.md).
-
-The recorder now covers branches, fields, filters, faults, computed stack depth, managed and
-unmanaged indirect calls, basic `SignatureHelper` operands, and the standard opcode table. The
-differential fixtures compare stdout and exit codes with .NET. Newtonsoft and EF InMemory host
-rungs also match. Short branch targets are checked against the CLR's signed-byte displacement
-limits before the recorded instructions are translated. Remaining limits include raw signature encoding for nonprimitive types and uncommon `no.`
-prefix combinations. On the tested
-Linux CLR, invoking a managed vararg call throws
-`InvalidProgramException`; the VM does the same. Managed vararg behavior on platforms where the
-CLR supports it has not been implemented or tested.
-
-Slice 1 verification (2026-11-15): all 55 DynamicMethod fixture and differential tests passed
-both without features and with `multithreading`. The Newtonsoft and EF InMemory host projects
-matched .NET on stdout and exit code with the multithreaded debug and release CLI.
-`./check.sh --fast` passed clippy and 1123, 1429 and 1446 tests in its three configurations;
-`cargo fmt --all -- --check` passed.
-
-### Slice 2: generic, nested and byref signatures
-
-The synthetic assembly now references nested types through their enclosing types, preserves
-constructed declaring-type and method arguments for member references, and translates generic
-signature types and byref parameters and returns. Differential fixtures cover `List<int>.Add`,
-`MakeGenericMethod`, nested constructors, generic fields and methods on a nested constructed
-type, byref `Invoke` copy-back and a byref-returning delegate. The DynamicMethod fixture and
-differential tests match .NET with and without `multithreading`. The Newtonsoft and EF InMemory
-host projects also match .NET on stdout and exit code with the debug and release CLI.
-
-Slice 2 verification (2026-11-16): `./check.sh --fast` passed clippy and 1135, 1441 and
-1458 tests in its three configurations; `cargo fmt --all -- --check` passed.
-
-### Slice 3: modules and reflection API
-
-`Type.Module` returns a stable manifest-module object per loaded assembly, and owner- and
-module-hosted `DynamicMethod` instances report that object. Anonymous methods share a separate
-module. The shim exposes the method's parameter metadata, return parameter and empty return
-attribute provider, validates parameter positions and returns null from `DefineParameter`, as .NET
-does. `MethodHandle` remains unavailable on .NET and throws `InvalidOperationException` here too;
-`GetDynamicILInfo` explicitly reports that raw IL is unsupported.
-
-The VM's `call` and field instruction paths do not enforce general member visibility. On the
-.NET 10.0.14 Linux CLR, private calls and fields in the fixture work with anonymous, module and
-owner hosting with `skipVisibility` false, and with it true. A separate probe also accessed the
-private `string._stringLength` field from a method hosted by a different module with
-`skipVisibility` false. The VM replaces the `string` layout, so that cross-assembly probe is not a
-differential fixture. These observations do not establish visibility behavior on other runtimes.
-.NET 10.0.14 also throws `NullReferenceException` when a dynamic parameter's custom-attribute
-data is requested; the shim matches that observed behavior.
-
-Slice 3 verification (2026-11-16): `./check.sh --fast` passed clippy and 1137, 1443 and
-1460 tests in its three configurations; `cargo fmt --all -- --check` passed. The new fixture and
-the Newtonsoft and EF InMemory host rungs match .NET on stdout and exit code with the debug and
-release CLI.
-
-### Slice 4: library seams and delegate thunks
-
-System.Text.Json now uses its own Reflection.Emit accessor. Synthetic methods named `.ctor`
-are classified by their runtime-special-name flag, so STJ's constructor accessors receive a
-`MethodInfo`. The existing generic object-array thunk table remains for supported shapes; other
-shapes dispatch to the framework's `CreateObjectArrayDelegateRefEmit`. Differential fixtures
-cover a byref interpreter delegate, copy-back after an exception, 17 parameters, pointer
-arguments and returns, and a POCO round-trip. The direct thunk fixture uses the support-table
-entry on the VM and the framework entry on .NET, since Expression.Parameter rejects pointer types.
-
-Release CLI experiments (multithreading, .NET 10.0.14, stdout and exit code):
+`IsDynamicCodeSupported` stays true (EF Core treats false as NativeAOT). Release-CLI experiments
+(multithreading, .NET 10.0.14, stdout and exit code):
 
 | Configuration | Newtonsoft | DI | EF InMemory | Expression samples |
 | --- | --- | --- | --- | --- |
@@ -244,76 +50,60 @@ Release CLI experiments (multithreading, .NET 10.0.14, stdout and exit code):
 | `CanCompileToIL` true | Pass | Pass | Fail: `RuntimeType.GetMembers` missing | Pass |
 | Both unchanged | Pass | Pass | Pass | Pass |
 
-The expression samples include `expression_compile`, `expression_custom_delegate` and
-`expression_compile_many_params`; the final configuration also passes the new delegate fixtures.
-The DI rung resolves a service twice and waits for the provider's queued compilation; its matching
-output does not prove that background compilation succeeded because DI catches compilation errors.
-Both switches stay false: each experiment failed a host rung. `IsDynamicCodeSupported` stays true.
-The host projects are `crates/dotnet-cli/tests/host_projects/newtonsoft_roundtrip` and
-`dependency_injection`, and `crates/dotnet-benchmarks/fixtures/ef_inmemory`; run them with
+Both switches stay false because each experiment failed a host rung. The DI rung's matching output
+does not prove that the provider's background compilation succeeded, because DI catches
+compilation errors. The host projects are `crates/dotnet-cli/tests/host_projects/newtonsoft_roundtrip`
+and `dependency_injection` and `crates/dotnet-benchmarks/fixtures/ef_inmemory`; run them with
 `scripts/diff_run.sh --host` and `DOTNET_RS_BIN` set to the release CLI.
 
-Slice 4 verification (2026-11-16): `./check.sh --fast` passed clippy and 1144, 1450 and
-1467 tests in its three configurations; `cargo fmt --all -- --check` passed. Newtonsoft and
-EF InMemory also matched .NET with the single-threaded debug CLI.
+### dotnetdll
 
-### Slice 5: stack traces, concurrency, GC survival (eviction deferred)
+dotnetdll 0.5.1 added `CallVirtualConstrainedTail` and `CallConstrainedTail`
+(`dynamic_method_constrained_tail_42`, `dynamic_method_static_constrained_tail_42`) and fixed the
+branch, signature, exception-section and prefix-flag issues found in a 0.5.0 audit. It cannot keep
+nonstandard signature bytes (local-only `pinned` markers, extra sentinels) in a resolved parameter:
+the recorder preserves them in `SignatureHelper.GetSignature()` and normalizes them for standard
+managed calls ([0.5.1 signature-edge probes](evidence/25-dotnetdll-051-signature-edges.md)).
 
-Each synthetic method now has its own metadata arena and a runtime marker, allowing delegate
-reflection to report a null `DeclaringType` and exception traces to show the method name without
-its synthetic holder. Differential fixtures cover those observations, a delegate kept alive
-across collections, and simultaneous compilation on separate threads. The GC fixture proves
-survival only; it does not prove reclamation.
+## Limits and out of scope
 
-Collectibility remains unimplemented. The loader and reflection registries still retain strong
-references to generated assemblies and method objects, method indexes are used by delegates and
-function pointers, and method-info and descriptor caches retain metadata. Eviction must account
-for all of these owners, active frames, resurrection, and cross-arena GC before releasing an arena.
-Generated assembly IDs now use a checked, process-wide 64-bit counter, so eviction cannot cause
-name reuse and exhaustion cannot wrap. Runtime method indexes no longer narrow to 16 bits when
-constructing method objects, parameter objects or function pointers.
+- **`AssemblyBuilder`/`TypeBuilder`/`ModuleBuilder`/`MethodBuilder`**: not supported (plan 24).
+- **`DynamicILInfo`, `GetDynamicILInfo`, `GetTokenFor` and raw-IL `SetCode`** throw
+  `NotSupportedException` naming the API: they would need a raw-IL decoder, and no surveyed
+  library uses them.
+- **Managed vararg calls** throw `InvalidProgramException`, as the Linux CLR does; vararg behavior
+  on platforms where the CLR supports it is neither implemented nor tested.
+- **Visibility.** `owner` and `skipVisibility` are not enforced, because the VM's `call` and field
+  paths enforce no general member visibility. On the .NET 10.0.14 Linux CLR the tested private
+  calls and fields also work with `skipVisibility` false.
+- Raw signature encoding for nonprimitive types and uncommon `no.` prefix combinations.
+- `MethodHandle` throws `InvalidOperationException`, as on .NET.
 
-The remaining ownership work is broader than removing the loader entry. Delegates and
-`DotnetRs.ParameterInfo` currently retain only a method index; `ldftn` and method-handle function
-pointers expose indexes as native integers. Reflection tables root method objects in each GC
-mode, and the shared table can root objects from another arena. A safe implementation needs to
-represent those owners in the reachability graph, decide how exposed function pointers retain
-their target, prune the registries and caches after cross-arena marking and finalizer promotion,
-and keep synthetic resolutions referenced by other synthetic methods alive. Active frames must
-also retain their descriptors. Removing table entries based only on a dead `DynamicMethod` or
-delegate would leave live indexes dangling. Additionally, `ResolutionS::definition` and
-descriptor accessors return `'static` metadata references: an escaped reference can outlive its
-descriptor's arena. Their lifetime contract must be repaired or otherwise made safe before an
-arena can be evicted while the VM is running.
+The vararg and visibility limits are tracked in the plans README, "Not yet planned".
 
-Work-in-progress verification (2026-11-16): the DynamicMethod fixture and differential tests
-passed with no default features (75 passed, one thread fixture ignored) and with `multithreading`
-(78 passed, including the large-index regression). Newtonsoft and EF InMemory matched .NET on
-stdout and exit code with the multithreaded debug CLI before the latest index and naming changes.
-Focused multithreaded clippy with `-D warnings` and `cargo fmt --all -- --check` passed. The
-latest fixture tests used existing built fixtures with `DOTNET_SKIP_BUILD=1`; a fresh
-`./check.sh --fast` was interrupted during fixture restoration after NuGet audit network timeouts;
-a retry with audit disabled also stalled during the fixture build.
+## Eviction analysis
 
-## Done when
+Compiled dynamic methods and their metadata arenas are never reclaimed. Safe eviction needs every
+owner represented in the reachability graph before an arena is released:
 
-- The slice fixtures match `dotnet` in both base feature sets (`multithreading` on and off).
-- A POCO round-trip through System.Text.Json runs with no VM seam and matches `dotnet`.
-- A delegate type with a byref parameter, created through the Linq path, matches `dotnet`.
-- This plan records, with host-rung results, whether `IsDynamicCodeCompiled` and `CanCompileToIL`
-  changed and why.
-- Compiled dynamic methods that become unreachable are evicted, and a stack trace through one
-  matches `dotnet`.
-- The Newtonsoft roundtrip and EF InMemory rungs match `dotnet` on stdout and exit code, and
-  `./check.sh --fast`, clippy `-D warnings` and fmt pass.
+- Delegates and `DotnetRs.ParameterInfo` retain only a method index, and `ldftn` and method-handle
+  function pointers expose indexes as native integers, so exposed function pointers need a way to
+  retain their target.
+- Reflection tables root method objects in each GC mode, and the shared table can root objects
+  from another arena; the loader and reflection registries keep strong references to generated
+  assemblies and method objects; method-info and descriptor caches retain metadata.
+- Registries and caches must be pruned after cross-arena marking and finalizer promotion; active
+  frames must retain their descriptors; synthetic resolutions referenced by other synthetic methods
+  must stay alive; resurrection must be handled.
+- `ResolutionS::definition` and descriptor accessors return `'static` metadata references that can
+  outlive an evicted arena; that lifetime contract must be repaired first.
 
-## Ask the maintainer only if
+Removing table entries based only on a dead `DynamicMethod` or delegate would leave live indexes
+dangling. `dynamic_method_gc_42` proves survival across collection, not reclamation.
 
-- A needed construct (filter or fault clause, a signature operand, a `calli` shape) cannot be
-  written with dotnetdll 0.4.0's resolved writer, so an upstream change or a raw-IL decoder would be
-  required.
-- Honoring `owner`/`skipVisibility` would require member-visibility enforcement the VM does not have
-  today.
-- A host rung stops matching `dotnet` after a slice and the cause is the stub replacing
-  `DynamicMethod` for every caller.
-- A chosen rung needs `TypeBuilder` or `DynamicILInfo` (both are out of scope here).
+## Checks
+
+The `crates/dotnet-cli/tests/fixtures/reflection/dynamic_method_*_42.cs` differential fixtures
+(including `dynamic_method_stack_trace_42` and `dynamic_method_gc_42`) in both base feature sets,
+`threading/dynamic_method_concurrent_42.cs` under `multithreading`, the STJ POCO round-trip
+(`json_serializer_poco_42`), the expression fixtures, and the three host rungs.

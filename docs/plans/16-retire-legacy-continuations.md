@@ -1,465 +1,79 @@
 # Retire legacy continuations and move suspending intrinsics to effects
 
 **Status:** Complete
-**Outcome:** Suspending intrinsic routes use native effects. The multicast continuation retained
-at this plan's completion was subsequently removed by [plan 26](26-thread-lifecycle-and-multicast-fallback.md),
-which admitted ref-struct transport using existing tracing and pointer origins.
+**Outcome:** Suspending intrinsic routes use native effects; no intrinsic re-executes its
+instruction after a safepoint yield. The multicast continuation still retained at this plan's
+completion was removed by [plan 26](26-thread-lifecycle-and-multicast-fallback.md).
 
-## Problem
+## What was retired
 
-[Plan 13](13-async-intrinsic-api.md) made an async body sufficient for an intrinsic, but only
-about 12 bodies exist against about 588 `#[dotnet_intrinsic]` registrations. Most registrations are
-leaf operations that never suspend; converting them would add cost and remove nothing. The ones
-that matter still hand-roll suspension as `StepResult::Yield` plus re-execution, or park
-state on the caller's frame:
+Before this plan, intrinsics that crossed a safepoint returned `StepResult::Yield` and re-ran
+their instruction, or parked state on the caller's frame. Each mechanism and its outcome:
 
-| Legacy mechanism | Users at the start of this plan |
+| Mechanism | Outcome |
 |---|---|
-| Sync yield-retry intrinsics (re-run the instruction after `StepResult::Yield`) | `Thread.Join()`/`Join(int)` (`thread.rs`, `join_managed_thread` in `context_ops.rs`), `LowLevelLock.Acquire`, `Monitor.TryEnter_FastPath` family (`monitor.rs`), `GC.Collect` x3 (`gc.rs`, `increment_ip` + `Yield`) |
-| Bulk loops that yield at `check_gc_safe_point` | string `operations`/`constructors`/`search`, `mem_helpers`, `buffer`, span `equality`, `cpblk`/`initblk` (`instructions/memory.rs`) |
-| `MulticastState` on `StackFrame` (+ `handle_multicast_step`, `dispatch/mod.rs`; `call_ops_impl.rs:1090`, `context.rs:464`) | multicast `Invoke` shapes that `try_start_multicast` (`native_effects.rs`) declines; a native multicast body (`multicast_body`) already serves the rest |
-| `FrameReturnAction::InvokeReturn` + `apply_frame_return_actions` + `reflection_pending` | reflection `Invoke`/`CreateInstance` fallbacks for shapes `invoke_select`/`activator_select` decline; `run_reflection_call` already serves the rest |
-| Reflection retry test seam | `reflection_retry_completed_collection_does_not_retry` drives a `GC.Collect` target through the legacy continuation |
-| `StackFrame::monitor_retry` + `monitor_retry_deadline`/`monitor_clear_retry` | timed byref `Monitor` fallbacks (Transient/Unmanaged `bool&`) and `Thread.Join(int)` (Join removed in slice 5) |
-| `NativeDispatchMode::Other` + `fallback =` registration | the residual callers in plan 13 |
+| Yield-retry intrinsics: `Thread.Join()`/`Join(int)`, `LowLevelLock.Acquire`, `Monitor.TryEnter_FastPath` family, `GC.Collect` ×3 | Native bodies. Join waits on worker completion with an absolute deadline that survives GC stops; `GC.Collect` requests a full collection and yields until it is serviced (the request stays pending if the coordinator is busy). |
+| Reflection `InvokeReturn` continuation, `FrameReturnAction`, the per-instruction `reflection_pending` check | Deleted; every reflection call takes the native body. Byref-like parameters, returns and `Activator` targets throw the CLR's `NotSupportedException` before the target runs. |
+| `MulticastState` continuation | Kept for excluded shapes at this plan's completion; deleted by plan 26. |
+| Monitor byref fallbacks and `StackFrame::monitor_retry` | Deleted. `Unmanaged` `bool&` origins are admitted (unchecked guest trust, `F10.RawMemoryAccessValid`); a `Transient` origin raises `InvalidProgramException` before operands are committed. The only `Transient` producer, `ldflda` on a value on the evaluation stack, is invalid IL (ECMA-335 §III.4.11) and the CLR rejects it. |
+| Public `ExecutionEngine` dispatch APIs and the `ExecutionEngineApi` mode | Deleted (no production callers). Intrinsic-constructor `newobj` dispatches in `NativeDispatchMode::Constructor`, so async constructors can suspend; a value-type receiver is published only on success. |
+| Legacy static-initializer triggers (`newobj`, `prepare_method_initialization`, `RunClassConstructor`, the native-call preflight), frame `initializer_claim`, `wait_for_init`, late wrapping in `unwind_frame` | One trigger, `VesContext::initialize_type_then`, resuming with `InitializerResume::Retry` (`newobj`) or `InitializerResume::Dispatch` (re-dispatch from the operand stack, which delegates need because dispatch already rewrote it). Outer filters see only `TypeInitializationException`, as on the CLR. |
+| Bulk loops that restarted from offset 0 after a yield | See below. |
 
-### Declined shapes at completion
+`.cctor` dispatch and the span-equality slow path still use non-inline dispatch; they run managed
+bodies, never intrinsics.
 
-At this plan's completion, multicast ref structs remained excluded; plan 26 subsequently admitted
-them, byref returns and typed-reference arguments, and removed the multicast continuation. Valid
-stored pointer fields use existing tracing; transient field tags cannot be read back.
+### Bulk operations
 
-### Bulk loops restart from zero
+Restarting an overlapping copy from zero after a yield was not idempotent. Under
+`multithreading`, `memmove_overlap_gc_42` reproduced it (`OwnerUnavailable`) before the change.
 
-The chunked loops keep no progress: `StepResult::Yield` re-executes the call instruction, which
-starts the copy again at offset 0. For non-overlapping copies this is wasted work and, under a
-steady stream of stop requests, a possible livelock. For **overlapping** `Buffer.Memmove` /
-`cpblk` above `MEM_OP_CHUNK_SIZE` (1 MiB, `mem_helpers.rs`, `buffer.rs`) a restart is not
-idempotent: the chunks already written have overwritten part of the source. This is only
-reachable under `multithreading` (`check_gc_safe_point` reports a requested stop), and has not
-been reproduced. A suspending body that keeps its offset in the future fixes both by
-construction.
+- `Buffer.Memmove`/`SpanHelpers.Memmove`, `SpanHelpers.ClearWithoutReferences` and byte-compatible
+  `SpanHelpers.Fill<T>` have async bodies (`memmove_async`, `clear_async`, `fill_async` in
+  `crates/dotnet-intrinsics-unsafe/src/buffer.rs`) that root both operands as descriptors and copy
+  1 MiB chunks, re-resolving and range-checking each time; progress survives every yield.
+  Operations of at most one chunk keep a synchronous fast path.
+- Large `String.Equals`, `GetHashCodeOrdinalIgnoreCase`, `IsNullOrWhiteSpace` and the
+  repeated-character and char-array constructors keep roots and progress in native bodies.
+- `cpblk`, `initblk`, `Unsafe.CopyBlock*`, `Unsafe.InitBlock*`, non-byte `SpanHelpers.Fill<T>` and
+  the remaining string and span loops run to completion without polling (accepted: the CLR's
+  block-copy helpers do not poll either; the delay is bounded by one linear pass, at most 4 GiB
+  for the `uint` forms). No string, span or unsafe intrinsic returns `Yield` now.
+- Safepoints taken before any work starts remain in `newarr` and the reflection
+  `MakeGenericType`/`GetGenericArguments` handlers, which restart harmlessly.
 
-Note: `VesContext::unwind_frame` is **not** legacy plumbing. It is the exception unwinder's frame
-pop (`dotnet-exceptions/src/lib.rs`). Its late `TypeInitializationException` wrapping and
-`initializer_claim` failure were removed with slice 7.
+## Accepted costs
 
-## Fallback audit (what can and cannot go)
+- Removing the per-instruction reflection check let LLVM inline `step_normal` into the run loop;
+  under `multithreading` that made `dispatch` about 41% slower through store-to-load forwarding
+  stalls. `step_normal` is `#[inline(never)]`, restoring the baseline. With it, `dispatch` changed
+  −0.77% (ST) and −2.24% (MT).
+- Bulk-family benchmarks stayed within about 1.6% except MT `string`, which moved +7.18% and later
+  −6.46% with unchanged instruction counts: code placement of the hot `IsNullOrWhiteSpace` loop
+  (see "String benchmark is code-placement sensitive" in the plans README).
 
-Checked against the code on `main`. "Reachable" means a valid guest program can reach it.
+## Remaining limits
 
-| Fallback / mechanism | Verdict | Reason |
-|---|---|---|
-| `Thread.Join` yield loop | **Removed (slice 5)** | A native body waits on worker completion with an absolute deadline. `monitor_retry` is no longer used by Join. |
-| `LowLevelLock.Acquire`, `TryEnter_FastPath` | **Removed (slice 5)** | Native bodies use the monitor effect; legacy `monitor_enter_safe` remains for the retained byref fallbacks. |
-| `GC.Collect` x3 | **Removed (slice 5)** | Native bodies request a full collection and resume after the executor services it. |
-| Bulk string/mem/span/buffer loops | **Remove, measured** | Plan 04 measured a large-call cost for native activations. Each family needs a before/after on its benchmark (`substring`, `end_to_end`, `runtime_primitives`); small-input paths keep an inline fast path as Substring does. A fast path registered as a sync `fallback` is also what any remaining `Other` dispatch receives, so it must either handle every input size or `Other` must have no producer for that intrinsic. Overlapping memmove (above) is a correctness reason, not only a cleanup. |
-| `cpblk`/`initblk` instruction yields | **Fix, then decide** | These are instructions, not intrinsics, but share `chunked_copy_with_safe_point` and its restart-from-zero overlap hazard. At minimum keep progress across the yield; whether they become effects is decided with the `mem_helpers` family. |
-| Multicast `Invoke` (`MulticastState`) | **Removed subsequently (plan 26)** | Native multicast admits valid ref-struct fields, byref returns and typed references. |
-| Reflection `InvokeReturn` / `reflection_pending` | **Removed (slice 3)** | Every remaining declined shape was byref-like, which the CLR refuses with `NotSupportedException` before the target runs; the body now raises that, and Activator's binding and default-value cases. The then-remaining write-back and ambiguity deviations were addressed by [plan 19](19-reflection-invoke-clr-parity.md). |
-| Monitor byref `Transient` / `Unmanaged` fallback | **Removed (slice 5b)** | Slice 5 kept both, but its own probe shows the only `Transient bool&` candidate (`ldflda` on a struct value on the evaluation stack) is invalid IL: ECMA-335 §III.4.11 allows only an object, managed pointer or unmanaged pointer as `ldflda`'s operand (unlike `ldfld`, not a value-type instance), and the CLR rejects it with `InvalidProgramException`. That leaves `Unmanaged`, which is cheap to admit as a byref origin (no new hazard; see slice 5b). |
-| `newobj` of an intrinsic constructor (formerly `execute_intrinsic_call`) | **Removed (slice 4)** | Completion (`complete_constructor_receiver`) can be the activation's completion action, as `Jump` is for inline calls. Intrinsic constructors **do** suspend: `String::.ctor(char[])`, `.ctor(char, int)`, `.ctor(ReadOnlySpan<char>)` and `.ctor(char*)` yield at safepoints (`constructors.rs`). `newobj` now dispatches intrinsic constructors in `NativeDispatchMode::Constructor`, so an async constructor body can suspend and the value-type receiver is completed only on success. The synchronous string constructors still return their safepoint `Yield` and re-allocate on retry until slice 6 converts them; that slice should add a managed-exception case showing the receiver is not published. |
-| `.cctor` dispatch, span equality slow path, `Expression.Compile` redirect | **Keep** | They dispatch managed bodies, never intrinsics; `Other` is correct for them. |
-| `ExecutionEngine::unified_dispatch`/`dispatch_method` public APIs (`ResolvedMethodDispatchMode::ExecutionEngineApi`) | **Removed (slice 4)** | Plan 13 kept them as a host entry contract, but no production code calls them: the only callers are `condition_wait_tests.rs` and `native_substring_tests.rs`. `ExecutionEngineApi` sends intrinsics straight to `intrinsic_call`, i.e. the sync handler, so every async-only intrinsic is unreachable through them. Delete both APIs, `dispatch_resolved_method_for_engine_api`, `unified_dispatch_for_engine_api` and the `ExecutionEngineApi` mode; port those tests to drive guest IL or the inline path. |
-| Legacy static-init (`newobj`, `prepare_method_initialization`, `RunClassConstructor`) | **Removed (slice 7)** | All triggers run `ensure_initialized` through `VesContext::initialize_type_then`; frame `initializer_claim`, legacy `wait_for_init`, the late wrapping in `unwind_frame`, `yield_and_retry` and the preflight in `dispatch_pending_native_call` are gone. |
-| Substring valid-small fast path | **Keep** | Measured in plan 13. |
-| `monitor_retry` frame field | **Removed (slice 5b)** | Timed Monitor byrefs now use native effects. |
+- Static storage keys canonicalize through aliases recorded by `init`, so cross-assembly `TypeRef`
+  versus `TypeDef` unification depends on `init` having seen the spelling first (untested).
+- `original_ip`/`original_stack_height` are still saved on every instruction and around nested
+  dispatch but may no longer be read; removing them touches the layout-sensitive hot path and
+  needs a benchmark.
+- The reflection `.cctor` filter fixture cannot observe filter timing (the exception is rethrown
+  after `TargetInvocationException` unwrapping), so it checks only the final type.
 
-## Scope
+Both open items are in the plans README, "Not yet planned".
 
-**In scope:** the "Remove" rows above, and deleting every type, field, trait method and
-registration they leave unused.
+## Checks
 
-**Out of scope:** converting synchronous leaf intrinsics; transport for `Transient` pointers
-unless the probe shows a producer; the cross-thread GC-handle, finalizer and shared-memory
-items in the README.
-
-**Scope-creep guard.** Struct transport is where this plan can grow the way the byref-homes
-work did. Admit plain value types (including ones containing object references, which `stash`
-already traces) and enums. Do not build `Transient`/`Unmanaged` pointer transport to admit ref
-structs in this plan. Plan 26 later admitted them without extending the origin or tracing model. If slice 1 needs more than a value-type output shape,
-its marshalling and its tests, stop and revise.
-
-## Design
-
-Reuse plan 13's API (body-only registration, `vm.exception(..)` for throws, optional
-`fallback`). One new piece of vocabulary is needed up front:
-
-- **Yield-for-safepoint effect.** An async body that loops over chunks needs a cheap
-  "offer a safepoint" await point. `fx.vm().await` already waits for a stop, so the likely answer
-  is that it is the point; the blocking slice confirms with `GC.Collect` and a bulk loop before committing
-  the rest.
-
-## Slices
-
-The original ordering put blocking intrinsics first. A body-only `GC.Collect` would fail through
-the still-live non-inline reflection continuation: `reflection_retry_completed_collection_does_not_retry`
-constructs that route. Before slice 1, multicast also needed the legacy continuation for plain
-values; slice 2 moved its collection regression to the native path and recorded its remaining
-exclusions. Slice 3 then removed the reflection continuation; the remaining order is non-inline producers, then blocking intrinsics.
-
-1. **Value types across native calls (complete).** Add a value-type shape to `NativeOutput` and the
-   argument check, map enums to their underlying type in reflection as multicast already does,
-   and admit `Static` byref origins in the multicast argument check. Both selectors stop
-   declining these shapes. Continuations are not deleted yet.
-   - Tests: multicast and reflection diff fixtures with struct arguments and returns (a struct
-     with an object field, `Nullable<int>`, `DateTime`, an enum), each through a target that
-     suspends and with a GC between targets; `tracing` asserts `multicast_path = "async"` and
-     `reflection_invoke_path = "async"` for them.
-   - At the time, selectors excluded values containing managed pointers. Plan 26 subsequently
-     enabled the multicast ref-struct fixture; static-byref fixtures assert the async path.
-   - Validation: VM library tests and the selection and CLR differential fixtures passed in ST
-     and `multithreading` with `DOTNET_SKIP_BUILD=1` (new fixtures built on demand).
-2. **Multicast continuation (completed by plan 26).** Delete `MulticastState`, `handle_multicast_step`, the checks at
-   `call_ops_impl.rs:1090` and `context.rs:464`, `MULTICAST_FALLBACK_TEST` and the non-inline
-   (`synthetic`) branch of `try_start_multicast`. Plan 26 completed the deletion.
-   - Tests: diff fixtures for a throwing target, ordering, last return value, targets that
-     suspend (`Thread.Sleep`, contended `Monitor.Enter`), and targets that trigger static
-     initialization. Port `multicast_fallback_completes_collection_targets` to the native path.
-   - The forced-fallback hook is removed. The collection fixture now asserts three async
-     selections and compares all three calls with the CLR. The legacy continuation and synthetic
-     branch remained for excluded cases at this point and were removed by plan 26.
-   - Validation: VM library tests, the selection test and all multicast CLR differential tests
-     passed in ST and `multithreading` with `DOTNET_SKIP_BUILD=1`. A source search confirms the
-     forced multicast fallback hook and its test have no remaining code users.
-3. **Reflection continuation (complete).** Move receiver and argument validation and byref write-back into
-   the body. Delete `InvokeReturn`, `FrameReturnAction`, `reflection_pending` with its
-   per-instruction check, and the two reflection fallbacks, or record which shape keeps each.
-   If any fallback remains, its calls to suspending intrinsics must use a continuation that can
-   resume a native activation.
-   - Tests: the reflection differential fixtures plus one per previously declined shape; the
-     ported collection-target regression; byref-write-back-after-throw fixed or restated; a
-     benchmark run showing the per-instruction check's removal.
-   - Progress: `MethodInfo`/`ConstructorInfo` target and argument validation now runs in the
-     native body for transportable signatures. Retained reflection dispatch and retry call
-     targets inline, including async-only intrinsics; a retry must not enqueue a native target
-     again when its activation suspends. The collection fixture asserts all three calls select
-     the native path. At the time, exceptional byref write-back was a CLR deviation: the
-     body passed pointers into the original box or argument array, so writes were immediate even
-     on a throw. [Plan 19](19-reflection-invoke-clr-parity.md) supersedes this behavior with
-     success-only copy-back.
-   - Reflection-excluded shapes include byref-like values (`ref struct`, `Span<T>`,
-     `TypedReference`), which reflection cannot box even though multicast can transport valid
-     values. A CLR probe showed reflection refuses all of them before running the
-     target: `NotSupportedException("Cannot create boxed ByRef-like values.")` for a parameter
-     (by value or by reference) and for an `Activator` target, and
-     `NotSupportedException("Specified method is not supported.")` for a return. The fallback
-     instead ran these targets, returned boxed ref structs, or failed with an internal error
-     (`TypedReference`). The body now raises the CLR exceptions; byref-like detection reads
-     `IsByRefLikeAttribute` through `type_attributes`, because the loader parses attributes
-     lazily and `TypeDefinition::attributes` stays empty.
-   - Activator: the body resolves the target and raises `ArgumentNullException`,
-     `ArgumentException` for an open generic, `NotSupportedException` for a byref-like type, and
-     `MissingMethodException` ("Constructor on type 'X' not found." or the abstract-class
-     message) as the CLR does. With no arguments, a value type without a matching constructor
-     (including primitives, which previously threw `Arg_MustBeType`) returns its boxed default
-     through a new no-call preparation result (`NativeReflectionPlan::Value`). Arrays no longer
-     construct a `DotnetRs.Array`, and `List<>` no longer constructs an instance. At the time, `string` kept
-     `ArgumentException("Arg_MustBeType")`: constructing one needs the intrinsic-constructor
-     protocol. [Plan 19](19-reflection-invoke-clr-parity.md) subsequently uses that protocol
-     for reflection string construction.
-   - Deleted: both selectors' `Fallback` outcomes, the `Invoke` arms of
-     `runtime_method_info_intrinsic_call`, `intrinsic_activator_create_instance_type_args`,
-     `FrameReturnAction`/`InvokeReturn`, `StackFrame::frame_continuation` and
-     `reflection_pending`, `ReflectionPending`, `CallState::reflection_arming`,
-     `NativeActivation::reflection_actions`, `apply_frame_return_actions`,
-     `retry_reflection_target`, `reflection_dispatch_method`, `set_frame_return_action`, the
-     per-instruction pending check in `step_normal`, and the two unit tests that constructed the
-     continuation by hand. `StackFrame` shrinks from 600 to 568 bytes. No guest route reaches the
-     `Invoke`/`Activator` intrinsics non-inline; the engine API goes in slice 4.
-   - Tests: `invoke_byref_like_42.cs` (27 native selections, no target runs) matches the CLR
-     line for line; every reflection selection fixture asserts no fallback.
-   - Benchmark: four alternating Criterion pairs per configuration (`bench-fat`, CPU 0 on an
-     AMD Ryzen 9 9900X, separate targets and Criterion homes, `--sample-size 10 --warm-up-time 1
-     --measurement-time 4`), baseline `0c5c58f8`, comparing mean point estimates:
-
-     | Workload | Pair 1 | Pair 2 | Pair 3 | Pair 4 | Mean |
-     |---|---:|---:|---:|---:|---:|
-     | ST dispatch | -1.27% | -0.63% | -0.50% | -0.69% | -0.77% |
-     | ST string | -1.91% | -1.78% | +8.18% | -1.13% | +0.84% |
-     | ST reflection | +0.64% | -1.09% | +0.20% | +0.68% | +0.11% |
-     | MT dispatch | -3.38% | -1.68% | -2.08% | -1.81% | -2.24% |
-     | MT string | -9.00% | -7.56% | -9.16% | -8.04% | -8.44% |
-     | MT reflection | -4.36% | +0.67% | -0.53% | +0.92% | -0.83% |
-
-     Whole-process `perf stat --test` (two pairs each) measured 0.53–0.60% fewer user
-     instructions and 0.79–0.80% fewer branches in both configurations. The fixture DLLs were
-     built per target directory from identical sources and are not byte-identical, unlike plan
-     08's audit. `reflection` (`ReflectionEnumeration_0`) enumerates members and does not call
-     `Invoke`; it is a control. The MT string gain is consistent but not attributed.
-   - Inlining hazard: without the check, LLVM inlined `step_normal` into `ExecutionEngine::run`
-     (189 KB). Under `multithreading` the merged loop stored each `StepResult` with a narrow
-     store and reloaded it with 16-byte loads, so `dispatch` ran 41% slower (+42.4, +41.6,
-     +39.4, +41.8%), `string` 33% and `reflection` 17%, with 1.5% fewer instructions, 34% more
-     cycles and 60% more branch misses; `perf annotate` put 54% of `run`'s samples on the
-     reload. `step_normal` is now `#[inline(never)]`, which restores the baseline's
-     out-of-line structure (`run` is again `0xdfb` bytes in MT).
-4. **Intrinsic-constructor `newobj` and `Other` dispatch (complete).** Route guest calls to inline dispatch
-   where the completion contract allows it, including the yielding string constructors. Delete
-   `NativeDispatchMode::Other` handling that no longer has a producer. Delete the public
-   `ExecutionEngine` dispatch APIs and the `ExecutionEngineApi` mode per the audit row.
-   - Intrinsic `newobj` admits native activations with the correct operand and result conventions:
-     reference constructors return their object, while value-type receiver homes are completed
-     only after success. Constructor activation starts after its completion is installed.
-     Existing synchronous string constructors keep their safepoint retry until slice 6 converts
-     the bulk loops.
-   - Deleted the engine APIs, synthetic multicast activation and its return machinery. `Other`
-     remained at this slice for the excluded multicast continuation and managed-only dispatches;
-     plan 26 subsequently removed the multicast continuation.
-   - `native_newobj_completes_string_and_value_receiver_after_gc` verifies suspended activation
-     completion across collection and checks that failures do not publish the receiver; existing
-     string, span, multicast and threading fixtures cover synchronous constructors and retained
-     dispatch. The contended multicast fixture is now
-     ignored without `multithreading`, as its CLR comparison already was.
-   - Validation: workspace nextest without features (926 passed) and MT (1,204 passed with the
-     documented reflection race excluded); the reflection race passed separately after its CLR
-     sanity check failed under parallel load. A timer comparison also failed under parallel load
-     and passed both individually and in the subsequent run. VM library tests, multicast
-     selection and workspace clippy passed in ST and MT; 20 multicast CLR comparisons and
-     string differential tests passed. `check.sh --fast` was stopped during its silent fixture
-     build after several minutes; the workspace checks used available fixtures instead.
-5. **Blocking intrinsics (complete).** `Thread.Join` (both), `LowLevelLock.Acquire`, the `TryEnter_FastPath`
-   family, `GC.Collect` x3. Delete their sync handlers, Join's `monitor_retry_deadline` use and
-   any now-unused `MonitorHost` methods. Also settle the Transient/Unmanaged question here and
-   admit `Unmanaged` and delete the byref monitor fallbacks and their unused retry state.
-   - At the time, non-inline multicast targets required synchronous fallbacks for excluded
-     signatures. Unmanaged byrefs were admitted before the Monitor fallback was removed;
-     plan 26 subsequently removed the multicast continuation entirely.
-   - Tests: existing join/monitor/GC fixtures in ST and `multithreading`; a timed `Join` whose
-     deadline survives a GC stop; `GC.Collect` observed by a finalizer fixture; a unit test per
-     removed fallback that fails if the registration reappears; a registry test that every
-     async intrinsic without a fallback has a signature the native multicast and reflection
-     selectors admit, so no retained continuation can reach it.
-   - Both Join overloads wait on worker completion notifications; timed joins keep the absolute
-     deadline across GC stops. `GC.Collect` requests a full collection and yields until it is
-     serviced; contention for the collection coordinator leaves the request pending.
-   - The byref Monitor fallbacks remain for both `Transient` and `Unmanaged`, along with the
-     retry field and MonitorHost methods they use. Producer search found `ldflda` on a stack
-     value as a candidate; the handwritten IL probe is rejected by the CLR with
-     `InvalidProgramException`. No other guest `Transient bool&` producer was established.
-   - `join_timeout_survives_collection`, `completion_wait_wakes_on_publication_and_after_publication`,
-     `collection_request_retries_when_coordinator_is_busy`, the async registry guards and the CLR
-     IL probe cover the new paths and retained exclusions.
-   - Validation: workspace nextest passed in ST (929 tests) and `multithreading` (1,211 tests,
-     with the reflection race filter used in slice 4); VM clippy passed in both configurations.
-     The finalizer and multicast collection fixtures and the CLR IL probe passed separately.
-     Source search finds no `threading_join_managed_thread`, `intrinsic_thread_join`,
-     `intrinsic_gc_collect`, or `intrinsic_monitor_try_enter_fast_path`; `monitor_enter_safe`
-     remains only for the retained byref Monitor fallback.
-   - Review fix: `Start` marks a thread started before it publishes the worker completion, so a
-     `Join` in that window captured an absent completion and waited forever. The completion
-     handle now resolves the completion again until it is published
-     (`managed_join_resolves_completion_published_after_start`, which fails without the fix).
-   - Review notes for slice 8: `GC.Collect` was the only synchronous target that advanced the
-     caller's IP and then yielded, so the `completed_yield` handling in
-     `dispatch_pending_native_call` and the IP comparison in `handle_multicast_step` look dead;
-     confirm and remove. `VmEffects::collect` resumes after one yield even when another thread
-     holds the collection coordinator; the request stays pending, so fix the doc comment (or
-     loop) rather than claim the collection has run.
-5b. **Retire the byref Monitor fallbacks (complete).** Admit `Unmanaged` as a byref origin and treat
-   `Transient` as an invalid program, then delete the fallbacks slice 5 kept.
-   - Admit `Unmanaged` as a byref **argument origin** in native transport (`stash` and its
-     reconstruction) and in the multicast byref check (`try_start_multicast`), under the same
-     target-type rule then in effect (no managed pointers in the target type; plan 26 later
-     admitted them). The
-     address is not traced; rooting is a no-op and reconstruction yields the same address. This
-     is the same unchecked trust the legacy retry already places in the raw address
-     (`F10.RawMemoryAccessValid`); write that justification at the admission site. Do not admit
-     `Unmanaged` or `Transient` pointers stored in ref-struct fields in this plan. Plan 26
-     later admitted valid unmanaged fields without admitting transient field decoding.
-   - `Transient` byref operands decline in the selectors before any operand is consumed and
-     raise `System.InvalidProgramException` ("Common Language Runtime detected an invalid
-     program."), matching the CLR's verdict on the only known producer. If a managed exception
-     cannot be raised before commitment, raise it from the body before any side effect and say
-     so in the slice notes. Before deleting anything, recheck every `PointerOrigin::Transient`
-     construction site for a producer reachable from valid IL; if one exists, stop and ask.
-   - Delete `fallback =` from the five byref registrations (`ReliableEnter`, `Enter(object,
-     bool&)`, `TryEnter(object, int, bool&)`, `ReliableEnterTimeout`,
-     `TryEnter_FastPath_WithTimeout`), the sync handlers `intrinsic_monitor_reliable_enter` and
-     `intrinsic_monitor_try_enter_timeout_ref`, `monitor_enter_safe` (and the timeout variant if
-     unused), `monitor_retry_deadline`, `monitor_clear_retry`, `MonitorRetry`,
-     `StackFrame::monitor_retry` and all its resets (`executor.rs`, `dispatch/mod.rs` x3,
-     `exception_ops_impl.rs` x2, `context.rs`, `stack.rs`), and any `MonitorHost` method left
-     unused. Update the `StackFrame` layout guard (`layout_sizes.rs`) and its comment.
-   - Tests: port `monitor_legacy_unmanaged_timeout_retains_deadline_across_stop` to the native
-     path (an `Unmanaged` flag, a timed enter that waits across a real collection, and the flag
-     written exactly once on success and left false on timeout); a native multicast `ref bool`
-     delegate over an unmanaged flag in ST and MT; a `Transient` selection test showing no
-     operand is consumed and `InvalidProgramException` is raised; flip the unmanaged-byref case
-     in `multicast_selection_precedes_operand_commitment` from excluded to admitted, keeping its
-     CLR differential fixture green; change `blocking_intrinsics_have_no_sync_fallback` so the
-     byref overloads must have no fallback. Existing monitor, `lock` and threading fixtures in
-     ST and `multithreading`.
-   - Benchmark: not required; no hot path changes. Confirm `StackFrame` shrinks.
-   - Result: `Unmanaged` byref arguments preserve their raw address across polls; raw integer and unmanaged-pointer operands are canonicalized using the declared target type. `Transient`
-     selectors throw before operand commitment. The only production constructors are the
-     object-instruction and Unsafe memory helpers: only `ldflda` can return the transient address,
-     and a value-type stack operand there is invalid IL. The five sync fallbacks, retry record,
-     resets and unused MonitorHost methods are deleted. `StackFrame` shrank from 568 to 560 bytes.
-     `rg 'monitor_retry|MonitorRetry|intrinsic_monitor_reliable_enter|intrinsic_monitor_try_enter_timeout_ref|monitor_enter_safe' crates`
-     finds no remaining production users. Validation passed the VM library suites in ST and MT,
-     both layout guards, and the multicast, threading and lock CLR fixtures in both configurations.
-     The unmanaged timed-wait test covers successful acquisition and timeout across a collection,
-     including exactly one flag write. The multicast fixture covers a `ref bool` Monitor call.
-6. **Bulk intrinsics (complete).** `mem_helpers`/`buffer` first (correctness), then string, then span
-   equality, one family per commit, each gated on a benchmark comparison against the parent
-   commit. `cpblk`/`initblk` keep progress across the yield even if they stay instructions.
-   - Tests: first, a `multithreading` repro for an overlapping 2 MiB+ `Buffer.Memmove` while
-     another thread forces collections (expected to fail before the change). Then a large-input
-     fixture per family that crosses a GC safepoint and is collected mid-copy, and the benchmark
-     numbers recorded in this plan.
-   - Memory family (done): the repro failed before the change (`ObjectRef codec host invariant
-     violation: OwnerUnavailable`, exit 101): a synchronous handler that yields is retried from
-     its start with its operands restored, so a partial overlapping move was re-run over
-     already-moved bytes and the retained owner was gone. `Buffer.Memmove` (4 registrations),
-     `SpanHelpers.ClearWithoutReferences` (2) and the byte-compatible `SpanHelpers.Fill<T>` now
-     have async bodies (`memmove_async`, `clear_async`, `fill_async`) that root the pointers as
-     descriptors and call `bulk_copy_chunk`/`bulk_fill_chunk` per 1 MiB chunk, re-resolving and
-     range-checking both operands each time. Copy direction is a pure function of the unchanged
-     addresses and `done` counts in iteration order, so progress survives every yield. Selectors
-     pick the async body only above one chunk; smaller operations keep a single-step sync
-     handler that cannot reach a safepoint (a measured-fast-path fallback, as for Substring).
-   - `cpblk`, `initblk`, `Unsafe.CopyBlock*` and `Unsafe.InitBlock*` no longer poll mid-copy:
-     they run to completion. This deviates from "keep progress across the yield": it removes the
-     restart hazard instead, at the cost of a collection request waiting for a long block
-     (bounded by memcpy time, at most 4 GiB for the `uint` forms).
-   - `SpanHelpers.Fill<T>` for non-byte `T` (and null or non-pointer destinations) keeps the
-     synchronous element loop; the string commit removed its per-element poll, so it runs to
-     completion instead of restarting.
-   - Tests: `memmove_overlap_gc_42` and `bulk_fill_gc_42` (both against the CLR, `multithreading`
-     only, each crossing GC stops from a forcing thread). Workspace nextest passed in ST
-     (809 in vm, cli, unsafe) and `multithreading` (1,210; the known timer fixture flaked once and
-     passed on rerun); clippy clean in both.
-   - Benchmark (review, `bench-fat`, `taskset -c 0`, four alternating pairs against
-     `1bb0f642`, mean change): ST `unsafe_buffer` +0.01%, `memory` +0.15%, `span` +0.46%,
-     `json` +1.56%, `string` −1.07%; MT `unsafe_buffer` +0.39%, `memory` +0.38%, `span` +0.30%,
-     `json` −0.36%, `string` +7.18% (+5.6 to +9.0%). The MT `string` change is code placement,
-     not work: `perf stat --test` instructions and branches match to 0.01%, and the hottest
-     function (`intrinsic_string_is_null_or_white_space`, 42–45% of steady-state cycles) is
-     byte-identical but moved so its hot loop now straddles a 64-byte line. Accepted.
-   - `cpblk`/`initblk` running to completion is accepted: the CLR's block-copy helpers do not
-     poll for GC either, and the delay is bounded by one memcpy.
-   - Found, not fixed: `Span<byte>.Clear()` on a 3 MiB span takes ~42 s and never reaches
-     `clear_select`, on the parent commit too; its registered signature is not the one `Clear`
-     calls, so `clear_async` has no fixture. Needs its own investigation.
-   - Open: the string family (constructors, concat, copy/insert/replace/search loops at
-     `constructors.rs`, `operations.rs`, `search.rs`) and span/string equality
-     (`equality.rs`, `operations.rs`) still return `Yield` from sync handlers and, with the
-     constructors, still re-allocate on retry; each needs its own commit and benchmark.
-   - Partial follow-up: ordinary `String.Equals`, `GetHashCodeOrdinalIgnoreCase`,
-     `IsNullOrWhiteSpace`, and the repeated-character and char-array constructors now keep
-     their roots and progress in native bodies for large inputs. Their applicable synchronous
-     fallbacks and the substring fallback run to completion. Unit tests collect between
-     chunks, including a surrogate pair across a hash chunk boundary, and the MT
-     `string_equality_gc_42` fixture compares equality, whitespace, and construction results
-     with the CLR while a second thread forces collections. `string_char_repeat_42` checks that
-     a throwing constructor leaves the destination unassigned (the slice 4 follow-up).
-   - String and span completion (review): every remaining mid-operation poll is removed, and
-     those handlers run to completion, by the rule accepted for `cpblk`: a single linear pass
-     over the operands does not poll. This covers `String(ReadOnlySpan<char>)`, `String(char*)`,
-     `Concat` of three spans, `CopyStringContent`, span `SequenceEqual` and the pre-allocation
-     poll in `FastAllocateString`. The span and `char*` operands are ref structs or unmanaged C
-     strings, which native transport excludes, so an async body was not an option for them.
-     No string, span or unsafe intrinsic now returns `Yield`. Safepoints taken before any work
-     starts remain: `newarr` and the reflection `MakeGenericType`/`GetGenericArguments` handlers
-     (the latter polls inside a loop over a few type arguments and restarts harmlessly); slice 8
-     should decide whether to keep them.
-   - The three slice 6 GC fixtures start a second thread, so `crates/dotnet-cli/build.rs` now
-     skips them without `multithreading`; `e5750bba` had left the ST fixture run failing.
-   - Validation: workspace nextest 1,215 passed (MT) and 930 passed (ST); workspace clippy
-     clean in both.
-   - Benchmark (review, `bench-fat`, `taskset -c 0`, four alternating pairs against
-     `120b595c`, mean change): ST `string` +1.23%, `span` +0.19%, `span_equality` +0.40%,
-     `memory` +0.39%, `unsafe_buffer` −0.14%, `json` +0.64%; MT `string` −6.46%, `span`
-     −0.94%, `span_equality` −1.09%, `memory` −0.35%, `unsafe_buffer` −0.22%, `json` −0.49%.
-     In a steady-state profile the new selectors do not register (`string_equals_select`
-     0.02%), and the hot `IsNullOrWhiteSpace` handler goes from 46.7% to 47.4% of cycles, as its
-     loop changed; the MT `string` gain largely reverses the code-placement loss recorded above.
-     Accepted.
-7. **Static-init triggers.** One `ensure_initialized` path for `newobj`,
-   `prepare_method_initialization`, `RunClassConstructor` **and the native-call preflight in
-   `dispatch_pending_native_call`**; delete `retrying_initializer`, frame `initializer_claim`,
-   legacy `wait_for_init`, the `original_ip`/`original_stack_height` save-restore, and the late
-   wrapping in `unwind_frame`, and update the plan 08 static-initialization slice document.
-   - Tests: `statics/cctor_filter_42.cs` and its `newobj`/call/`RunClassConstructor`/delegate/
-     reflection variants against the CLR; recursive and cross-thread initialization.
-   - Complete. `VesContext::initialize_type_then` (`native_effects.rs`) is the one trigger:
-     it returns `Continue` when the type is `Initialized` or `Initializing` on this thread, and
-     otherwise starts an activation (`NativeEntry::Initializer`) whose future is
-     `ensure_initialized`. The cctor runs under a capturing boundary, so outer filters see only
-     the `TypeInitializationException`, never the original exception, as on the CLR. Both
-     `newobj` (through `StaticsOps::initialize_static_storage`) and
-     `prepare_method_initialization` (every `dispatch_method*`) use it.
-   - Resumption. `newobj` uses `InitializerResume::Retry`
-     (`Yield`, instruction re-executed with its operands intact). Dispatch triggers use
-     `InitializerResume::Dispatch(method, lookup, mode)`: on completion the same dispatch is
-     re-run from the operand stack as it stood, and `Continue` becomes `Jump(caller_ip + 1)`.
-     Dispatch resumption, not instruction replay, is what delegates need: delegate dispatch has
-     already replaced the receiver with the target's arguments, and the previous replay re-ran
-     `callvirt Invoke` over that stack (a delegate to a static method of a non-`beforefieldinit`
-     type failed with a type mismatch before this slice; `cctor_success_triggers_42` covers it).
-     Under a staged native call the activation is nested; completion leaves the parent's
-     staged call to re-dispatch, and the preflight in `dispatch_pending_native_call` is deleted
-     (the staged dispatch reaches the same trigger).
-   - Removed: frame `initializer_claim`, legacy `StaticStorageManager::wait_for_init`,
-     `unwind_frame`'s late wrapping and `cctor_type_desc_and_lookup`, `yield_and_retry`,
-     `retain_native_target_after_initializer`, and the `original_ip`/`original_stack_height`
-     save-restore around initialization. `StackFrame` shrank by 16 bytes (560 to 544).
-   - At this point the multicast retry state remained; plan 26 subsequently removed it.
-   - Tests, all against the CLR: `statics/cctor_filter_{newobj,call,delegate,delegate_multicast,
-     reflection,run_class_constructor}_42.cs` (filter must see `TypeInitializationException`
-     only; stdout compared), `cctor_success_triggers_42.cs` (each trigger on success, including
-     delegates to static and instance methods and a multicast), `cctor_recursive_triggers_42.cs`
-     (same-thread recursion through `newobj`, call and delegate), and `cctor_wait_triggers_
-     {success,failure}_42.cs` (MT: waiters via `newobj`, call, delegate; failure checks the
-     same inner exception object). Unit tests that built a legacy initializer frame were
-     replaced or retargeted (`trigger_initializer_host_error_releases_waiter`).
-   - Not changed by this slice and worth knowing: the reflection filter variant cannot observe
-     timing (the exception is rethrown after `TargetInvocationException` unwrapping), so it
-     only checks the final type. A synchronous intrinsic that yields from a re-dispatched
-     delegate target would retry the instruction over the rewritten stack, as before.
-   - Untested limitation: static storage keys canonicalize through aliases recorded by `init`,
-     so cross-assembly `TypeRef`-versus-`TypeDef` unification depends on `init` having seen the
-     spelling first. This slice's `get_init_state` pre-check does not change that (an unseen
-     spelling falls through to the activation, whose probe calls `init`).
-8. **Cleanup.** `grep` every item in the Problem table; remove leftovers; update the README
-   "Fallback continuations" and "Legacy static-initialization triggers" entries and plan 08's
-   residual-callers text.
-   - Complete. Removed: `VmContinuation::RetryInstruction` and its clearing in `run_inner` (nothing
-     set it after slice 7); the `completed_yield` handling in `dispatch_pending_native_call` and
-     the caller-IP comparison in `handle_multicast_step` (`GC.Collect` was the only target that
-     advanced the IP and then yielded; `rg 'increment_ip'` next to a `Yield` finds none); the
-     `VesInternals::back_up_ip` trait method and impl (no callers); the stale doc sections on
-     `RetryInstruction`/`FrameReturnAction` in `GC_AND_MEMORY_SAFETY.md`. Plan 08, plan 13,
-     `DELEGATES_AND_DISPATCH.md` and the README were updated to match.
-   - The multicast retry state was later removed by plan 26. The synchronous-yield retry for
-     reflection `MakeGenericType` and `GetGenericArguments`, `newarr` and
-     `InitializerResume::Retry` remained at this audit.
-   - Not changed, needs a benchmark: `ExecutionState::original_ip`/`original_stack_height` are
-     now write-only (`back_up_ip` was their only reader). `step_normal` still stores both on every
-     instruction, and the save/restore around dispatch exists only to feed them. Deleting them
-     touches the hot path that the "Inlining hazard" note above shows is layout-sensitive, so it
-     is left for a measured follow-up.
-   - Fixed the `VmEffects::collect` doc comment (slice 5 review note): it resumes after one turn,
-     and the request stays pending if the coordinator is busy.
-
-## Done when
-
-- Each "Remove" row has no remaining user (`grep` evidence in the slice commit).
-- No benchmark in the "Bulk" families regressed beyond what the maintainer accepted (numbers
-  recorded here).
-- `cargo test` passes in ST and `multithreading`; Miri value/VM jobs and the differential
-  harness are green.
-- The README items above are rewritten to describe only what remains.
-
-## Ask the maintainer only if
-
-- The Unmanaged/Transient probe finds a real `Transient` producer.
-- Struct transport needs anything beyond a value-type shape (see the scope-creep guard).
-- The overlapping-memmove repro confirms corruption: fix it standalone (as the next plan ID) if
-  slice 6 is not close.
-- A bulk family regresses more than a few percent on its benchmark.
-- Multicast needs a CLR deviation (for example exception behaviour inside an invocation list).
-- Reflection ambiguity handling (`AmbiguousMatchException` versus first-best-match) must change
-  to delete a fallback. This question was resolved by [plan 19](19-reflection-invoke-clr-parity.md),
-  which reports ambiguous matches.
+CLR differential fixtures: `statics/cctor_filter_{newobj,call,delegate,delegate_multicast,reflection,run_class_constructor}_42.cs`,
+`cctor_success_triggers_42.cs`, `cctor_recursive_triggers_42.cs`,
+`cctor_wait_triggers_{success,failure}_42.cs` (MT), `reflection/invoke_byref_like_42.cs`,
+`unsafe/memmove_overlap_gc_42.cs`, `unsafe/bulk_fill_gc_42.cs`, `strings/equality_gc_42.cs` (MT,
+with a second thread forcing collections), `strings/string_char_repeat_42.cs` and
+`unsafe/span_clear_42.cs`. Unit tests: `join_timeout_survives_collection`,
+`managed_join_resolves_completion_published_after_start`,
+`collection_request_retries_when_coordinator_is_busy`,
+`native_newobj_completes_string_and_value_receiver_after_gc`,
+`trigger_initializer_host_error_releases_waiter` and the registry guard
+`blocking_intrinsics_have_no_sync_fallback`.

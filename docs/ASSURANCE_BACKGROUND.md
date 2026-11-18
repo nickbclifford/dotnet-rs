@@ -1,44 +1,45 @@
 # Assurance background
 
-**Historical record, not instructions.** Current work is in [docs/plans/](plans/README.md).
-The study proposed a separate assurance queue whose items are called A01–A06 below; that queue
-was retired and its items are not current prerequisites. Counts and measurements below are dated
-August 2026 and describe the code at that time. This note is the distilled output of a feasibility study on machine-checking the project's
-`// SAFETY:` comments with a Lean 4-backed proof DSL, run 2026-08-01 → 2026-08-03
-and terminated. The full 44-page study and its five implemented Rust crates are
-history, not documentation:
+The distilled output of a feasibility study (2026-08-01 to 2026-08-03, terminated) on
+machine-checking the project's `// SAFETY:` comments with a Lean 4-backed proof DSL.
+
+**Historical record, not instructions.** Current work is in [docs/plans/](plans/README.md); the
+live successors of this study are the [invariant registry](INVARIANT_REGISTRY.md) and the
+[pointer-provenance evidence](pointer-provenance/README.md). Counts below describe the code in
+August 2026 and are not maintained.
+
+The study proposed a separate assurance queue, since retired; its items are mentioned below only
+for context: A01 (a named predicate registry, now the invariant registry), A03 (make atomic access
+width a type parameter), A04 (an ECMA-335 correspondence table) and A06 (a table of trust classes).
 
 - **Study (rev. 11), archived in git history** at
   [`docs/proof-dsl-feasibility/` @ `b5a5f65d`](https://github.com/nickbclifford/dotnet-rs/tree/b5a5f65d67345b0682def83867b816ea86fa3152/docs/proof-dsl-feasibility)
   — added in `f088cad0`, and `b5a5f65d` is the last commit whose tree contains
   it. Locally:
   `git show b5a5f65d:docs/proof-dsl-feasibility/main.pdf > /tmp/study.pdf`.
-- **Prototype crates:** `~/Desktop/ves-proof` (`ves-syntax`, `ves-vocabulary`,
-  `ves-tokens`, `ves-macros`, `ves-check`) and `~/Desktop/ves-proof-lean`, both
-  archived read-only. No code from either is in this repository.
+- **Prototype crates** were archived outside this repository; none of their code is here.
 
-What remains useful is the families table (still the structure of the
-[invariant registry](INVARIANT_REGISTRY.md)) and the process lessons.
+What remains useful is the families table (still the structure of the invariant registry) and the
+process lessons.
 
 ## The invariant families
 
-The study's durable finding. As counted in August 2026, 620 prose `// SAFETY:` comments across 583 `unsafe`
-blocks do not represent 620 independent obligations — they factor into nine
-families, each one predicate stated once and instantiated per site. This is the
-skeleton that A01 in the retired assurance queue turned into the named
-[predicate registry](INVARIANT_REGISTRY.md). Site counts are August 2026 estimates.
+The study's durable finding: the prose `// SAFETY:` comments (about 620 in August 2026) do not
+represent independent obligations. They factor into nine families, each one predicate stated once
+and instantiated per site. A01 turned this skeleton into the named
+[predicate registry](INVARIANT_REGISTRY.md).
 
-| # | Family | Sites | The claim | What Rust already carries | What it doesn't |
-| --- | --- | --- | --- | --- | --- |
-| F1 | Rooting / STW liveness | ~70 | This allocation cannot be freed or moved during this access | `Gc<'gc>` handle or lock guard in scope; `Arc` refcount | The temporal premise: every mutator parked, `unregister_arena` waited for `active_leases == 0`, generation stamps match, GC is non-moving |
-| F2 | Layout faithfulness | ~60 | The descriptor says offset *k* holds type *X*, so reading these bytes as *X* is valid | Slice bounds; bytes written by the matching serializer | That `FieldLayoutManager`/`GcDesc` agree with ECMA-335 §II.10.7 / §I.8.5 for this instantiation |
-| F3 | Eval-stack slot typing and stable homes | ~20 | Slot views match their values; addressable variables live in non-moving frame homes | Enum discriminants and frame-owned raw blocks | Home addresses retain their allocation across stack growth; checked byrefs resolve a live serial and complete range |
-| F4 | Atomic width / alignment | ~40 | The pointer is valid and aligned for the selected atomic width, and no concurrent non-atomic access races it | `align_of`, guard exclusion | Which of three coexisting discharge mechanisms is actually being cited |
-| F5 | Tracing completeness | 22 `unsafe impl Collect` | This `trace` visits every contained GC reference | Match exhaustiveness, field enumeration | That the root set and `VmContinuation` state are complete — a universally quantified property |
-| F6 | `gc-arena` brand discipline | ~10 | This `'gc`-branded value cannot escape its arena | Invariant lifetimes, private constructors, `for<'a>` confinement | Almost nothing — this family is the clearest win for lifetime branding. One deliberate violation: cross-arena tracing mints `Gc::from_ptr` with the *wrong* arena's brand (`HeapManager::trace`), justified by F1 plus non-escape |
-| F7 | Immutable-field publication | ~8 | `owner_id` is written once at construction, so this lock-free read is race-free | Immutability | The happens-before edge publishing the initializing write |
-| F8 | Lock order & safepoint discipline | — | Locks are acquired in DAG order; no safepoint poll or allocation while holding a heap borrow | `define_lock_order_dag!` with negative compile-time assertions | The four `GcScopeGuard` conventions — a rely-guarantee protocol |
-| F9 | Leaked-`Box` metadata lifetime | ~14 | `MetadataArena` solely owns these leaked allocations and outlives every descriptor into them | Conventional ownership reasoning | Little; low risk, low novelty |
+| # | Family | The claim | What Rust already carries | What it doesn't |
+| --- | --- | --- | --- | --- |
+| F1 | Rooting / STW liveness | This allocation cannot be freed or moved during this access | `Gc<'gc>` handle or lock guard in scope; `Arc` refcount | The temporal premise: every mutator parked, `unregister_arena` waited for `active_leases == 0`, generation stamps match, GC is non-moving |
+| F2 | Layout faithfulness | The descriptor says offset *k* holds type *X*, so reading these bytes as *X* is valid | Slice bounds; bytes written by the matching serializer | That `FieldLayoutManager`/`GcDesc` agree with ECMA-335 §II.10.7 / §I.8.5 for this instantiation |
+| F3 | Eval-stack slot typing and stable homes | Slot views match their values; addressable variables live in non-moving frame homes | Enum discriminants and frame-owned raw blocks | Home addresses retain their allocation across stack growth; checked byrefs resolve a live serial and complete range |
+| F4 | Atomic width / alignment | The pointer is valid and aligned for the selected atomic width, and no concurrent non-atomic access races it | `align_of`, guard exclusion | Which of three coexisting discharge mechanisms is actually being cited |
+| F5 | Tracing completeness | This `trace` visits every contained GC reference | Match exhaustiveness, field enumeration | That the root set and `VmContinuation` state are complete — a universally quantified property |
+| F6 | `gc-arena` brand discipline | This `'gc`-branded value cannot escape its arena | Invariant lifetimes, private constructors, `for<'a>` confinement | Almost nothing — this family is the clearest win for lifetime branding. One deliberate violation: cross-arena tracing mints `Gc::from_ptr` with the *wrong* arena's brand (`HeapManager::trace`), justified by F1 plus non-escape |
+| F7 | Immutable-field publication | `owner_id` is written once at construction, so this lock-free read is race-free | Immutability | The happens-before edge publishing the initializing write |
+| F8 | Lock order & safepoint discipline | Locks are acquired in DAG order; no safepoint poll or allocation while holding a heap borrow | `define_lock_order_dag!` with negative compile-time assertions | The four `GcScopeGuard` conventions — a rely-guarantee protocol |
+| F9 | Leaked-`Box` metadata lifetime | `MetadataArena` solely owns these leaked allocations and outlives every descriptor into them | Conventional ownership reasoning | Little; low risk, low novelty |
 
 What an ML-family type system without dependent types cannot say, and which
 therefore lands in the residue above: value-dependent facts (`offset + size <=
@@ -48,8 +49,7 @@ specification-level function), and completeness facts.
 
 ### Two irreducible trust classes
 
-Neither is provable; both must be isolated and named. They were seed rows for
-A06 in the retired assurance queue.
+Neither is provable; both must be isolated and named. They were seed rows for A06.
 
 - **The managed program as adversary.** ECMA-335 itself declares behavior
   undefined when unverifiable IL supplies invalid operands to `cpblk`,
@@ -79,25 +79,17 @@ The families carrying this project's novelty (F1, F2, F6) need premises no Rust
 verifier reaches; the families a verifier *would* close are the ones rated
 lowest-novelty. F4, third-largest by site count, has a cheaper correct fix than
 any proof: make the access width a type parameter so an `Int32` dispatch arm
-cannot pass `4` to a 2-byte operation (A03 in the retired assurance queue).
+cannot pass `4` to a 2-byte operation (A03).
 
 **2. `cargo-anneal` is the same product, far better resourced.** Google's
-zerocopy team ([`0.1.0-alpha.24`](https://crates.io/crates/cargo-anneal), 7 June
-2026) states the same thesis in the same words, with specifications in
-`/// ```anneal` doc comments, **Lean 4** as the checker via Charon→Aeneas, a
-shipping Lean spatial memory model (`Allocation`, `Referent`,
-`FitsInAllocation`, `IsContiguous`, `HasStaticLayout`), and `unsafe(axiom)` as a
-trust class. Not adoptable today — pre-alpha and self-described as unsound in
-places, no union support, trait-bound generics don't extract, and "extend Aeneas
-to handle separation logic" is still open at 18/71 tasks on its tracking issue.
-But the Rust→Lean arrow is now a funded program at Google, MPI-SWS and KU
-Leuven. Building a fourth one solo was never the comparative advantage.
+zerocopy team's [`cargo-anneal`](https://crates.io/crates/cargo-anneal) pursues the same thesis
+(specifications in doc comments, Lean 4 via Charon→Aeneas, `unsafe(axiom)` as a trust class) and
+was pre-alpha at the time. The Rust→Lean arrow is a funded program elsewhere; building another one
+solo was never the comparative advantage.
 
-**3. A feature census eliminates every candidate verifier.** Measured in August 2026 over
-`crates/*/src` (61,395 lines of Rust; approximate greps): ~920 closures, 489
-generic fns with bounds, 75 associated types, 30 `dyn`, 256 atomic uses, 154
-`Mutex`/`RwLock`, 16 `thread::spawn`, 78 `expose_provenance`/`from_exposed`; and
-— more happily — 0 unions, 9 transmutes, 1 `MaybeUninit`.
+**3. A feature census eliminates every candidate verifier.** The code relies heavily on
+closures, bounded generics, associated types, atomics, locks, threads and exposed provenance,
+and hardly at all on unions, transmutes or `MaybeUninit`.
 
 | Tool | Verdict | Blocking reason |
 | --- | --- | --- |
@@ -108,27 +100,22 @@ generic fns with bounds, 75 associated types, 30 `dyn`, 256 atomic uses, 154
 | [VeriFast](https://verifast.github.io/verifast/rust-reference/) | only viable, not affordable | Genuinely handles multithreaded `unsafe` Rust. Its *partial* proof of std's `LinkedList` is 2,253 → 4,389 lines (+95%, 659 annotation lines) written by the tool's own authors, and it verifies only the immutable-bytes half of Rust's aliasing rules |
 | [RustMC](https://arxiv.org/abs/2502.06293) | watch | GenMC stateless model checking of unsafe Rust, FFI and atomics — right shape for F1/F7/F8, but mixed-size accesses need the unmerged MIXER extension, and this VM's atomics are 1/2/4/8-byte accesses into shared object memory |
 
-**Cost anchor.** The AWS/Rust Foundation
-[`verify-rust-std`](https://arxiv.org/abs/2606.17374) campaign ran 16 months
-with 450+ pull requests from 21+ contributors across four institutions, with cash
-rewards, and reached ~35% of std's ~33,955 functions with 989 verified against
-contracts — closing **neither of its two concurrency challenges**, and finding no
-previously unknown memory-safety bugs.
+**Cost anchor.** The multi-institution
+[`verify-rust-std`](https://arxiv.org/abs/2606.17374) campaign closed neither of its two
+concurrency challenges.
 
-**Also still true:** no mechanized formalization of ECMA-335 exists anywhere
-(re-confirmed 2026-08-03). The pen-and-paper prior art — Fruja's ASM model of
+**ECMA-335 has no mechanized formalization** that the study could find. The pen-and-paper prior art — Fruja's ASM model of
 the CLR, Gordon–Syme's Baby IL type soundness, Kennedy–Syme on generics — remains
 the best source text for edge cases, and is the reason
-A04 in the retired assurance queue proposed writing the correspondence down as a
-table rather than as theorems.
+A04 proposed writing the correspondence down as a table rather than as theorems.
 
 ## What the exercise actually delivered
 
-Phase 0 of the study was due diligence, not verification, and it shipped
-(`208a6c8b`, 2026-08-01): two live soundness defects fixed, `miri-value` and
-`fuzz-raw-memory-access` promoted to blocking CI legs, and the differential
-harness expanded from one fixture to seven. That came from the *survey*, not
-from the proof layer.
+Phase 0 of the study was due diligence, not verification, and it shipped: two live soundness
+defects fixed, `miri-value` and a raw-memory-access fuzz lane made blocking (today `miri-value`
+runs in the fast core and the `fuzz_raw_memory_access` corpus replays in `fuzz-corpus-replay`;
+see [CI](CI.md)), and the differential harness expanded. That came from the *survey*, not from
+the proof layer.
 
 Both defects were instances of one failure mode: **prose asserting a witness
 that no code establishes.** One cited a `cfg`-gated no-op as an alignment

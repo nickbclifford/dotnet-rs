@@ -5,141 +5,54 @@
 type, method, field, property or assembly: `ReferenceEquals(typeof(T), typeof(T))` is true across
 threads, and so is `lock (typeof(T))` mutual exclusion through the object's own monitor.
 
-## Problem
+## What was built
 
-The CLR guarantees one `Type` object per type in the process: `System.Type` documents that two
-`Type` references denote the same type only when they are the same object. `RuntimeType`'s
-`==`, `object.ReferenceEquals`, `ceq` on object references, `lock`, `ConditionalWeakTable` and
-the default `Dictionary<Type, _>` comparer (`RuntimeHelpers.GetHashCode`) all rely on that
-identity.
+The CLR guarantees one `Type` object per type, and `==`, `ReferenceEquals`, `ceq`, `lock`,
+`ConditionalWeakTable` and the default `Dictionary<Type, _>` comparer rely on it. The VM already
+had process-wide keys (`SharedReflectionRegistry` indices) but allocated objects per arena.
 
-dotnet-rs keeps the type key process-wide but the object per arena:
+- `SharedReflectionRegistry` (`crates/dotnet-vm/src/state.rs`) now holds one canonical object per
+  type, method, field, property and assembly key, plus a shared reverse map from assembly objects
+  to their resolutions. Every arena traces the tables as roots, alongside static storage (see
+  [Shared reflection roots](../GC_AND_MEMORY_SAFETY.md#shared-reflection-roots)).
+- `ReflectionLocalState` stays a per-thread front cache holding the canonical (possibly foreign)
+  `ObjectRef`, so `typeof` on the hot path is a local hash lookup.
+- The support `RuntimeType`, method, constructor and field wrappers carry only a registry index;
+  assigning a foreign object's sync-block index writes a scalar without a foreign owner barrier.
+- The per-type monitor workaround (`runtime_type_monitors`) was removed; the canonical object's own
+  sync block is correct.
 
-- `SharedReflectionRegistry` (`crates/dotnet-vm/src/state.rs`) maps each `RuntimeType`, method
-  and field to one process-wide index.
-- `ReflectionLocalState` (`crates/dotnet-vm/src/state.rs`) maps the same keys to `ObjectRef`s
-  allocated in the calling thread's arena. `common::get_runtime_type`
-  (`crates/dotnet-intrinsics-reflection/src/common.rs`) allocates a fresh object the first time
-  each thread asks, as do `get_runtime_method_obj`, `get_runtime_field_obj`, the property cache
-  and `runtime_asms`.
+This plan let the first requester allocate the object in its own arena;
+[plan 26](26-thread-lifecycle-and-multicast-fallback.md) moved canonical objects into the dedicated
+finalizer executor's arena through the
+[canonical allocation service](../THREADING_AND_SYNCHRONIZATION.md#canonical-allocation-service).
 
-So two threads compare equal by index but not by identity. Visible today:
+Not chosen: index-based equality (fixes `==` and `Dictionary` but not `ReferenceEquals`, `ceq`,
+`lock` or `ConditionalWeakTable`) and a new type representation (the key was already correct).
 
-- `typeof(T) == typeof(T)` and `ReferenceEquals` are false when the two sides come from
-  different threads.
-- `Dictionary<Type, _>` filled on one thread misses lookups from another.
-- `lock (typeof(T))` and static `[MethodImpl(Synchronized)]` methods lock different objects
-  per thread. A monitor-only workaround hides this:
-  `runtime_type_monitors` publishes one sync block per `RuntimeType`, and Monitor on a type
-  object redirects to it. Identity is still split.
+## Out of scope
 
-Without `multithreading` there is one arena, so the problem doesn't occur.
+User-defined `Type` subclasses and `TypeDelegator` (guest-owned identity); collectible types and
+unloading (canonical objects live until shutdown, as on the CLR).
 
-## Scope
+## Remaining limit
 
-In:
-- `Type` objects created by the VM: `ldtoken` + `GetTypeFromHandle`, `object.GetType()`,
-  `Type.GetType(string)`, `MakeGenericType`/`MakeArrayType`/`MakeByRefType`/
-  `MakePointerType` and anything else that reaches `get_runtime_type`.
-- `MethodInfo`/`ConstructorInfo`, `FieldInfo`, `PropertyInfo` and `Assembly` objects from the
-  same per-arena caches. Two `GetMethod` calls returning one object is the CLR's observed
-  behavior, and code that keys dictionaries or `ConditionalWeakTable`s on members relies on it.
+Member identity uses the existing cache keys. A property accessor is not identical to the object
+`GetMethod` returns for the same method, and the CLR's `ReflectedType` behavior (distinct
+`MethodInfo`s for one method reached through different types) is not modeled. Tracked in the plans
+README, "Not yet planned".
 
-Out:
-- User-defined `Type` subclasses and `TypeDelegator`: guest code allocates these, and identity
-  is the guest's own.
-- Collectible types and unloading: the VM has no collectible `AssemblyLoadContext`, so canonical
-  objects live until shutdown, as on the CLR.
-- Cross-thread GC handles (the plans README "Not yet planned" bullet). That bullet only becomes
-  a dependency if a reflection object stores a `GCHandle` that another thread dereferences.
-  Check this in slice 1.
+## Accepted cost and checks
 
-## Design
+The single-threaded `runtime_type` benchmark (30,000 `typeof` lookups per iteration) measured
+52.292 ms before and 51.864 ms after (−0.82%, 95% interval −1.28% to −0.28%), within noise:
 
-Keep one canonical object per key for the whole process, published in a shared table that
-every arena traces as a root. This is the same mechanism shared static storage uses today:
-`StaticStorageManager` is traced from each arena's `CallStack` root, and references it holds into
-other arenas are marked through the cross-arena fixed-point phase.
+```bash
+cargo bench -p dotnet-benchmarks --bench runtime_type --no-default-features
+```
 
-- The first thread to request a key allocates the object in its own arena and publishes it with
-  insert-if-absent. A thread that loses the race drops its object, which becomes garbage, and
-  uses the winner's.
-- Owner lifetime needs no new protocol: an arena that owns canonical objects is retained until
-  VM shutdown (plan 09's retired-arena contract), and the shared table roots the objects.
-- `ReflectionLocalState` stays as a per-thread front cache, holding the canonical (possibly
-  foreign) `ObjectRef`. That keeps `typeof` on the hot path a local hash lookup.
-- `resolve_runtime_type` and the index field are unchanged: the object still carries its
-  process-wide index.
-- Remove `runtime_type_monitors`: the canonical object's own sync block is correct.
-
-Not chosen:
-- **Index-based equality:** patching `Type.op_Equality`, `Equals` and `GetHashCode` fixes
-  `==` and `Dictionary` only. It doesn't fix `ReferenceEquals`, `ceq`, `lock` or
-  `ConditionalWeakTable`.
-- **A new type representation:** the key is already process-wide and correct. Only the
-  object's owner is wrong.
-
-## Slices
-
-1. **Canonical `Type` objects.**
-   - Add the shared traced table for `RuntimeType`, route `get_runtime_type` through it, and
-     delete `runtime_type_monitors`.
-   - Confirm a foreign `ObjectRef` held in `ReflectionLocalState` is traced as a cross-arena
-     reference. Confirm that the support `RuntimeType`'s fields stay valid when written from a
-     non-owner thread (write barrier) and hold no per-arena `GCHandle`.
-   - Fixture (`multithreading`), on a worker and main: `ReferenceEquals(typeof(T), typeof(T))`,
-     `obj.GetType() == typeof(T)` with `obj` made on the other thread, a `Dictionary<Type, int>`
-     filled on one thread and read on the other, `lock (typeof(T))` mutual exclusion, and a
-     static `Synchronized` method still excluding.
-   - Compare the fixture against the CLR with `scripts/diff_run.sh`.
-   - Implemented: the shared type-object table is traced from each arena, and local caches retain
-     its canonical objects. The support object contains only a registry index; foreign monitor
-     assignment writes a scalar without applying a foreign owner barrier. See
-     [GC and memory safety](../GC_AND_MEMORY_SAFETY.md#shared-reflection-roots).
-   - `canonical_type_objects_42.cs` covers both owner directions, dictionary lookup, concurrent
-     publication, collection after the creator exits, and type/static synchronized monitors. It
-     matches the CLR via `scripts/diff_run.sh` and passes the multithreading integration tests
-     with and without `validation-all`.
-2. **Canonical member and assembly objects.** Route `get_runtime_method_obj`,
-   `get_runtime_field_obj`, the property cache and `runtime_asms` through the same table. The
-   fixture compares `GetMethod`/`GetField`/`GetProperty`/`Assembly` results by reference across
-   threads.
-   - Implemented: member and assembly caches publish canonical objects through shared traced
-     tables. Assembly resolution has a shared reverse lookup for objects passed between threads.
-     `canonical_member_objects_42.cs` exercises both owner directions, concurrent publication,
-     and use after the creator exits and collection runs.
-   - The existing member cache keys are retained. A property accessor is not currently identical
-     to the result of looking it up with `GetMethod`; reconciling those metadata paths and
-     `ReflectedType` behavior remains separate from cross-thread publication.
-
-## Verification
-
-- Both canonical-object fixtures pass with `multithreading` and with
-  `multithreading,validation-all`, including comparisons with .NET through the integration
-  harness and `scripts/diff_run.sh`.
-- The single-threaded `runtime_type` Criterion benchmark performs 30,000 `typeof` lookups per
-  iteration. With `--no-default-features`, 30 samples, two seconds of warmup and five seconds of
-  measurement, the pre-plan revision `c5da3950` measured 52.292 ms and the completed plan
-  measured 51.864 ms. Criterion estimated -0.82% (95% interval -1.28% to -0.28%), within its
-  noise threshold. An earlier comparison while a fixture build ran measured +0.50% (95%
-  interval -0.03% to +1.04%, p = 0.08), with no significant change.
-  Run the benchmark with `cargo bench -p dotnet-benchmarks --bench runtime_type
-  --no-default-features`.
-
-## Done when
-
-- Both fixtures pass under `multithreading` and `multithreading,validation-all`, and match
-  `dotnet`.
-- `runtime_type_monitors` and every other per-type identity workaround are gone.
-- `docs/GC_AND_MEMORY_SAFETY.md` describes the shared reflection table as a root alongside
-  static storage.
-- The single-threaded `typeof` benchmark shows no regression beyond noise.
-
-## Ask the maintainer only if
-
-- A canonical object needs a dedicated shared arena instead of the first requester's.
-- A reflection object stores a `GCHandle` or other per-arena state that a foreign thread must
-  dereference. That pulls in cross-thread GC handles.
-- Matching the CLR requires member identity to differ from what the CLR documents. For example,
-  `ReflectedType` makes the CLR return distinct `MethodInfo`s for the same method reached
-  through different types.
+`crates/dotnet-cli/tests/fixtures/threading/canonical_type_objects_42.cs` and
+`canonical_member_objects_42.cs` cover both owner directions, dictionary lookup, concurrent
+publication, use after the creator exits and collection, and type and static-synchronized
+monitors. They pass under `multithreading` and `multithreading,validation-all` and match `dotnet`
+(`scripts/diff_run.sh`).

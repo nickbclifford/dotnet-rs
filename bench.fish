@@ -1,7 +1,9 @@
 #!/usr/bin/env fish
 
 # Capture one machine-readable perf trace per end_to_end benchmark.  Positional arguments select
-# cases; without them the complete end_to_end suite is captured.
+# cases; without them the 17-case default set below (the 2026-08-06 trace set, not the whole
+# end_to_end suite) is captured.  Default sampling frequencies are deliberately lower than
+# profile_perf.sh's 3997 Hz so a corpus-wide capture stays small.
 
 function usage
     printf '%s\n' \

@@ -11,6 +11,14 @@ The `dotnet-vm` build script (`crates/dotnet-vm/build.rs`) scans source files at
 
 These are emitted as three generated files (`instruction_dispatch.rs`, `intrinsics_dispatch.rs`, `intrinsics_phf.rs`) into `$OUT_DIR/` and included via `include!()` in the compiled crate.
 
+`build.rs` is a thin driver over `crates/dotnet-vm/build_support/`:
+
+| Module | Contents |
+|---|---|
+| `parser.rs` | `process_instruction_file`, `process_intrinsic_file`, `assert_unique_instruction_variants` |
+| `scanner.rs` | `instruction_source_roots`, `intrinsic_source_roots`, `scan_rs_files` (walks with `dotnet_build_tools::collect_files_with_extension`), `assert_handler_discovery` (the build panics if a root set yields no files or no handlers), `emit_rerun_directives` |
+| `codegen.rs` | `generate_instruction_table`, `generate_intrinsic_phf` |
+
 `crates/dotnet-assemblies/build.rs` has a separate, contract-driven generator for the support assembly. It emits Rust and C# products from one committed definition before the C# support library is built.
 
 ## Support-assembly storage ABI generation
@@ -116,13 +124,9 @@ dotnet-vm-data = { workspace = true, default-features = false }
 dotnet-vm-ops = { workspace = true, default-features = false }
 ```
 
-Body-only registrations such as `Thread.Yield`, `Monitor.Enter(object)` and
-`GC.WaitForPendingFinalizers` generate no fallback export; their provider returns `None`.
-`Thread.SpinWait`, `Thread.Sleep`, `Monitor.Wait` and the non-byref timed `Monitor.TryEnter` aliases keep
-capture selectors without fallbacks. Non-inline dispatch returns `NotImplemented` for these
-targets without consuming operands. Monitor byref variants retain fallbacks for Transient and
-Unmanaged origins; reflection retains its exclusions and Substring its measured valid-small path
-([plan 13](plans/13-async-intrinsic-api.md#substring-fast-path-measurement)).
+Which async intrinsics have selectors or fallbacks, and why, is recorded per intrinsic in
+[plan 13](plans/13-async-intrinsic-api.md#target-api) (including the measured Substring
+valid-small path, [Substring fast-path measurement](plans/13-async-intrinsic-api.md#substring-fast-path-measurement)).
 
 ### Build Process
 
@@ -151,17 +155,13 @@ Unmanaged origins; reflection retains its exclusions and Substring its measured 
    paths to the wrapper. The generated method dispatcher accepts `NativeDispatchMode` and
    sends async arms through the wrapper, while synchronous arms retain their existing
    `(ctx, method, generics)` handler call. The wrapper passes the mode, provider selector and
-   fallback, and a boxed body to `NativeIntrinsicHost::start_native`. For inline calls, the
-   selector can choose an async invocation, a synchronous handler or rejection, all before
-   operands are consumed. Threading bodies validate committed arguments and create rooted
-   managed exceptions before acquiring or registering a wait; the finalizer body returns
-   before registration when running a finalizer. Substring admits invalid arguments to its body
-   and retains the measured valid-small synchronous path; larger copies use the async body.
-   This is a sanctioned pattern for a measured bulk intrinsic. Reflection retains its
-   own selector validation. IL calls, including constrained and tail calls, single-cast delegate
-   targets and abstract redirects, admit suspension. Non-inline guest continuations and public
-   ExecutionEngine dispatch APIs go directly to the optional fallback, or return
-   `NotImplemented` when absent, without selecting or consuming operands.
+   fallback, and a boxed body to `NativeIntrinsicHost::start_native`. For inline calls
+   (`NativeDispatchMode::InlineCall`: IL calls, including constrained and tail calls,
+   single-cast delegate targets and abstract redirects), the selector can choose an async
+   invocation, a synchronous handler or rejection, all before operands are consumed. Other
+   dispatch (non-inline guest continuations and public `ExecutionEngine` dispatch APIs) goes
+   directly to the optional fallback, or returns `NotImplemented` when absent, without selecting
+   or consuming operands.
 4. Also handles `#[dotnet_intrinsic_field("...")]` for field intrinsics
 5. `generate_intrinsic_phf` creates:
     - `intrinsics_dispatch.rs`: Contains `MethodIntrinsicId` and `FieldIntrinsicId` enums and their respective `dispatch_*` functions.
@@ -195,13 +195,13 @@ When searching, `IntrinsicRegistry` formats the appropriate key string into a st
 - `IntrinsicEntry` supports a `filter_name` for conditional intrinsic behavior. When parsing a `#[dotnet_intrinsic]` attribute, the build script automatically generates a filter function name based on the handler name and a hash of the signature.
 - This filter is stored in the `StaticIntrinsicEntry`. At runtime, `IntrinsicRegistry::get_metadata` invokes the filter function with the current `MethodDescription`. The handler is only selected if the filter returns `true` (or if no filter is present).
 - This allows multiple intrinsic handlers to register for the same string key (e.g., generic methods where the behavior depends on the generic type arguments), using the filter to disambiguate at resolution time.
-- `get_metadata()` provides an `IntrinsicMetadata` struct that includes the `IntrinsicKind` (`Static` or `VirtualOverride`), the underlying handler, and the filter function. This information helps the runtime determine if an intrinsic should bypass normal virtual dispatch.
+- `get_metadata()` provides an `IntrinsicMetadata` struct that includes the `IntrinsicKind` (`Static`, `VirtualOverride` or `DirectIntercept`), the underlying handler, and the filter function. This information helps the runtime determine if an intrinsic should bypass normal virtual dispatch.
 
 ## Proc Macro Crates
 
 ### `dotnet-macros` (`crates/dotnet-macros/src/lib.rs`)
 - Defines the proc-macro attributes: `#[dotnet_instruction]`, `#[dotnet_intrinsic]`, `#[dotnet_intrinsic_field]`
-- Thin wrapper delegating to `dotnet-macros-core`
+- Uses `dotnet-macros-core` for signature parsing, and also generates code: the per-registration filter function (`<handler>_filter_<hash>`) and, for async intrinsics, the `*_native_entry` wrapper and selector/fallback aliases
 
 ### `dotnet-macros-core` (`crates/dotnet-macros-core/src/lib.rs`)
 - Shared parsing logic used by both the proc macros and the build script
@@ -221,7 +221,7 @@ The build script deduplicates handler registrations via `assert_unique_instructi
 
 ### Missing Handler Error Behavior
 
-If the runtime encounters an opcode that has no registered handler, the generated `dispatch_monomorphic` function returns a `VmError::Execution(ExecutionError::NotImplemented)`.
+If the runtime encounters an opcode that has no registered handler, the generated `dispatch_monomorphic` function returns a `VmError::Execution(ExecutionError::NotImplemented)`. The generated intrinsic dispatchers route `MethodIntrinsicId::Missing` to `crate::intrinsics::missing_intrinsic_handler` and return `NotImplemented("Missing field intrinsic: …")` for `FieldIntrinsicId::Missing`.
 
 Similarly, for methods explicitly marked as `internal_call` in their IL metadata, if no intrinsic is found during dispatch, the engine returns `StepResult::Error(VmError::Execution(ExecutionError::NotImplemented(...)))`.
 
@@ -246,9 +246,12 @@ pub fn dispatch_monomorphic<'gc, T: crate::stack::ops::VesOps<'gc>>(
     instr: &Instruction,
 ) -> crate::StepResult {
     match instr {
-        Instruction::Add => crate::instructions::arithmetic::handle_add(ctx, instr),
+        Instruction::Add => crate::instructions::arithmetic::add(ctx),
+        // operand-bearing arms bind their operands from the match pattern
         // ...
-        _ => crate::StepResult::Error(...)
+        _ => crate::StepResult::Error(crate::error::VmError::Execution(
+            crate::error::ExecutionError::NotImplemented(format!("{:?}", instr).into()),
+        )),
     }
 }
 ```
@@ -332,8 +335,11 @@ Generated forms:
 
 The build script applies feature-aware ignore policy during generation:
 
-- `monitor_try_enter_timeout_42` and `circular_init_mt_42` are ignored outside `multithreading`.
+- Fixtures that need concurrent executors (monitor, canonical-object, worker, thread-pool, timer, `.cctor`-wait and GC-during-bulk-operation fixtures) are ignored outside `multithreading`; some of them are also ignored under `fuzzing`.
+- Fixtures that need P/Invoke or other native entry points are ignored under `fuzzing`, which denies native interop.
 - `generic_constraints_fail_0` is ignored unless `generic-constraint-validation` is enabled.
+
+The lists live in `crates/dotnet-cli/build.rs`; read it rather than copying them here.
 
 Fixture binaries default to Cargo-derived output paths (`target/<profile>/dotnet-fixtures`, or
 `target/<triple>/<profile>/dotnet-fixtures` for explicit targets), unless overridden via

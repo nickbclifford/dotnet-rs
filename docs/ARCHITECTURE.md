@@ -48,36 +48,24 @@ The project is divided into several crates, each with a focused responsibility:
 
 ### Crate Dependency Hierarchy
 
-```
-dotnet-cli
-  ├── dotnet-build-tools (build dependency)
-  └── dotnet-vm
-      ├── dotnet-build-tools (build dependency)
-      ├── dotnet-vm-ops
-      │   └── dotnet-vm-data
-      ├── dotnet-exceptions
-      ├── dotnet-pinvoke
-      ├── dotnet-runtime-resolver
-      ├── dotnet-runtime-memory
-      ├── dotnet-intrinsics-core
-      ├── dotnet-intrinsics-delegates
-      ├── dotnet-intrinsics-span
-      ├── dotnet-intrinsics-string
-      ├── dotnet-intrinsics-threading
-      ├── dotnet-intrinsics-reflection
-      ├── dotnet-intrinsics-unsafe
-      ├── dotnet-assemblies
-      ├── dotnet-value
-      ├── dotnet-types
-      ├── dotnet-utils
-      ├── dotnet-metrics
-      ├── dotnet-tracer
-      ├── dotnet-simd
-      ├── dotnet-macros
-      └── dotnet-macros-core
+Direct workspace dependencies of the main crates (`cargo metadata` is authoritative):
 
-dotnet-benchmarks
-  └── dotnet-vm
+```
+dotnet-cli         → dotnet-vm, dotnet-assemblies, dotnet-types
+dotnet-benchmarks  → dotnet-vm, dotnet-assemblies, dotnet-types (+ dotnet-utils, dotnet-value for benches)
+dotnet-vm          → every crate below, plus dotnet-build-tools and dotnet-macros-core as build dependencies
+dotnet-exceptions  → dotnet-vm-ops, dotnet-vm-data, dotnet-value, dotnet-types, dotnet-utils
+dotnet-pinvoke     → dotnet-vm-ops, dotnet-vm-data, dotnet-value, dotnet-types, dotnet-tracer, dotnet-utils
+dotnet-runtime-memory   → dotnet-vm-ops, dotnet-value, dotnet-types, dotnet-metrics, dotnet-utils
+dotnet-runtime-resolver → dotnet-assemblies, dotnet-value, dotnet-types, dotnet-utils
+dotnet-intrinsics-*     → dotnet-vm-ops, dotnet-vm-data, dotnet-macros, dotnet-value, dotnet-types
+                          (reflection also uses dotnet-assemblies and dotnet-intrinsics-delegates;
+                           span, string and unsafe use dotnet-simd)
+dotnet-vm-ops      → dotnet-vm-data, dotnet-assemblies, dotnet-macros, dotnet-tracer, dotnet-value, dotnet-types
+dotnet-vm-data     → dotnet-value, dotnet-types, dotnet-metrics, dotnet-utils
+dotnet-assemblies  → dotnet-value, dotnet-types, dotnet-utils (+ dotnet-build-tools at build time)
+dotnet-value       → dotnet-types, dotnet-metrics, dotnet-utils
+dotnet-macros      → dotnet-macros-core
 ```
 
 ## Data Flow
@@ -85,12 +73,11 @@ dotnet-benchmarks
 1. **Initialization**: `dotnet-cli` initializes the runtime, creating a `SharedGlobalState` which holds caches, the assembly loader, and the intrinsic registry.
 2. **Assembly Loading**: The `AssemblyLoader` (in `dotnet-assemblies`) parses DLL files into a structured metadata format (using the `dotnetdll` crate).
 3. **Execution Entry**: The `Executor` starts execution at the entry point of the main assembly.
-4. **Main Loop**: The executor runs a loop that:
-    - Fetches the next CIL instruction based on the Instruction Pointer (IP).
-    - Dispatches the instruction to its handler.
-    - Updates the `EvaluationStack` with results.
-    - Handles flow control (jumps, calls, returns).
-5. **Instruction Set and Dispatch**: CIL instructions are categorized (arithmetic, flow, objects, etc.) and handled in `crates/dotnet-vm/src/instructions/`. The `dispatch/` subsystem manages instruction execution with an auto-generated dispatch table in `dispatch/registry.rs` and a `dispatch/ring_buffer.rs` instruction trace buffer.
+4. **Main Loop**: `ExecutionEngine::step` first resumes the innermost native activation if it is
+   runnable (`native_runnable` → `resume_native_effect`); otherwise it routes to the exception
+   state machine or executes the next instruction. The executor runs instructions in batches of
+   `DISPATCH_BATCH_SIZE` and polls for GC safe points between batches.
+5. **Instruction Set and Dispatch**: CIL instructions are categorized (arithmetic, flow, objects, etc.) and handled in `crates/dotnet-vm/src/instructions/`. `dispatch/registry.rs` only `include!`s the dispatch table that `build_support/codegen.rs::generate_instruction_table` writes to `$OUT_DIR` (see [Build-Time Code Generation](BUILD_TIME_CODE_GENERATION.md)); `dispatch/ring_buffer.rs` holds the instruction trace buffer.
 6. **Method Calls and Intrinsics**:
     - Static calls resolve the target method and push a new `StackFrame`.
     - Virtual calls use the object's vtable (computed via the layout system) to find the correct method implementation.
@@ -99,11 +86,33 @@ dotnet-benchmarks
     
     (See [Delegates and Dispatch](DELEGATES_AND_DISPATCH.md) for more details on invocation paths).
 
+### Native effects
+
+Intrinsics that must call managed code, wait, or run a type initializer are written as `'static`
+Rust futures over `VmEffects` (`crates/dotnet-vm-ops/src/effects.rs`). A future requests a managed
+child with `try_call(NativeCall)` or `ensure_initialized`; the VM side
+(`crates/dotnet-vm/src/stack/native_effects.rs`) parks the activation on the executor's
+`call_state.native` stack, returns `StepResult::NativeSuspended(NativeId)`, runs the child as an ordinary
+frame and resumes the future through `resume_native_effect`. Futures hold no `Gc` handles across a
+suspension; see [Cross-GC-Safe-Point Continuations](GC_AND_MEMORY_SAFETY.md#cross-gc-safe-point-continuations)
+and plans [08](plans/08-async-effects.md) and [13](plans/13-async-intrinsic-api.md).
+
+### Dynamic code
+
+`System.Reflection.Emit.DynamicMethod` is supported (plans [24](plans/24-reflection-emit-investigation.md)
+and [25](plans/25-dynamicmethod-implementation.md)). The support assembly's `DotnetRs.DynamicMethod`
+(`crates/dotnet-assemblies/src/support/DynamicMethod.cs`) records the emitted IL, and
+`crates/dotnet-intrinsics-reflection/src/dynamic_method.rs` builds a one-method in-memory assembly
+for it. `RuntimeFeature.IsDynamicCodeSupported` is true and `IsDynamicCodeCompiled` is false, so
+LINQ expression trees run through their interpreter and System.Text.Json uses reflection accessors;
+the substitutions live in `crates/dotnet-vm/src/intrinsics/linq_expressions.rs`,
+`crates/dotnet-vm/src/intrinsics/app_context.rs` and the support assembly's `ObjectArrayDelegates.cs`.
+
 ## Memory and Garbage Collection
 
 `dotnet-rs` uses a Stop-The-World (STW) garbage collector based on the `gc-arena` crate. (See [GC and Memory Safety](GC_AND_MEMORY_SAFETY.md) for an in-depth look).
 
-- **Heap Management**: `HeapManager` handles the allocation of objects. Each thread typically has its own arena for allocation to minimize contention.
+- **Heap Management**: `HeapManager` handles the allocation of objects. Each executor thread has its own arena. Canonical reflection objects and interned strings are homed in the owner (finalizer executor) arena through the canonical allocation service (`threading/canonical.rs`, plan [14](plans/14-canonical-reflection-objects.md)); finished worker arenas are retired and reclaimed as described in [Per-Thread Arenas](GC_AND_MEMORY_SAFETY.md#per-thread-arenas).
 - **GC Roots**: The evaluation stack, local variables, and static fields serve as the primary roots for GC.
 - **STW Coordination**: When a GC is triggered, all threads are brought to a safe point (see [Safe Points](THREADING_AND_SYNCHRONIZATION.md#safe-points) for where they are polled). Once all threads are paused, the collector traces all reachable objects across all arenas. The GC is non-moving.
 - **GcScopeGuard**: To prevent deadlocks during STW, `GcScopeGuard` must be used when holding a reference to heap-allocated data. It informs the GC that the thread is currently "busy" and cannot safely pause until the guard is dropped.
@@ -122,8 +131,8 @@ A managed pointer is a `ManagedPtr` (`crates/dotnet-value/src/pointer/mod.rs`) w
 a cached raw address (`_value`), the `PointerOrigin` that owns the target, the target
 `inner_type`, a compact byte `offset` from the origin's base, `flags` (pinned) and a validation
 `magic`. Its serialized form is `ManagedPtr::SIZE` (24) bytes. The `PointerOrigin` variants
-(`Heap`, `CrossArenaObjectRef`, `Static`, `FrameHome`, `Stack`, `Transient`, `Unmanaged`) and
-where a managed pointer may be stored are described in
+(`Heap`, `Static`, `Unmanaged`, `FrameHome`, `Transient`, and `CrossArenaObjectRef` under
+`multithreading`) and where a managed pointer may be stored are described in
 [Managed pointer placement](GC_AND_MEMORY_SAFETY.md#managed-pointer-placement).
 
 A local named by any `ldloca`, or an argument named by any `ldarga`, in its method body has a
@@ -142,11 +151,9 @@ using the address, so the block never needs rebasing and a byref to a returned f
 `InvalidProgramException` under the runtime's strict ECMA policy. Ordinary typed-reference
 values retain their specialized stack representation and descriptor ownership.
 
-Every supported frame-variable address uses a stable home (`F3.StableFrameHomes`). Evaluation-stack
-growth and filter suspension/restoration move values without scanning or rebasing pointers.
-Value-type constructor receivers use additional caller-owned homes, including reflection and
-intrinsic construction. Each temporary block has a fresh serial and remains live until its
-caller exits; constructor completion copies out the result before reflection return processing.
+Every supported frame-variable address uses a stable home (`F3.StableFrameHomes`); value-type
+constructor receivers use additional caller-owned homes. See
+[Frame-owned homes](GC_AND_MEMORY_SAFETY.md#frame-owned-homes) for the full contract.
 
 ### Frame-local `localloc` storage
 
@@ -159,15 +166,16 @@ are released with the frame. The allocation, limit and lifetime contract is in
 The VM supports multi-threading (feature-gated via `multithreading`). For detailed mechanics, see [Threading and Synchronization](THREADING_AND_SYNCHRONIZATION.md):
 
 - **Thread Manager**: Manages the lifecycle of managed threads and coordinates STW pauses.
+- **Workers and events**: `threading/pool.rs` and `threading/workers.rs` run managed `Thread` and ThreadPool work on executor workers; `threading/events.rs` implements wait handles; `threading/canonical.rs` is the canonical allocation service.
 - **Safe Points**: Execution polls for a pending GC between instruction batches and inside long-running intrinsics; see [Safe Points](THREADING_AND_SYNCHRONIZATION.md#safe-points).
-- **Synchronization**: .NET `Monitor` (lock/unlock) is implemented using `SyncBlockManager`, providing thread-safe access to objects with monitor-style semantics.
+- **Synchronization**: .NET `Monitor` (lock/unlock) is implemented using `SyncBlockManager`, providing thread-safe access to objects with monitor-style semantics. `sync/threaded.rs` and `sync/single_threaded.rs` hold the two implementations.
 
 Each executor's `CallStack` owns `ArenaLocalState` for arena/thread-private heap, reflection, and cached P/Invoke last-error state; cross-thread services remain in `SharedGlobalState`.
 
 ## Exception Handling
 
 `dotnet-rs` implements the ECMA-335 structured exception handling (SEH) model using a two-pass approach.
-- **State Machine**: Exception processing is modeled as a state machine (`Throwing` → `Searching` → `Filtering` → `Unwinding` → `ExecutingHandler`).
+- **State Machine**: Exception processing is modeled as a state machine (`None` → `Throwing` → `Searching` → (`Filtering` →) `Unwinding` → `ExecutingHandler` → `None`); see [Exception Handling](EXCEPTION_HANDLING.md#state-machine).
 - **Filter Clauses**: Support for dynamic `filter` blocks that run user CIL code during the search phase.
 - **Unwinding**: The `leave` instruction and exception unwinding properly execute `finally` and `fault` blocks.
 - **Extracted Crate**: The exception handling system (`ExceptionHandlingSystem`) lives in `dotnet-exceptions`, while the exception/stack data model lives in `dotnet-vm-data` and is imported from there directly.
@@ -251,15 +259,11 @@ VM-specific extensions (all `Vm`-prefixed) that add resolver, shared state, and 
 - `VmStaticsOps` (extends `StaticsOps` with `StaticStorageManager` access)
 - `VmCallOps` (VM-local frame construction and method dispatch)
 - `VmExceptionContext` / `VmPInvokeContext` (VM-side extensions of `ExceptionContext` / `PInvokeContext`)
-- `VesOps`: The unified trait combining `PInvokeContext + VmStackOps + VmRawMemoryOps + VmResolutionOps + VmReflectionOps + VmLoaderOps + VmStaticsOps + ThreadOps + VmCallOps` plus the composite host traits defined by the `dotnet-intrinsics-*` crates. These crate-level composites—such as `SpanIntrinsicHost`, `ThreadingIntrinsicHost`, `ReflectionIntrinsicHost`, and `UnsafeIntrinsicHost`—are the names bound directly in `VesOps`; the corresponding `*BaseOps` aliases remain in `dotnet-vm-ops`. `VesOps` is the primary generic bound for instruction handlers.
+- `VesOps`: The unified trait combining `PInvokeContext + VmStackOps + VmRawMemoryOps + VmResolutionOps + VmReflectionOps + VmLoaderOps + VmStaticsOps + ThreadOps + VmCallOps` plus `NativeIntrinsicHost` (the native-effect entry from `dotnet-vm-ops`), `VmManagedPtrDecodeCacheOps`, `VmSimdIntrinsicHost` and the composite host traits defined by the `dotnet-intrinsics-*` crates. These crate-level composites (`IntrinsicStringHost`, `DelegateInvokeHost`, `ReflectionIntrinsicHost`, `SpanIntrinsicHost`, `ThreadingIntrinsicHost` and `UnsafeIntrinsicHost`) are the names bound directly in `VesOps`; the corresponding `*BaseOps` aliases remain in `dotnet-vm-ops`. `VesOps` is the primary generic bound for instruction handlers.
 
 Intrinsic handlers read a callee's generic slots through `MethodDescription::own_method_arg`
 and `MethodDescription::own_type_arg`, which check the declaring metadata arity before consulting
-the call lookup. Native activations retain the entry method with its lookup across polling. In
-reflection, lookups for a separately reflected target and runtime object type arguments describe
-that target rather than the intrinsic entry; target method slots are checked against the target's
-own descriptor. Constructing, substituting or iterating a target type's arguments is distinct from
-reading an intrinsic callee slot.
+the call lookup.
 
 ### Usage Pattern
 ```rust

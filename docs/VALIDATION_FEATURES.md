@@ -4,16 +4,29 @@
 
 ## Feature Matrix
 
-The following table describes the available validation features and which crates expose them.
+The entry points are `dotnet-cli` and `dotnet-vm`; each forwards a feature to every crate that
+defines it (see each crate's `Cargo.toml`). `multithreading` is a default feature of `dotnet-cli`
+and `dotnet-vm` only; workspace dependencies are declared with `default-features = false`.
 
-| Feature | Description | Primary Crates |
-|---|---|---|
-| `multithreading` | Enables thread-safe atomics, mutexes, and multi-threaded GC. (Default) | `dotnet-cli`, `dotnet-vm`, `dotnet-runtime-resolver`, `dotnet-runtime-memory`, `dotnet-pinvoke`, `dotnet-tracer`, `dotnet-utils`, `dotnet-value` |
-| `memory-validation` | Enables extra checks for GC-managed pointers and arena boundaries. | `dotnet-cli`, `dotnet-vm`, `dotnet-runtime-memory`, `dotnet-utils`, `dotnet-value` |
-| `metadata-validation` | Validates ECMA-335 §II.22 metadata table/name constraints (non-empty module/assembly/typedef/field/method names, direct self-inheritance) during assembly load. | `dotnet-cli`, `dotnet-vm`, `dotnet-assemblies` |
-| `generic-constraint-validation` | Enforces generic type constraints during type resolution and JIT. | `dotnet-cli`, `dotnet-vm`, `dotnet-runtime-resolver`, `dotnet-intrinsics-reflection`, `dotnet-types` |
-| `validation-all` | Meta-feature enabling all the above validation features. | `dotnet-cli`, `dotnet-vm` |
-| `fuzzing` | Enables `Arbitrary` implementations and fuzzing-specific instrumentation. | `dotnet-cli`, `dotnet-vm`, `dotnet-pinvoke`, `dotnet-utils`, `dotnet-value`, `dotnet-types` |
+| Feature | Description |
+|---|---|
+| `multithreading` | Enables thread-safe atomics, mutexes, and multi-threaded GC. (Default) |
+| `memory-validation` | Enables extra checks for GC-managed pointers and arena boundaries. |
+| `metadata-validation` | Validates ECMA-335 §II.22 metadata table/name constraints (non-empty module/assembly/typedef/field/method names, direct self-inheritance) during assembly load. |
+| `generic-constraint-validation` | Enforces generic type constraints during type resolution and JIT. |
+| `validation-all` | Meta-feature enabling all the above validation features. |
+| `fuzzing` | Enables `Arbitrary` implementations and fuzzing-specific instrumentation. |
+
+Other features that are not validation modes:
+
+| Feature | Description |
+|---|---|
+| `simd` | SIMD byte-operation paths in `dotnet-simd` and the string intrinsics (part of the shared feature matrix). |
+| `heap-diagnostics` | `HeapManager` keeps an address-ordered map of every object (`_all_objs`) instead of its compact registry, for heap inspection. |
+| `deadlock-diagnostics` | Enables `parking_lot`'s deadlock detection; implies `multithreading`. |
+| `bench-instrumentation` | Benchmark counters (allocation pressure, cache key clones, GC pauses) used by `dotnet-benchmarks`. |
+
+`./check.sh --full` runs the tests with each of the last three ([CI.md](CI.md#checksh)).
 
 ## Atomic Alignment
 
@@ -75,15 +88,6 @@ its source of truth, and `./check.sh --fast` runs a smaller local subset.
 Combined validation does not replace an isolated feature leg: select the configuration whose
 `cfg` branches you changed.
 
-The following tests are conditionally ignored under `memory-validation` because their deliberate
-managed-pointer offsets trigger its debug bounds trap:
-
-- VM control `p13_ldelema_managed_add_far_out_of_bounds_then_conv_u`;
-- VM regression `conv_u8_after_far_oob_managed_add_does_not_panic`;
-- value regression `ptr_arith_managed_ptr_arithmetic_boundaries_report_explicit_errors`.
-
-The pinned Miri lanes run without that feature, so these tests execute there.
-
 ## Debugging Environment Variables
 
 In addition to feature flags, some components use environment variables for extra tracing:
@@ -98,5 +102,5 @@ In addition to feature flags, some components use environment variables for extr
 
 Example:
 ```bash
-DOTNET_RS_TRACE=stderr RUST_LOG=dotnet_vm=debug cargo test --features validation-all
+DOTNET_RS_TRACE=stderr RUST_LOG=dotnet_vm=debug cargo test -p dotnet-cli --features validation-all
 ```

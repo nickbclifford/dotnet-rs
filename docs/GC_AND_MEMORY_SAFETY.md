@@ -18,8 +18,9 @@ This document describes the garbage collection subsystem, memory safety invarian
 The `// SAFETY:` predicates this subsystem relies on are stated in the
 [invariant registry](INVARIANT_REGISTRY.md): `F1.StwParked`, `F1.ArenaGenerationMatch`,
 `F1.ExecutorArenaRetained`, `F1.RetiredCollectionExclusion`, `F1.FinalizerPublication`,
-`F1.GcHandleRooted`, `F5.TracesEveryGcRef`,
-`F6.NoEscapeAcrossArena` and `F9.MetadataArenaOutlivesDescriptors`.
+`F1.GcHandleRooted`, `F2.HandleValueOverride`, `F5.TracesEveryGcRef`,
+`F6.NoEscapeAcrossArena`, `F6.InitializerFailureRoot`, `F6.ThreadStaticRoot`,
+`F9.MetadataArenaOutlivesDescriptors` and `F10.FrameHomeChecked`.
 
 ## Managed pointer displacement and access
 
@@ -36,6 +37,11 @@ byref does not authorize an out-of-range dereference; frame-home access uses
 owner and range on access. Unchecked non-heap helpers retain their documented caller-supplied
 range and lifetime contract.
 
+The byref encoding is three words wide (`ManagedPtr::SIZE`, 24 bytes). An unmanaged pointer slot
+(`T*`) holds one native word: `CliToCts::pointer_slot_address`
+(`crates/dotnet-value/src/cts_cli_conversion.rs`) converts the stack value to an address before the
+store (test `pointer_stobj_writes_native_word`).
+
 ## Managed pointer placement
 
 ECMA-335 §II.14.4.2 and §III.1.1.5.2 separate where a managed pointer (byref) may *point* from
@@ -50,7 +56,6 @@ where a byref value may be *stored*.
 | `CrossArenaObjectRef(CrossArenaOrigin)` | the same, for an object owned by another thread's arena (`multithreading` only) |
 | `Static(Arc<StaticMetadata>)` | static field storage |
 | `FrameHome(FrameHomeSerial)` | a local or argument in the [home block](#frame-owned-homes) of the live frame with that serial, on the current thread |
-| `Stack(StackSlotIndex)` | an evaluation-stack slot, or a local or argument without a home, of the current thread (see [Evaluation stack, locals and managed pointers](ARCHITECTURE.md#evaluation-stack-locals-and-managed-pointers)) |
 | `Transient(Arc<Object>)` | a value-type value that has no slot of its own, such as the result of `ldflda` on a value type on the evaluation stack |
 | `Unmanaged` | unmanaged memory, including `localloc` blocks and addresses reconstructed from native integers |
 
@@ -114,9 +119,8 @@ Limits of this contract:
   `HeapManager` allocation pressure or GC triggering.
 - Guest use of a pointer after its frame's allocation lifetime ends is not detected.
 - `localloc` inside an exception block is not rejected.
-- Suspending frames while a nested exception filter runs has not been shown to preserve the
-  suspended frames' blocks; source inspection suggests a possible overwrite, which has not been
-  reproduced.
+
+Nested filter suspension preserves suspended frames' blocks (plan [07](plans/07-nested-filter-suspension.md)).
 
 ## Frame-Owned Homes
 
@@ -195,7 +199,12 @@ Limits of this contract:
 - **`RetainedPtr`.** Access-performing stack pops (`pop_retained_ptr`) return a `RetainedPtr`
   that owns the popped `StackValue` for the synchronous operation; with `multithreading`, a
   cross-arena operand also holds an arena lease. It does not hold a heap borrow, and must be
-  dropped before the thread parks at a safepoint.
+  dropped before the thread parks at a safepoint. `RetainedPtr::checked_range`
+  (`crates/dotnet-value/src/pointer/retained.rs`) resolves and bounds-checks every owned origin
+  before a block operation: heap and cross-arena objects against their payload, static storage
+  (`ManagedPtrResolver::static_storage_block`) and frame homes through the resolver, and transient
+  owners against their data. Native integers, unmanaged pointers and the `Unmanaged` origin stay
+  the guest's `F10.RawMemoryAccessValid` obligation.
 - **Thread-static descriptors.** A static descriptor records the logical owner, not an allocation
   root. Resolution retains the block through the current mutation, but fails once that owner has
   completed. STW waits for active mutations before tracing. An unmanaged address from `conv.u` is
@@ -245,39 +254,20 @@ Executor Drop.
 
 #### Retired worker arenas
 
-At retirement and after each retired finalizer run, the owner discards finished execution state,
-native activations, hydrated reflection object caches and managed-pointer decode entries. It clears
-the current managed Thread root and prunes only completed child records. Active or unstarted child
-records still root their delegates and arguments; shared statics, GC handles, canonical tables and
-finalization queues remain authoritative roots. Reflection metadata vectors retain stable indices.
-
-In `multithreading`, a managed worker that completes its entry point does not immediately drop its
-executor. After cleaning up the managed segment, it publishes the completion outcome and enters
-`Executor::serve_retired`. The owner thread and arena remain registered with the GC coordinator and
-the exact-identity lease registry while retired. A retired owner counts as stopped for stop-the-world
-and services the coordinator's mark, finalize and sweep commands; it never resumes its ordinary
-managed entry point. In normal MT execution it publishes finalizers to the dedicated finalizer worker.
-
-An ordinary managed owner can release an empty arena from that loop after a coordinated sweep
-following root cleanup and any owner-side finalizers. It checks zero total Gc allocations, no pending
-finalizers and no retained child records, then rechecks under collection exclusion. It transitions to
-`Releasing`, extracts storage into a retention guard and unregisters from collection and thread
-coordination. Outside collection and lifecycle locks it drains the exact registration; successful
-drain frees storage and publishes `Released`. An incomplete or unwound drain publishes `Leaked`
-and retains storage. No arena access or allocation follows extraction. Pool and dedicated-finalizer arenas stay
-retained. Weak clearing and finalizer promotion precede sweep, so zero total allocations excludes
-objects retained by statics, strong handles, finalizers or other arenas. Completion entries and their
-indices/outcomes survive release. Live executors join released handles; shutdown joins any
-unclaimed handles and waits for joins already claimed by another reaper or shutdown caller.
-
-For retained arenas, shutdown starts from that service loop. The owner excludes collections, rechecks worker quiescence and that no
-finalizer is queued (unless abort abandoned it), marks the worker as shutting down, and unregisters its exact arena identity.
-It then drains outstanding leases outside the collection lock before freeing the arena. If exact
-drain cannot complete, storage is deliberately leaked. These ordering requirements are
-`F1.RetiredCollectionExclusion` in the [invariant registry](INVARIANT_REGISTRY.md) and the
-[retained-arena design](plans/09-retired-arena-lifetime.md#design). The cost and ID-space limit for
-retaining completed workers are recorded in the
+In `multithreading`, a completed managed worker keeps its executor: its arena stays registered with
+the GC coordinator and the exact-identity lease registry, and the owner thread services mark,
+finalize and sweep commands from `Executor::serve_retired` until the arena is released (if empty)
+or shut down. The full lifecycle, release conditions and shutdown order are in the
 [worker lifecycle contract](THREADING_AND_SYNCHRONIZATION.md#managed-worker-lifecycle-and-process-exit).
+For collection, the relevant rules are:
+
+- A retired owner counts as stopped for stop-the-world and never resumes ordinary managed code.
+- Releasing or freeing a retired arena first excludes collections and unregisters it, then drains
+  outstanding leases outside the collection lock. Storage is freed only after the exact drain
+  completes, and leaked otherwise (`F1.RetiredCollectionExclusion`; design in
+  [plan 09](plans/09-retired-arena-lifetime.md#design)).
+- Shared statics, GC handles, canonical tables and finalization queues stay authoritative roots
+  after retirement; the owner discards only its finished execution state and caches.
 
 The following is an MT schematic: coordinator handles are not themselves TLS arena storage.
 
@@ -471,7 +461,7 @@ per-frame state (`StackFrame<'gc>`).
 An initializer that throws a managed exception retains its `TypeInitializationException` in a
 traced `FieldStorage` reference slot owned by its `StaticStorage`. The wrapper retains the
 original inner exception; publication precedes the failed-state release and waiter notification.
-Both legacy initializer unwinding and the effects claim publish to this storage. An abandoned
+The `ensure_initialized` claim publishes to this storage. An abandoned
 claim publishes failure without an exception object. Reads decode retained references only within
 a live arena mutation. Retired worker owners remain available for collection and foreign-reference
 decoding until shutdown, as described in [managed worker lifecycle](THREADING_AND_SYNCHRONIZATION.md#managed-worker-lifecycle-and-process-exit).
@@ -493,11 +483,10 @@ The aligned static-reference atomic path has a known provenance limitation under
      kind and generation. Monitor release epochs only make waiters eligible to probe again;
      acquisition occurs inside a fresh mutation. Finalizer waits release the mutation and arena lease
      while sleeping in bounded intervals so GC stops are serviced. MT waits use the captured
-     enqueue generation; calls made while `processing_finalizer` is set return immediately. Admitted
-     monitor calls use the same condition driver; excluded shapes retain their legacy paths.
+     enqueue generation; calls made while `processing_finalizer` is set return immediately.
+     `Monitor` calls use the same condition driver.
 3. **Return-value post-processing after a managed call returns**
-   - Reflection calls transform their own results in their native activation. The former
-     per-frame `FrameReturnAction`/`InvokeReturn` continuation no longer exists.
+   - Reflection calls transform their own results in their native activation.
 
 ### `VmContinuation<'gc>`
 
@@ -505,15 +494,16 @@ The aligned static-reference atomic path has a known provenance limitation under
 continuation state:
 
 - `None` — no pending continuation state.
-- `HandlerUnwinds(Vec<UnwindState<'gc>>)` — queued unwind states for nested `leave`/`finally`
-  transitions that may span safe points.
+- `HandlerUnwinds(Vec<SavedHandlerUnwind<'gc>>)` — saved unwind states for nested
+  `leave`/`finally` transitions that may span safe points.
 
 ### `VesContext` continuation API
 
 `VesContext` exposes explicit helpers for continuation state transitions:
 
-- `push_handler_unwind(state)` / `pop_handler_unwind()` — mutate
-  `VmContinuation::HandlerUnwinds` as unwind work is suspended/resumed.
+- `push_handler_unwind(state)`, `resume_handler_unwind(..)` and
+  `discard_handler_unwinds_from(frame_index)` (`stack/context_ops.rs`) — mutate
+  `VmContinuation::HandlerUnwinds` as unwind work is suspended, resumed or abandoned.
 
 ### Finite native copies
 
@@ -537,7 +527,8 @@ enter the async copy.
 closures. Native futures retain references through activation-owned roots, not branded
 handles, and access the heap through bounded poll-scoped effects. Multicast byrefs retain a
 traced heap origin or a frame-home serial and offset; each fetch reconstructs the pointer after
-checking its owner. Static-field and other excluded origins stay on the existing delegate path.
+checking its owner. Static, unmanaged and cross-arena origins are also accepted; a `Transient`
+byref is rejected (see [Multicast invocation](DELEGATES_AND_DISPATCH.md#multicast-invocation)).
 Static-field instructions retain a store operand in traced activation storage while initialization
 runs; their completion action performs the field operation and advances the caller only after
 initialization succeeds. The static-address result retains its static origin.
@@ -556,8 +547,9 @@ Write-barrier TLS buffers are drained on panic unwind by `WriteBarrierPanicFlush
 ## HeapManager (`dotnet-runtime-memory/src/heap.rs` & `dotnet-runtime-memory/src/ops.rs`)
 
 The `HeapManager` tracks object lifetimes, registration, and finalization:
-- **Finalization**: Scans registered objects during `finalize_check` and queues unreachable ones with finalizers to a finalizer thread/queue.
-- Coordinates with `dotnet-runtime-memory/src/ops.rs`, which defines a thin `MemoryOps` trait that extends `BaseMemoryOps` with a single `heap()` accessor. The concrete allocation paths (`new_object`, `new_vector`, `box_value`) live on the `MemoryOps` trait in `dotnet-vm-ops/src/ops.rs`.
+- **Finalization**: Scans registered objects during `finalize_check` and queues unreachable ones with finalizers. In MT the shared queue is `Finalizers` (`crates/dotnet-vm/src/finalizers.rs`); see [Global finalizer completion](#global-finalizer-completion).
+- **GC handles**: VM-wide handle slots are `SharedGcHandles` (`dotnet-runtime-memory/src/handles.rs`); see [Shared GC handle roots](#shared-gc-handle-roots).
+- Coordinates with `dotnet-runtime-memory/src/ops.rs`, whose `MemoryOps` trait extends `BaseMemoryOps` with `heap()`, `gc_handles()`, `has_global_pending_finalizers()` and `set_finalizer_registered(..)`. The concrete allocation paths (`new_object`, `new_vector`, `box_value`) live on the `MemoryOps` trait in `dotnet-vm-ops/src/ops.rs`.
 
 ## RawMemoryAccess (`dotnet-runtime-memory/src/access.rs`)
 
@@ -657,14 +649,17 @@ next safepoint; the slot lock alone is not an arena lease or a lasting root afte
 ### Shared reflection roots
 
 Under `multithreading`, `SharedReflectionRegistry` publishes canonical type, method, field,
-property and assembly objects for their existing reflection cache keys. Newly materialized literal
-and empty strings and shared reflection objects are homed in the dedicated finalizer executor's
-long-lived arena. Every `CallStack` traces the shared tables alongside `StaticStorageManager`.
+property and assembly objects for their existing reflection cache keys. Shared reflection objects
+and canonical strings (literals, `String.Empty` and interned strings, plan
+[22](plans/22-string-interning.md)) are homed in the dedicated finalizer executor's long-lived
+arena. A non-owner activation requests a missing object from the
+[canonical allocation service](THREADING_AND_SYNCHRONIZATION.md#canonical-allocation-service) with
+a plain-data key, suspends, and retries the rooted table lookup when the service completes. Every `CallStack` traces the shared tables alongside `StaticStorageManager`.
 Its retained object pointers are converted to temporary handles for `ObjectRef::trace`, which
 marks owner-local objects and records foreign objects for the cross-arena fixed point. Local
 reflection caches also trace their handles, including foreign ones. Publication happens between
 safepoints. An arena owning a published canonical object stays nonempty and registered through
-shutdown; empty retired arenas follow the release protocol above. The explicit
+shutdown; empty retired arenas follow the [release protocol](THREADING_AND_SYNCHRONIZATION.md#managed-worker-lifecycle-and-process-exit). The explicit
 `String.Intern(existingObject)` winner is the approved exception: the table retains that exact
 input, so its original live-object arena also remains retained through shutdown. No general string
 allocator migration or copying at retirement is used.

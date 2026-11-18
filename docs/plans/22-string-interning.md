@@ -5,174 +5,43 @@
 match `dotnet` in a diff fixture under both feature sets, including the same literal loaded on two
 threads.
 
-Closes the `string.Empty` bullet under the README's **Other missing or incorrect runtime
-behavior** entry.
+## What was built
 
-## Problem
+Before this plan, `ldstr` allocated a new string on every execution (ECMA-335 §III.4.16 requires
+one object per literal), `string.Empty` allocated per load, and `String.Intern`/`IsInterned`
+reached CoreCLR QCalls and threw `DllNotFoundException`.
 
-- **`ldstr` never interns.** `ldstr` (`crates/dotnet-vm/src/instructions/objects/mod.rs`)
-  allocates a new `CLRString` on every execution. ECMA-335 III.4.16 requires two `ldstr`
-  instructions with the same characters to return the same object, so
-  `ReferenceEquals("a", "a")` is false here and true on the CLR. This also holds for the same
-  `ldstr` executed twice, such as in a loop.
-- **`string.Empty` allocates per load.** `intrinsic_field_string_empty`
-  (`crates/dotnet-intrinsics-string/src/accessors.rs`) pushes a fresh empty string, so
-  `ReferenceEquals(string.Empty, string.Empty)` and `ReferenceEquals(string.Empty, "")` are both
-  false. CoreLib code that returns `string.Empty` for empty results inherits this.
-- **Empty results built by intrinsics.** The pointer string constructor
-  (`crates/dotnet-intrinsics-string/src/constructors.rs`) builds `CLRString::new(Vec::new())` for
-  a null pointer. The CLR's `new string((char*)null)` and constructors of zero length return
-  `string.Empty`. Other intrinsics may build empty results through `push_string` with an empty
-  buffer.
-- **`String.Intern`/`IsInterned`.** The .NET 10.0.14 CoreLib forwards both to CoreCLR QCalls
-  (`String_Intern`, `String_IsInterned`). The VM intercepts neither, so they likely fail today.
-  Confirm in slice 1.
+- **One process-wide intern table** keyed by UTF-16 content holds one canonical string per key,
+  using the canonical-object mechanism of [plan 14](14-canonical-reflection-objects.md). Every
+  arena traces it as a root; single-threaded builds use the same table. Under `multithreading`,
+  new literals and `String.Empty` are homed in the dedicated finalizer executor's arena through the
+  [canonical allocation service](../THREADING_AND_SYNCHRONIZATION.md#canonical-allocation-service)
+  ([plan 26](26-thread-lifecycle-and-multicast-fallback.md)).
+- **`ldstr`** looks up the table by its character slice without allocating on a hit.
+- **`string.Empty`** returns the interned `""`, and so do intrinsics whose CLR counterpart returns
+  `string.Empty` (for example `new string((char*)null)` and `new string('a', 0)`).
+- **`String.Intern` and `String.IsInterned`** are intercepted at the public methods, above the
+  QCalls. `Intern` throws `ArgumentNullException` on null and publishes its supplied object when
+  the key is absent, matching .NET's observed identity; that object's original arena then stays
+  retained through shutdown. `IsInterned` returns the canonical object or null.
 
-## Scope
+## Decisions
 
-In: `ldstr`, `string.Empty`, `String.Intern`, `String.IsInterned`, and VM intrinsics whose CLR
-counterpart returns `string.Empty`, in single-threaded and `multithreading` builds.
+- Computed strings are not interned (the CLR does not either).
+- The table lives for the process lifetime, as on the CLR.
+- `CompilationRelaxations.NoStringInterning` is ignored, as on the CLR.
+- Frozen or preallocated string segments are an unobservable CLR detail and not modeled.
+- No per-thread front cache: whole-process instructions for `string --test` changed +0.03% and
+  `eval_stack_push_i32_pop_safe` +0.99% (startup-dominated), measured with
+  `perf stat -r 3 -e instructions:u` on the benchmark executables with `--test`.
 
-Out:
-- Interning computed strings. The CLR does not intern them either; only literals and explicit
-  `String.Intern` calls are interned.
-- Collecting interned strings. The CLR keeps its intern table for the process lifetime, and this
-  plan roots interned strings until VM shutdown.
-- `CompilationRelaxations.NoStringInterning`. The CLR ignores it and interns anyway, so the VM
-  ignores it too.
-- Frozen or preallocated string segments. That is a CLR allocation detail with no visible
-  semantics.
+## Remaining limit
 
-## Design
+There is no Loom model for the intern table (the shared-table models avoid strings because the
+interner is global). Tracked in the plans README, "Not yet planned".
 
-- **One process-wide intern table** keyed by UTF-16 content, holding one canonical string object
-  per key. Reuse plan 14's canonical-object mechanism (`SharedReflectionRegistry` in
-  `crates/dotnet-vm/src/state.rs`):
-  - The first literal load publishes with insert-if-absent. [Plan 26](26-thread-lifecycle-and-multicast-fallback.md)
-    homes new MT literals in the finalizer arena. `String.Intern` publishes its supplied object
-    when the key is absent, matching .NET's observed identity; a losing thread uses the winner.
-  - Every arena traces the table as a root. A winning explicit `Intern` input keeps its original
-    live-object arena retained, so a foreign interned string stays valid.
-  - Single-threaded builds use the same table with a single owner. Keep one code path.
-- **`ldstr`** looks up the table by its character slice. The lookup must not allocate a
-  `CLRString` when it hits.
-- **`string.Empty`** returns the interned `""`. Intrinsics whose CLR counterpart returns
-  `string.Empty` (find them by grepping for empty `CLRString` construction and empty
-  `push_string` results) return it too.
-- **`String.Intern` and `String.IsInterned`** get ordinary `#[dotnet_intrinsic]` intercepts on
-  the public methods themselves, like `Debugger.get_IsAttached`
-  (`crates/dotnet-intrinsics-core/src/debugger.rs`), not the QCalls beneath them. The QCalls are
-  CoreCLR-coupled plumbing, so the VM stubs above them. `Intern` throws
-  `ArgumentNullException` on null, inserts if absent and returns the canonical object.
-  `IsInterned` returns the canonical object or null.
-- **Cost:** interning puts a hash lookup on every `ldstr`. Add a per-thread front cache, keyed
-  by the instruction's method and offset (or by content), only if measurements show a cost. Plan
-  14 did the same for `typeof`.
+## Checks
 
-## Slices
-
-1. **Baseline.** Write `strings/string_interning_42.cs` covering:
-   - literal identity within a method, across methods and in a loop;
-   - `string.Empty` against itself and against `""`;
-   - `String.Intern` of a computed string returning the literal's object;
-   - `IsInterned` of a non-literal returning null, then the canonical object after `Intern`;
-   - `new string((char*)null)` and `new string('a', 0)` against `string.Empty`.
-
-   Run it on `dotnet` and the VM and record which cases fail and how. Also record `string` and
-   `runtime_primitives` benchmark `perf stat` instruction counts. The `string` benchmark's
-   wall-clock time is sensitive to code placement (README), so compare instructions.
-2. **Intern table, `ldstr` and `string.Empty`.** Add the table, route `ldstr` and
-   `string.Empty` through it, register the fixture in the diff harness with the cases that now
-   pass, and record benchmark deltas here. If `ldstr` instructions rise measurably, add the front
-   cache in this slice.
-3. **`String.Intern`/`IsInterned` and empty intrinsic results.** Add the `Intern`/`IsInterned` intercepts and
-   route empty-result intrinsics to the interned `""`. Enable the remaining fixture cases.
-4. **Cross-thread identity.** Add `threading/string_interning_mt_42.cs` (multithreading-only;
-   list it in `crates/dotnet-cli/build.rs` with the other MT fixtures): two threads load the
-   same literal and `string.Empty`, exchange them, and compare with `ReferenceEquals`. Also cover
-   a `String.Intern` race between threads. Run the Miri tree-borrows lane that covers cross-arena
-   roots and the Loom shared-table test if the table type compiles under `cfg(loom)`.
-
-Each slice ends with `cargo clippy --workspace --all-targets -D warnings` (both feature sets),
-the doc-drift check and the full `dotnet-cli` and `dotnet-vm` test matrices passing.
-
-### Slice 1 baseline
-
-On .NET runtime 10.0.14, all ten reports in `strings/string_interning_42.cs` are `True` and the
-fixture exits 42. On the VM at `359367a4`, both no-default-features and `multithreading` builds
-exit 42 but report `False` for all three literal identity cases, both empty-field cases, and both
-empty constructors. `Intern` of the computed literal and the initial `IsInterned` call each throw
-`System.DllNotFoundException` while resolving the CoreCLR QCalls. The after-intern case also
-throws at `Intern`, before reaching its second `IsInterned`. The fixture catches these exceptions
-to preserve the individual baseline reports; it is compiled but not registered as a passing test
-until the implementation slices.
-
-On an AMD Ryzen 9 9900X, with the default `multithreading` feature and `bench-fat`, prewarmed
-Criterion binaries were run with `perf stat -r 3 -e instructions:u` and `--bench ... --test`:
-
-| Benchmark filter | Mean user instructions | Variation |
-| --- | ---: | ---: |
-| `end_to_end` / `string` | 19,679,292,433 | ±0.01% |
-| `runtime_primitives` / `eval_stack_push_i32_pop_safe` | 8,139,803 | ±0.74% |
-| `runtime_primitives` / `vector_trace_i32` | 3,029,942 | ±0.00% |
-
-These are whole-process counts, not per-iteration measurements. In particular, `--test` runs the
-very short primitive cases once, so their counts are dominated by startup and setup; use the same
-commands for comparison and interpret small changes cautiously.
-
-### Slice 2 measurements
-
-With the same machine, profile, feature set and commands as the baseline:
-
-| Benchmark filter | Mean user instructions | Change | Variation |
-| --- | ---: | ---: | ---: |
-| `end_to_end` / `string` | 19,684,561,374 | +0.03% | ±0.02% |
-| `runtime_primitives` / `eval_stack_push_i32_pop_safe` | 8,220,613 | +0.99% | ±0.40% |
-| `runtime_primitives` / `vector_trace_i32` | 3,024,810 | -0.17% | ±0.03% |
-
-The string change is close to run-to-run variation; the primitive results are dominated by
-startup as above. No front cache was added on this evidence.
-
-The literal and empty-field fixture cases pass with and without multithreading, including UTF-16
-content and a weak-reference check of table rooting across collection. Workspace Clippy passes
-in both feature sets, doc drift passes, and all ten CLI/VM feature-matrix runs pass.
-
-### Slice 3 implementation
-
-`Intern` publishes the supplied object when its content is absent; `IsInterned` only looks up the
-content. Both reject null. String constructors, substring, and three-span concatenation return
-the interned empty object for empty results. `FastAllocateString` remains an allocation primitive.
-The full differential fixture covers explicit interning, UTF-16, nulls, collection roots, and
-empty results in addition to the literal cases.
-Workspace Clippy passes in both feature sets, doc drift passes, and all ten CLI/VM
-feature-matrix runs pass.
-
-### Slice 4 cross-thread identity
-
-The multithreading fixture exchanges literals, `string.Empty`, and concurrently interned
-computed strings between two workers. It checks the race winner and table roots after both
-workers exit and a collection runs; it matches .NET's output and exit code. The three
-multithreaded `vm-collection` cross-arena
-controls pass under pinned Tree Borrows Miri (with the existing permissive-provenance warnings).
-The VM did not compile with `cfg(loom)` and `multithreading` (a pre-existing gap, present before
-this plan): the loom synchronization facade lacked `Condvar::wait_for` and `NEXT_GLOBAL_THREAD_ID`
-needed a const atomic initializer. Both are fixed (`wait_for` wraps loom's `wait_timeout`, which
-never times out; the counter uses a loom `lazy_static`), and CI now compiles that configuration, so
-the intern table can be modeled under Loom; no string model has been written.
-The existing `dotnet-runtime-memory` Loom shared-table suite passes, but does not cover strings.
-Workspace Clippy passes in both feature sets, doc drift passes, and all ten CLI/VM
-feature-matrix runs pass.
-
-## Done when
-
-- `string_interning_42` matches `dotnet` in both feature sets.
-- `string_interning_mt_42` matches `dotnet` under `multithreading`.
-- The benchmark deltas are recorded here and accepted.
-- The README bullet is removed.
-
-## Ask the maintainer only if
-
-- Interning adds more than ~5% instructions to the `string` or `runtime_primitives` benchmark
-  even with a front cache.
-- Publishing a canonical string from a foreign arena needs a mechanism plan 14's registry and
-  plan 09's retained arenas do not already provide.
+`strings/string_interning_42.cs` (single-threaded and multithreaded) and
+`threading/string_interning_mt_42.cs` (multithreaded only: two threads exchange literals and
+`string.Empty`, and race `String.Intern`) are diff fixtures.

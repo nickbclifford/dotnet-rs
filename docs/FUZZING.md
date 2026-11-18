@@ -39,22 +39,14 @@ rustup toolchain install "$NIGHTLY"
 
 ## Feature Flag: `fuzzing`
 
-The `fuzzing` feature gate enables `Arbitrary` trait derivations on VM and value types. It propagates through the crate hierarchy:
+The `fuzzing` feature gate enables `Arbitrary` trait derivations on VM and value types.
+`dotnet-vm/fuzzing` enables `dep:arbitrary` and forwards to `dotnet-value`, `dotnet-types`,
+`dotnet-utils` and `dotnet-pinvoke` (which forwards to `dotnet-vm-ops`); see each crate's
+`Cargo.toml` for the rest of the chain.
 
 > **Newtype carve-out:** `Arbitrary` derives for `dotnet-utils` newtypes deliberately construct
 > unvalidated values. The derives expand in `newtypes.rs` and may access private tuple fields,
 > while external callers cannot, preserving the privatization boundary.
-
-```
-dotnet-vm/fuzzing
-├── dep:arbitrary
-├── dotnet-value/fuzzing
-│   ├── dep:arbitrary
-│   ├── dotnet-types/fuzzing    (dep:arbitrary)
-│   └── dotnet-utils/fuzzing    (dep:arbitrary)
-├── dotnet-types/fuzzing
-└── dotnet-utils/fuzzing
-```
 
 The fuzz crate Cargo.toml files (`crates/dotnet-vm/fuzz/Cargo.toml`, `crates/dotnet-value/fuzz/Cargo.toml`) depend on the respective library crates with `features = ["fuzzing"]` enabled.
 
@@ -78,6 +70,7 @@ The primary fuzz target. It accepts a structured `FuzzProgram` (via `Arbitrary`)
 - **`FuzzInstruction`**: An enum of CIL instruction variants covering:
   - Stack operations (`Dup`, `Pop`, `Ldnull`, `LdcI4`, `LdcI8`, `LdcR4`, `LdcR8`)
   - Arithmetic (`Add`, `Sub`, `Mul`, `Div`, `Rem`, `And`, `Or`, `Xor`, `Shl`, `Shr`, `Neg`, `Not`)
+  - Conversions (`ConvI`, `ConvU`)
   - Indirect memory (`LdindI1`–`LdindI`, `StindI1`–`StindI`, `Cpblk`, `Initblk`, `Localloc`)
   - Control flow (`Br`, `Brtrue`, `Brfalse`, `Ret`)
   - Locals and arguments (`Ldloc`, `Stloc`, `Ldarg`, `Starg`, and address variants)
@@ -90,7 +83,7 @@ The primary fuzz target. It accepts a structured `FuzzProgram` (via `Arbitrary`)
 - **Instruction budget**: 10,000 instructions to prevent infinite loops.
 - **Branch clamping**: Branch targets are clamped to valid instruction indices.
 - **Index modulo**: Local/argument/field/method indices are taken modulo the available count.
-- **Panic catching**: `panic::catch_unwind` wraps execution so panics are reported as fuzzer crashes.
+- **Panics**: the target (`fuzz_targets/fuzz_executor.rs`) wraps execution in `panic::catch_unwind`, but libfuzzer-sys installs a panic hook that aborts the process, so a panic is still reported as a crash.
 
 **Execution environment setup:**
 The harness (`execute_cil_program`) constructs a complete but minimal .NET assembly containing:
@@ -123,7 +116,7 @@ handle or executable pointer.
 
 **Location:** `crates/dotnet-value/fuzz/fuzz_targets/fuzz_raw_memory_access.rs`
 
-Fuzzes `AtomicAccess::store_atomic` / `load_atomic` with arbitrary offsets, sizes (1/2/4/8 bytes), values, and memory orderings. Validates that a store followed by a load returns the correctly masked value.
+Fuzzes `StandardAtomicAccess::store_atomic_sized` / `load_atomic_sized` with arbitrary offsets, sizes (1/2/4/8 bytes), values, and memory orderings. Validates that a store followed by a load returns the correctly masked value.
 
 ## Blocking Corpus Regression
 
@@ -190,17 +183,19 @@ generator and decode checks when a particular instruction sequence is required.
 
 ### dotnet-vm executor fuzzing
 
+Run from `crates/dotnet-vm/fuzz`, as CI and `fuzz.yml` do:
+
 ```bash
-cd crates/dotnet-vm
+cd crates/dotnet-vm/fuzz
 
 # Basic run (indefinite)
 cargo +"$NIGHTLY" fuzz run fuzz_executor
 
 # With corpus, dictionary, and tuned options
 cargo +"$NIGHTLY" fuzz run fuzz_executor \
-    fuzz/corpus/fuzz_executor \
+    corpus/fuzz_executor \
     -- \
-    -dict=fuzz/cil.dict \
+    -dict=cil.dict \
     -timeout=2 \
     -rss_limit_mb=2048 \
     -max_len=10000 \
@@ -209,13 +204,13 @@ cargo +"$NIGHTLY" fuzz run fuzz_executor \
 
 # Fixed-duration run (60 seconds)
 cargo +"$NIGHTLY" fuzz run fuzz_executor \
-    fuzz/corpus/fuzz_executor \
+    corpus/fuzz_executor \
     -- -max_total_time=60
 
 # With AddressSanitizer (recommended for finding memory bugs)
 RUSTFLAGS="-Zsanitizer=address" \
     cargo +"$NIGHTLY" fuzz run fuzz_executor \
-    fuzz/corpus/fuzz_executor
+    corpus/fuzz_executor
 ```
 
 ### dotnet-value fuzzing
@@ -236,14 +231,18 @@ cargo +"$NIGHTLY" fuzz list
 
 ## LibFuzzer Options
 
-The file `crates/dotnet-vm/fuzz/fuzz_executor.options` defines default libFuzzer settings:
+The file `crates/dotnet-vm/fuzz/fuzz_executor.options` records suggested libFuzzer settings.
+`cargo fuzz run` does not read it; pass the flags explicitly as shown above. Its `runs = 0`
+entry is mislabeled: libFuzzer's `-runs=0` replays the given inputs and exits (the corpus replay
+uses it), while omitting `-runs` fuzzes indefinitely. The dictionary is not set there; pass
+`-dict=cil.dict`.
 
 | Option              | Value | Purpose                                    |
 |---------------------|-------|--------------------------------------------|
 | `max_len`           | 10000 | Maximum input size in bytes                |
 | `timeout`           | 2     | Per-test-case timeout in seconds           |
 | `rss_limit_mb`      | 2048  | Memory limit per test case                 |
-| `runs`              | 0     | Run indefinitely                           |
+| `runs`              | 0     | Replay only (see above)                    |
 | `use_value_profile` | 1     | Enable value profiling for better coverage |
 | `reduce_inputs`     | 1     | Minimize corpus to unique coverage         |
 | `print_coverage`    | 1     | Report coverage periodically               |
@@ -255,7 +254,8 @@ The file `crates/dotnet-vm/fuzz/fuzz_executor.options` defines default libFuzzer
 Reduce the corpus to a minimal set covering all unique code paths:
 
 ```bash
-cargo +"$NIGHTLY" fuzz cmin fuzz_executor fuzz/corpus/fuzz_executor
+cd crates/dotnet-vm/fuzz
+cargo +"$NIGHTLY" fuzz cmin fuzz_executor corpus/fuzz_executor
 ```
 
 ### Coverage
@@ -263,7 +263,8 @@ cargo +"$NIGHTLY" fuzz cmin fuzz_executor fuzz/corpus/fuzz_executor
 Inspect which code paths are being exercised:
 
 ```bash
-cargo +"$NIGHTLY" fuzz coverage fuzz_executor fuzz/corpus/fuzz_executor
+cd crates/dotnet-vm/fuzz
+cargo +"$NIGHTLY" fuzz coverage fuzz_executor corpus/fuzz_executor
 ```
 
 ## Crash Artifacts
@@ -276,7 +277,8 @@ When the fuzzer discovers a crash (panic, assertion failure, sanitizer violation
 To reproduce a crash:
 
 ```bash
-cargo +"$NIGHTLY" fuzz run fuzz_executor fuzz/artifacts/fuzz_executor/crash-<hash>
+cd crates/dotnet-vm/fuzz
+cargo +"$NIGHTLY" fuzz run fuzz_executor artifacts/fuzz_executor/crash-<hash>
 ```
 
 Crash artifacts and generated inputs are ignored by default; the gated corpus directories are
@@ -302,38 +304,6 @@ complement managed fixtures that check specific guest exception semantics.
 ```bash
 cargo test -p dotnet-vm --features fuzzing fuzzing
 cargo +"$NIGHTLY" miri test -p dotnet-vm --features fuzzing fuzzing -- --test-threads=1
-```
-
-## Architecture Diagram
-
-```
-┌─────────────────────────────────────────────────────┐
-│                   libFuzzer                         │
-│  (mutation engine, coverage feedback, corpus mgmt)  │
-└──────────────────────┬──────────────────────────────┘
-                       │ raw bytes
-                       ▼
-              ┌────────────────┐
-              │   arbitrary    │
-              │  (structured   │
-              │  deserialization)│
-              └────────┬───────┘
-                       │ FuzzProgram { instructions, num_locals, num_args }
-                       ▼
-         ┌─────────────────────────────┐
-         │  fuzzing.rs harness         │
-         │  • Build Resolution         │
-         │  • Convert FuzzInstruction  │
-         │    → dotnetdll Instruction  │
-         │  • Create Executor          │
-         │  • Set instruction budget   │
-         └─────────────┬───────────────┘
-                       │
-                       ▼
-         ┌─────────────────────────────┐
-         │  dotnet-vm Executor         │
-         │  (full VM execution engine) │
-         └─────────────────────────────┘
 ```
 
 ## Adding New Fuzz Targets

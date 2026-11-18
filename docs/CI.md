@@ -1,8 +1,6 @@
 # CI and Local Validation
 
-Locally, run focused tests and `./check.sh --fast` once per coherent change. CI selects deep
-Miri/fuzz lanes from changed paths; run a deep lane locally when changing unsafe code it covers or
-to debug its failure.
+When to run what locally is in [CONTRIBUTING](../CONTRIBUTING.md#run-the-project-checks).
 
 The workflow YAML under `.github/workflows/` is the source of truth for what runs. This document
 explains the structure and how to reproduce a job locally; it does not restate test lists or
@@ -15,7 +13,7 @@ earlier one.
 
 | Layer | When it runs | What it covers |
 |---|---|---|
-| Fast core | Every push and PR to `main`/`master` | Source policy and doc lint, format, provenance lints, the Loom STW model, clippy and native tests over the shared feature matrix, release-profile clippy (`clippy-release`), build-script probes, fixtures, and the library Miri jobs (`miri-value`, `miri-frame-blocks`, `miri-owner-retention`). The `fast-core` job aggregates them. |
+| Fast core | Every push and PR to `main`/`master` | Source policy and doc lint, format, provenance lints, the Loom models, clippy and native tests over the shared feature matrix, release-profile clippy (`clippy-release`), build-script probes, fixtures, and the library Miri jobs (`miri-value`, `miri-frame-blocks`, `miri-owner-retention`). The `fast-core` job aggregates them. |
 | Selected deep | Push and PR, after `fast-core` succeeds, only for lanes `select-deep` chooses | VM Miri (`miri-cross-arena`, pointer controls) and `fuzz-corpus-replay`. The `deep-safety` job aggregates them. |
 | Full sweep | `ci.yml` nightly cron and `workflow_dispatch` with `full: true`; the advisory workflows on their own schedules | Every deep lane, the pointer controls as singletons, plus the advisory Miri, fuzz and Valgrind workflows. |
 
@@ -47,7 +45,7 @@ files and fails on drift.
 | File | Trigger | Blocking | Purpose |
 |---|---|---|---|
 | `ci.yml` | push/PR to `main`/`master`; nightly 06:00 UTC full sweep; `workflow_dispatch` (`full`, default true) | Yes | Fast core and selected deep layers |
-| `miri.yml` | daily 02:00 UTC; `workflow_dispatch` | No | Advisory Miri: `dotnet-utils` suite, assembly and VM singleton manifest |
+| `miri.yml` | daily 02:00 UTC; `workflow_dispatch` | No (except `advisory-discovery`, whose manifest guard can fail the run) | Advisory Miri: `dotnet-utils` suite, assembly and VM singleton manifest |
 | `fuzz.yml` | daily 00:00 UTC; `workflow_dispatch` | No | Duration-based fuzz campaigns and crash minimization |
 | `valgrind.yml` | daily 04:00 UTC; `workflow_dispatch` | No | Native leak and uninitialized-memory checks on curated integration tests |
 | `self-hosted-probe.yml` | `workflow_dispatch` | No | One pointer batch on the self-hosted runner, reporting wall time and memory peak |
@@ -57,6 +55,7 @@ files and fails on drift.
 | Job | Source of truth |
 |---|---|
 | `doc-lint` | Its steps in `ci.yml`: `xtask verify-slots`, the pointer, selector, aggregate, cross-arena manifest and build-invocation guard script tests, `pointer_provenance.sh verify-batches`, `scripts/check_doc_drift.sh`, and the intra-doc-link check |
+| `matrix-definitions` | Emits `SHARED_FEATURE_MATRIX` for the `clippy` and `test` jobs |
 | `format`, `clippy`, `test` | `cargo fmt`; `SHARED_FEATURE_MATRIX` in `xtask/src/main.rs` (`cargo run -p xtask -- matrix test-features`). The `test` job also runs native-effects and FieldType compile-fail doctests with diagnostic checking through `scripts/check_vm_effects_compile_fail.py` (the `field-types` mode selects FieldType) in no-features and multithreading, and the multithreading hang-probe filters listed in its YAML step. |
 | `clippy-release` | No features and `multithreading` with `--release`, so code under `cfg(not(debug_assertions))` is linted |
 | `provenance-lints` | `scripts/check_provenance_lints.sh` |
@@ -75,8 +74,9 @@ files and fails on drift.
 
 `timeout-minutes` values are caps sized from hosted samples, not expected runtimes. Jobs that use
 `scripts/ci_diagnostics.py` set `CI_DIAG_DEADLINE` to the job timeout minus three minutes so
-diagnostics can still upload. Historical measurements are retained in git at commit
-`747ac78d`; they are dated observations, not runtime guarantees.
+diagnostics can still upload. Historical measurements are in git (see
+[Where things are decided](../CONTRIBUTING.md#where-things-are-decided)); they are dated
+observations, not runtime guarantees.
 
 | Job | Timeout | Rationale |
 |---|---|---|
@@ -87,7 +87,7 @@ diagnostics can still upload. Historical measurements are retained in git at com
 | `provenance-lints`, `test` | 30 min | Whole-workspace builds per configuration |
 | `miri-cross-arena` | 30 min library, 45 min VM and native bridge | Exact guarded singletons, 1800 s per VM or bridge invocation |
 | `miri-pointer-controls` | 45 min | One VM Miri process per control |
-| `miri-pointer-batches` | 60 min | One support-library parse plus 10–11 controls in sequence |
+| `miri-pointer-batches` | 60 min | One support-library parse plus one batch of controls in sequence |
 | `miri.yml` advisory shards | 70 min | Cold-cache assembly and VM singletons |
 
 ## Blocking `miri-pointer-controls` lane
@@ -97,8 +97,7 @@ multithreading configurations. It is not a full VM Miri suite.
 
 - `pointer_mode=batched` (selected push/PR runs): `miri-pointer-batches` runs each batch as one
   Miri process that calls its controls in sequence and prints `batch-control ok <name>` lines.
-  Batches are `pointer_provenance_tests::batches::batch_N`; they skip p13 under
-  `memory-validation`.
+  Batches are `pointer_provenance_tests::batches::batch_N`.
 - `pointer_mode=singleton` (every full sweep, including selector fallback):
   `miri-pointer-controls` runs one Miri process per control shard.
 - If a batch fails, the singleton jobs re-run to attribute it. The lane still fails: a batch
@@ -154,13 +153,9 @@ cargo +"$NIGHTLY" miri test -p dotnet-value -- --test-threads=1
 cargo +"$NIGHTLY" miri test -p dotnet-vm-data --lib --no-default-features frame_alloc:: -- --test-threads=1
 ```
 
-The `miri-cross-arena` matrix also runs the native-effects bridge, byref-descriptor, activation,
-condition-wait, static-initializer failure/retirement, activation-abandonment, monitor heap and
-frame-home write-through, and nested-call root-transfer singletons in both configurations.
-Multithreading also runs finalizer-wait registration and retired-owner pending-queue controls,
-initializer cycle and busy-owner wait checks, foreign-source Substring, byref, child-return and
-monitor-wait controls, and a local contended monitor frame-home collection control. Bridge rows use
-`dotnet-vm-ops`; activation rows use `dotnet-vm`.
+The `miri-cross-arena` matrix runs exact singletons from its `include` list in `ci.yml`, in both
+configurations unless a row says otherwise. Bridge rows use `dotnet-vm-ops`; activation rows use
+`dotnet-vm`.
 
 Reproduce one cross-arena row with its selector from the `miri-cross-arena` `include` list:
 
@@ -232,7 +227,7 @@ DOTNET_SKIP_BUILD=1 RUSTFLAGS="--cfg loom" \
 owner-partitioned `clear_dead` and tracing on two arenas, each on its own loom thread) and the
 real `Finalizers` queue (`dotnet-vm/src/finalizers.rs`, compiled verbatim with `#[path]`) with a
 finalizer-thread safepoint model: a worker parked mid-call keeps its claimed and pending objects
-rooted through a stop-the-world collection. Both use a preemption bound of 3 (about 14 s). Under
+rooted through a stop-the-world collection. Both use a preemption bound of 3. Under
 `cfg(loom)` the managed thread id and `RwLock` are loom-aware in `dotnet_utils::sync`, because
 loom threads share one OS thread. The models avoid strings, whose global interner would outlive
 one loom execution.

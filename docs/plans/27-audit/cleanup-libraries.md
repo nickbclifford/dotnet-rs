@@ -1,10 +1,7 @@
 # Library audit cleanup dispositions
 
-This records the implementation disposition for LIB-1 through LIB-25 in
-`libraries.md`. It distinguishes source-policy guards from runtime evidence and
-lists only validation that was actually run. `dotnet-vm`, `dotnet-cli`, and
-`dotnet-benchmarks` changes are owned by the other cleanup agents; shared CI,
-benchmark, manifest, and diagnostic-checker wiring is owned by the coordinator.
+Dispositions for findings LIB-1 through LIB-25 of the [27a audit](../27a-test-audit.md) (the
+finding texts are in git). Source-policy guards are distinguished from runtime evidence.
 
 ## Dispositions
 
@@ -55,55 +52,13 @@ for LIB-6. Existing tolerant APIs remain explicit compatibility surfaces:
 - `runtime_type_from_concrete` and `runtime_type_from_method_type` return
   `Option<RuntimeType>` and retain their existing optional-probe behavior.
 
-The remaining tolerant classifier and optional-probe policies are a separate
-follow-up tracked in the [plan follow-up queue](../README.md); this cleanup does
-not convert unrelated public query APIs.
+The remaining tolerant classifier and optional-probe policies are tracked in the
+plans README under [Not yet planned](../README.md#not-yet-planned) ("Metadata
+failures hidden by boolean classification and reflection probes"); this cleanup
+did not convert unrelated public query APIs.
 
-## Validation run
+## Evidence limits
 
-Commands and results below are the exact focused or matrix checks run for this
-cleanup. Root-owned combined checks and diagnostics are included only after
-their result was reported.
-
-### Focused library and feature checks
-
-- `cargo test -p dotnet-types` — 31 passed.
-- `cargo test -p dotnet-vm-ops array_assignability::tests` — 2 passed.
-- `cargo test -p dotnet-macros` — 12 passed.
-- `cargo test -p dotnet-utils --no-default-features --features multithreading cross_arena` — 26 passed.
-- `cargo test -p dotnet-runtime-memory --no-default-features --features multithreading compare_exchange_reports_mismatch_and_owner_bounds_errors -- --test-threads=1` — 1 passed.
-- `cargo test -p dotnet-runtime-memory --lib --no-default-features --features memory-validation compare_exchange_reports_mismatch_and_owner_bounds_errors -- --test-threads=1` — 1 passed.
-- `cargo test -p dotnet-utils --lib --no-default-features --features memory-validation test_mixed_access_validation_records_both_access_kinds -- --test-threads=1` — 1 passed.
-- `cargo test -p dotnet-value --lib --no-default-features --features memory-validation test_arena_mismatch_panics -- --test-threads=1` — 1 passed.
-- `cargo test -p dotnet-value --lib --no-default-features --features memory-validation test_object_ptr_as_heap_storage_corrupt_magic_panics -- --test-threads=1` — 1 passed.
-- `cargo test -p dotnet-value --lib --release --no-default-features -- --list` — 79 tests listed; the corrupt-magic selector is absent, with no warning after gating its test constructor.
-- `cargo test -p dotnet-assemblies support_contract` — 19 passed against the built embedded support assembly.
-- `cargo run -p xtask -- verify-slots` — verified 21 primary support-slot accessors.
-- Two simultaneous `cargo test -p dotnet-assemblies version_tests` invocations — each 4 passed, including binding and redirect cases.
-- `cargo test -p dotnet-value --test stack_value_cross_arena_retired --no-default-features` and `cargo test -p dotnet-value --test stack_value_cross_arena_retired` — each 3 passed.
-- `cargo test -p dotnet-value --lib --features multithreading codec_` — 7 passed at normal parallel test scheduling.
-- `cargo test -p dotnet-pinvoke by_ref_write_back` — 2 passed.
-- `cargo test -p dotnet-types --lib --features generic-constraint-validation direct_type_generic -- --test-threads=1` and `cargo test -p dotnet-types --lib --features generic-constraint-validation cyclic_generic_constraint -- --test-threads=1` — each 1 passed.
-- `cargo check -p dotnet-types --no-default-features`, `cargo test -p dotnet-types --no-run`, `cargo check -p dotnet-vm-ops --no-default-features`, `cargo check -p dotnet-runtime-resolver --no-default-features`, and `cargo check -p dotnet-assemblies --no-default-features` — all passed during the comparer API migration.
-
-### Miri and fuzz
-
-- `MIRIFLAGS='-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks -Zmiri-strict-provenance' cargo +nightly-2026-05-27 miri test -p dotnet-utils --lib --no-default-features atomic::pointer_atomic_tests::unaligned_pointer_access_is_limited_to_synchronized_load_and_store -- --exact --test-threads=1` — 1 passed.
-- `MIRIFLAGS='-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks -Zmiri-strict-provenance' cargo +nightly-2026-05-27 miri test -p dotnet-utils --lib --no-default-features atomic::tests::test_load_field_misaligned_falls_back_non_mt -- --exact --test-threads=1` — 1 passed.
-- `MIRIFLAGS='-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks -Zmiri-strict-provenance' cargo +nightly-2026-05-27 miri test -p dotnet-runtime-memory --lib --no-default-features access::tests::compare_exchange_reports_mismatch_and_owner_bounds_errors -- --exact --test-threads=1` — 1 passed.
-- `MIRIFLAGS='-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks -Zmiri-strict-provenance' cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features --features multithreading pointer::tests::arena_lifetime_transport_strict_core -- --exact --test-threads=1` — 1 passed.
-- `ASAN_OPTIONS=detect_leaks=0 python3 scripts/replay_fuzz_corpus.py --workdir crates/dotnet-value --corpus fuzz/corpus/fuzz_managed_ptr_roundtrip --target fuzz_managed_ptr_roundtrip --output-dir /tmp/dotnet-rs-27b-fuzz-libraries` — 129 tracked inputs verified; 184 executions completed.
-- `ASAN_OPTIONS=detect_leaks=0 python3 scripts/replay_fuzz_corpus.py --workdir crates/dotnet-value --corpus fuzz/corpus/fuzz_managed_ptr_offset --target fuzz_managed_ptr_offset --output-dir /tmp/dotnet-rs-27b-fuzz-libraries` — 171 tracked inputs verified; 172 executions completed.
-
-The fuzz replays disable LeakSanitizer because this sandbox runs under ptrace;
-address instrumentation remains enabled. This is an execution-environment
-constraint, not a source or CI suppression.
-
-## Remaining coordination-owned validation
-
-The coordinator owns the combined `check.sh` matrix, diagnostic checker/CI
-wiring, Miri selector manifests, advisory discovery accounting, and benchmark
-smoke. The VM and CLI agents own their crate callers and fixture lanes. Their
-final combined results are recorded in the [shared cleanup verification
-ledger](../27-test-audit-ledger.md#combined-cleanup-verification); this file
-does not duplicate root-owned commands or claim those results on their behalf.
+The value-fuzz corpus replays ran with LeakSanitizer disabled because the local sandbox runs
+under ptrace; address instrumentation stayed enabled. This is an execution-environment limit, not a
+source or CI suppression.

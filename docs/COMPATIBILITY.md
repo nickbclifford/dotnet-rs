@@ -8,9 +8,16 @@ The host path has been validated at three levels:
 
 - the repository's managed fixture suite;
 - a Newtonsoft.Json application that serializes and deserializes an object,
-  with matching output and exit status under stock `dotnet` and `dotnet-rs`;
+  with matching output and exit status under stock `dotnet` and `dotnet-rs`
+  (`crates/dotnet-cli/tests/host_projects/newtonsoft_roundtrip`);
 - an EF Core InMemory smoke application that creates, saves, and queries an
-  entity with matching output and exit status under both runtimes.
+  entity with matching output and exit status under both runtimes
+  (`crates/dotnet-benchmarks/fixtures/ef_inmemory`).
+
+A dependency-injection host project (`crates/dotnet-cli/tests/host_projects/dependency_injection`)
+is also run as a host rung for dynamic-code changes; its matching output does not prove that the
+provider's background compilation succeeded (see [plan 25](plans/25-dynamicmethod-implementation.md)).
+Run the host projects with `scripts/diff_run.sh --host` and `DOTNET_RS_BIN` set to a release CLI.
 
 The EF Core work exercised generic method context propagation, reflection and
 nullability metadata, by-reference value-type marshalling, and method identity
@@ -39,6 +46,9 @@ The enabled CLR differential fixtures also validate these runtime behaviors:
   `dotnet`. The debug-only `stdout_is_preserved_on_internal_error_exit_with_pipe_and_file_capture`
   regression verifies the bytes after executor shutdown through both pipe and file
   capture; it does not compare the injected VM failure exit against the CLR's successful exit.
+- Under `multithreading`, GC handles are VM-wide, finalizers run on a dedicated finalizer
+  thread, and canonical strings and reflection objects keep one identity across threads; see
+  [GC and Memory Safety](GC_AND_MEMORY_SAFETY.md#shared-gc-handle-roots).
 
 The implementation paths are in
 [`dotnet-intrinsics-core/src/math.rs`](../crates/dotnet-intrinsics-core/src/math.rs),
@@ -49,24 +59,29 @@ The implementation paths are in
 [`dotnet-intrinsics-reflection/src/fields.rs`](../crates/dotnet-intrinsics-reflection/src/fields.rs).
 
 This is compatibility evidence, not a claim of general EF Core or .NET runtime
-compatibility. EF Core SQLite, broad framework coverage, `AssemblyBuilder`/`TypeBuilder`,
-networking, and complete asynchronous scheduling remain outside the validated
-surface.
+compatibility. EF Core SQLite, broad framework coverage and networking remain outside the
+validated surface. Known gaps are tracked under
+[Not yet planned](plans/README.md#not-yet-planned) in the plans README.
 
 ## Dynamic code and Reflection.Emit
 
 The VM reports `RuntimeFeature.IsDynamicCodeSupported` true and `IsDynamicCodeCompiled` false.
-EF Core needs the former; Newtonsoft's Emit path currently needs `DynamicMethod.InitLocals`.
+EF Core needs the former. `IsDynamicCodeCompiled` stays false because Newtonsoft's Emit path would
+then need `DynamicMethod.InitLocals`, which the recording `DynamicMethod` does not implement.
 
 - **Expression trees** use the Linq interpreter. Generic support-assembly thunks handle up to 16
   parameters without byref, pointer or byref-like types; other shapes use the framework's emitted
   object-array thunk. `CanCompileToIL` stays false because EF InMemory hits an unimplemented
   reflection method when it is true.
-- **System.Text.Json** uses its own Reflection.Emit member accessor.
+- **System.Text.Json** selects its Reflection.Emit member accessor from
+  `IsDynamicCodeSupported`, so it runs over `DynamicMethod`
+  (`crates/dotnet-cli/tests/fixtures/reflection/json_serializer_poco_42.cs`).
 - **`System.Reflection.Emit.DynamicMethod`** uses a recording support-assembly implementation.
   It supports branches, fields, indirect calls, exception regions, generic and nested types,
-  byref signatures and modules. Raw `DynamicILInfo` is unsupported; compiled synthetic assemblies
-  are not yet collected and dynamic stack traces have not been compared. See
+  byref signatures and modules. Stack traces through dynamic methods are compared with `dotnet`
+  (`dynamic_method_stack_trace_matches_dotnet`). Raw `DynamicILInfo` is unsupported, and compiled
+  synthetic assemblies are not yet collected (see
+  [Not yet planned](plans/README.md#not-yet-planned)). See
   [plan 25](plans/25-dynamicmethod-implementation.md).
 - **`AssemblyBuilder`, `TypeBuilder` and `ModuleBuilder`** are not supported and not planned.
 

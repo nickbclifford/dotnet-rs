@@ -1,8 +1,7 @@
-# VM test cleanup evidence
+# VM test cleanup
 
-This record closes the VM findings assigned from the [shared audit ledger](../27-test-audit-ledger.md),
-[the VM review](vm.md), [the inline review](vm-inline.md), and [the pointer review](vm-provenance.md).
-It distinguishes implemented changes from checks that have actually completed.
+Dispositions for the VM (VM-*), inline-test (VI-*) and pointer-provenance (VP-*) findings of the
+[27a audit](../27a-test-audit.md) (the finding texts are in git).
 
 ## Dispositions
 
@@ -26,40 +25,10 @@ It distinguishes implemented changes from checks that have actually completed.
 | VP-3 | p09 and p41 make nested callees push and pop 1,024 values. Their observers require actual evaluation-stack capacity growth while retaining p09's pointer roundtrip and p41's constructor receiver/collection assertions. |
 | VP-4 | p19 adds `IndexOutOfRangeException` to its mock corlib, observes `MethodThrew`, and distinguishes the expected managed exception from host errors and panics. Checked array-stride multiplication maps an unrepresentable offset to the managed bounds exception. After passing both native and Miri configurations, p19 was enabled as pointer control shard 45. |
 
-## Validation
+## Checks
 
-Completed checks:
-
-- `cargo test --manifest-path crates/dotnet-vm/fuzz/tools/Cargo.toml --bin generate_structured_corpus` — passed (1 test).
-- `cargo run --manifest-path crates/dotnet-vm/fuzz/tools/Cargo.toml --bin generate_structured_corpus` — passed; generated 11 named semantic entries.
-- `bash scripts/pointer_provenance.sh controls --configuration no-features --shard 32`, `26`, `36`, and `41` — p35, p29, p09, and p41 each passed pinned Tree Borrows Miri as singleton controls. An initial p35 run exposed the fixture's by-value field initialization; the test now initializes the local by address.
-- The same four commands with `--configuration multithreading` — p35, p29, p09, and p41 each passed pinned Tree Borrows Miri.
-- `bash scripts/pointer_provenance.sh controls --configuration no-features --shard 45` and the same command with `--configuration multithreading` — promoted p19 passed as an enabled singleton in both configurations; each run confirmed 45 discovered controls.
-- `MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks" cargo +nightly-2026-05-27 miri test -p dotnet-vm --lib --features multithreading executor::executor_collection_tests::arena_lifetime_mark_command_rejects_stale_registration -- --exact --test-threads=1` — the production stale-Mark test passed (1 test).
-- `DOTNET_SKIP_BUILD=1 cargo nextest run -p dotnet-vm --lib --no-default-features -E 'test(/pointer_provenance_tests::p(10|11|19|20)_/)'` and the same command with `--features multithreading` — p10, p11, enabled p19, and p20 positive/negative array controls passed 4/4 in each configuration.
-- `DOTNET_SKIP_BUILD=1 cargo nextest run -p dotnet-vm --lib --no-default-features --features fuzzing -E 'test(/(intrinsics_codegen_guard_tests::tests::|intrinsics::metadata::tests::|blocking_intrinsics_have_no_sync_fallback)/)'` — 10/10 metadata and runtime registry tests passed, including the three loaded `GetValue` shapes and the Math.Sqrt dispatch witness.
-- `DOTNET_SKIP_BUILD=1 cargo nextest run -p dotnet-vm --lib --no-default-features --features fuzzing -E 'test(/fuzzing::tests::/)'` — all 16 native fuzz regression tests passed, including setup failure, exact entrypoint reachability, and independent semantic-seed decoding.
-- `DOTNET_SKIP_BUILD=1 cargo nextest run -p dotnet-vm --lib --no-default-features --features fuzzing -E 'test(/instruction_trace_excludes_constructor_helper_ips/)'` — passed (1 test) with the control explicitly using the mock loader.
-- Final-source fuzz Miri discovered all 16 named cases and passed them in eight guarded two-case processes. The helper/localloc pair passed this exact selection after the mock hierarchy fix:
-
-  ```sh
-  MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks" \
-    CARGO_TARGET_DIR=target/27b-miri-groups-1gpuqnvc/group-02 \
-    cargo +nightly-2026-05-27 miri test -p dotnet-vm --features fuzzing --lib -- \
-      --exact --test-threads=1 \
-      fuzzing::tests::instruction_trace_excludes_constructor_helper_ips \
-      fuzzing::tests::miri_localloc_indirect
-  ```
-
-  Result: 2 passed, 0 failed, 0 ignored; the diagnostics guard classified the process as success. The first grouped run was 15/16 because the mock loader lacked `System.Enum`; adding minimal `ValueType`/`Enum` ancestry let `newobj` reach the constructor.
-- Executor corpus replay passed with AddressSanitizer enabled: 263 tracked inputs verified, 527 executions. LeakSanitizer is disabled for the host ptrace restriction. The 242 byte-identical renames and 11 semantic additions were the only corpus index changes.
-
-  ```sh
-  ASAN_OPTIONS=detect_leaks=0 CARGO_NET_OFFLINE=true CARGO_BUILD_JOBS=2 \
-    python3 scripts/replay_fuzz_corpus.py --workdir crates/dotnet-vm/fuzz \
-      --corpus corpus/fuzz_executor --target fuzz_executor \
-      --output-dir /tmp/dotnet-rs-27b-fuzz-replay-scoped-final
-  ```
-
-The changed pointer control shards are 32 (p35), 26 (p29), 36 (p09), 41 (p41), and 45 (p19),
-under both `no-features` and `multithreading`; runner commands are documented in [CI.md](../../CI.md).
+The changed pointer control shards are 32 (p35), 26 (p29), 36 (p09), 41 (p41) and 45 (p19), under
+both `no-features` and `multithreading`; runner commands are in [CI.md](../../CI.md#pointer-lane).
+The fuzz-harness tests (`fuzzing::tests::`) run natively in the `fuzzing` configuration and passed
+under Miri as guarded two-case groups; executor corpus replay passed with AddressSanitizer
+(LeakSanitizer disabled locally because the sandbox's ptrace restriction prevents it).

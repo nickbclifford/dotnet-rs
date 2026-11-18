@@ -18,8 +18,19 @@ CLI's Rayon pool, tracer, and integration-test timeout harness can do so in eith
 
 The `// SAFETY:` predicates for atomics, publication, lock order and per-thread state are stated
 in the [invariant registry](INVARIANT_REGISTRY.md): `F4.WidthAligned`,
-`F7.InitializationPublished`, `F8.LockOrderRespected`, `F8.NoSafepointWhileHeapBorrowed`,
-`F11.ObjectPointerThreadSafe` and `F11.PInvokeLastErrorArenaLocal`.
+`F6.EventWaitRegistration`, `F6.PoolPlaceholderRoot`, `F6.ThreadStaticRoot`,
+`F6.InitializerClaimLifetime`, `F7.InitializationPublished`, `F8.LockOrderRespected`,
+`F8.NoSafepointWhileHeapBorrowed`, `F11.ObjectPointerThreadSafe` and
+`F11.PInvokeLastErrorArenaLocal`.
+
+## Verification
+
+Besides the multithreaded fixtures and unit tests, the CI `loom` job model-checks the
+stop-the-world handshake (`crates/dotnet-vm/tests/loom_stw.rs`), the production worker registry's
+release, collection and shutdown races (`crates/dotnet-vm/tests/loom_workers.rs`), and the shared GC
+handle table and finalizer queue (`crates/dotnet-runtime-memory/tests/loom_shared_tables.rs`).
+Commands are in [CI — Loom](CI.md#loom). There is no Loom model for the intern or canonical
+reflection tables.
 
 ## Thread Lifecycle (`threading/`)
 
@@ -33,7 +44,7 @@ Common interface implemented by both `basic::ThreadManager` and `stub::ThreadMan
 - `thread_count`: Returns the number of currently active managed threads.
 - `is_gc_stop_requested`: Returns `true` if a STW pause is pending. Checked at safe points.
 - `safe_point` / `safe_point_traced`: Transitions the thread to `AtSafePoint`, waits for GC commands from the coordinator, and resumes when the STW pause ends.
-- `execute_gc_command`: Dispatches a specific `GCCommand` (MarkAll, Sweep, etc.) to the local arena.
+- `execute_gc_command`: Dispatches a specific `GCCommand` (`Mark(MarkPhaseCommand)` or `Sweep(SweepPhaseCommand)`) to the local arena.
 - `request_stop_the_world` / `request_stop_the_world_traced`: Initiates a STW pause, waiting until all threads are suspended. Returns a `Guard` that releases threads upon drop.
 
 ### Thread State Machine (`ThreadState` in `threading/mod.rs`)
@@ -158,58 +169,90 @@ an infinite wait for queued work reports the host single-threaded deadlock error
 
 ### Managed worker lifecycle and process exit
 
-`SharedGlobalState` owns the native worker handles, and one registry lock protects each worker's
-lifecycle and managed result. A worker follows
-`Running → Completed(outcome) → Retired ⇄ Finalizing`; shutdown transitions from `Retired` to
-`ShuttingDown`, then `Drained` or `Leaked`. Eligible empty managed owners instead transition from
-`Retired` through `Releasing` to `Released` or `Leaked`, preserving completion entries. Pool and
-finalizer owners remain retained. A panic follows the existing drain-or-leak path.
-`Thread.Join` observes `Completed` and consumes the outcome without waiting for the native thread.
-Publication and thread-static closure share the registry lock, so Join cannot observe completion
-before that owner's storage is removed. Unwinding closes the owner before publishing the panic.
-After segment cleanup and publication, the completed owner stops ordinary managed execution and
-services coordinator commands on its own thread while its arena remains registered. If cleanup and
-a coordinated sweep prove that the arena is empty and has no pending work or retained child records,
-it can unregister, drain its exact leases, and release the arena; otherwise it remains registered
-for collection until shutdown. Finalizers run on one
-registered background executor with its own arena and managed thread identity. An abort interrupts a
-non-terminating finalizer. The [GC contract](GC_AND_MEMORY_SAFETY.md#retired-worker-arenas) describes
-the collection-exclusion and exact-lease-drain ordering.
+`SharedGlobalState` owns the native worker handles (`threading/workers.rs`), and one registry lock
+protects each worker's lifecycle and managed result:
 
-An unhandled worker exception is recorded once in `SharedGlobalState` before worker completion
-is published, and requests the existing abort signal. Other executors stop at their next executor
-safepoint; `Join` cannot catch the exception. The entry executor returns the recorded exception to
-the CLI, which reports it as an unhandled exception. A native operation already in progress must
-return before its executor can observe the abort.
+```
+Running → Completed(outcome) → Retired ⇄ Finalizing
+Retired → ShuttingDown → Drained | Leaked          (shutdown)
+Retired → Releasing → Released | Leaked            (empty ordinary owner)
+```
 
-After Main returns, `Executor::run` keeps the entry arena registered and services GC stops while
-foreground workers finish. Pending or active finalizers do not delay the exit decision. Running
-background workers and pending finalizer work cause an abort request; managed code observes it at
-safepoints, including in `Sleep`. The entry executor continues participating in GC until canceled
-workers stop. A native operation that does not return can still delay shutdown.
+A panic follows the drain-or-leak path. `Thread.Join` observes `Completed` and consumes the outcome
+without waiting for the native thread. Publication and thread-static closure share the registry
+lock, so Join cannot observe completion before that owner's storage is removed; unwinding closes the
+owner before publishing the panic.
+
+**Retirement.** A completed worker does not drop its executor. It discards finished execution
+state, native activations, hydrated reflection object caches and managed-pointer decode entries;
+clears its current `Thread` root; and prunes completed child records (active or unstarted child
+records still root their delegates and arguments). It then enters `Executor::serve_retired`: it
+never resumes managed entry code, counts as stopped for stop-the-world, and services the
+coordinator's mark, finalize and sweep commands on its own OS thread while its arena stays
+registered. Normally it publishes finalizers to the dedicated finalizer worker; if it runs
+owner-side finalizers it is `Finalizing` meanwhile, and repeats the cleanup afterwards.
+
+**Release of empty arenas.** After a coordinated sweep that follows that cleanup, an ordinary owner
+checks for zero total Gc allocations, no pending finalizers and no retained child records, then
+rechecks under collection exclusion (weak clearing and finalizer promotion precede sweep, so the
+check excludes objects kept alive by statics, strong handles, finalizers or other arenas). It
+moves to `Releasing`, extracts its storage into a retention guard and unregisters from collection
+and thread coordination; outside those locks it drains its exact lease registration and frees the
+arena (`Released`), or retains it (`Leaked`) if the drain is incomplete. Pool and dedicated-finalizer
+owners, and owners with live objects, keep their arenas until shutdown. Live executors join released
+handles; completion entries and outcomes survive release.
+
+**Fatal exceptions.** An unhandled worker exception is recorded once in `SharedGlobalState` before
+worker completion is published, and requests the abort signal. Other executors stop at their next
+executor safepoint; `Join` cannot catch the exception. The entry executor returns the recorded
+exception to the CLI, which reports it as an unhandled exception. A native operation already in
+progress must return before its executor can observe the abort.
+
+**Process exit.** After Main returns, `Executor::run` keeps the entry arena registered and services
+GC stops while foreground workers finish (`wait_for_foreground_workers`). The dedicated finalizer
+worker does not delay the exit decision, but a retired owner in `Finalizing` does, so a finalizer
+that never returns there blocks `run`. Running background workers cause an abort request; managed
+code observes it at safepoints, including in `Sleep`, and the entry executor keeps participating in
+GC until canceled workers stop. A native operation that does not return can still delay shutdown.
 `Thread::InternalFinalize` has no native handle to release because the registry owns those handles.
 
-The CLI and in-process harness call `SharedGlobalState::shutdown_workers` after dropping the entry
-executor, retaining the extracted entry arena until shutdown returns. Shutdown requests abort,
-waits for running and finalizing workers to stop, signals retired owners and joins remaining native
-handles, also waiting for any live-path join already in progress. A nonempty retired owner unregisters
-and frees its arena only after workers are quiescent and no finalizer is pending, unless abort
-abandoned the work. This prevents collection from tracing into freed arenas. In single-threaded builds finalizers run in a separate segment on the interrupted
-arena, with a stable, rooted background `Thread` and a distinct logical owner key. The caller's
-segment and `Thread` remain rooted and are restored on completion or error. Arena ownership and
-pointer serialization remain unchanged. Automatic finalizers stay queued while the interrupted
-owner holds a monitor or initializer claim; later safepoints retry them. An explicit finalizer wait
-forces execution, reporting a deadlock if the finalizer needs the parked owner's monitor or claim.
+**Shutdown.** The CLI and in-process harness call `SharedGlobalState::shutdown_workers` after
+dropping the entry executor, retaining the extracted entry arena until shutdown returns. Shutdown
+requests abort, waits until no worker is `Running` or `Finalizing`, signals retired owners and joins
+the remaining native handles, including joins already claimed by another reaper or shutdown caller.
+Each retained owner then excludes collections, rechecks quiescence and that no finalizer is queued
+(unless abort abandoned it), moves to `ShuttingDown`, unregisters its exact arena identity, drains
+outstanding leases outside the collection lock and frees its arena, or leaks it if the drain cannot
+complete. This keeps collection from tracing into freed arenas; the ordering is
+`F1.RetiredCollectionExclusion` (see also [Retired worker arenas](GC_AND_MEMORY_SAFETY.md#retired-worker-arenas)).
 
-A completed worker with live objects retains its OS thread and arena until VM shutdown; empty
-eligible arenas release after a coordinated sweep and exact lease drain. Once their worker closure finishes, live
-executors take and join their handles outside the registry lock; shutdown joins any remaining handles
-and waits for all claimed joins, including those of another shutdown caller.
-Completion entries and outcomes remain stable. Arena IDs are monotonic and the
-process supports at most 65,535 IDs; empty-worker release does not recycle them because owner-keyed
-state and pointer/registration identities may outlive an individual execution. A worker with live
-objects and the dedicated pool/finalizer owners retain their arenas as required by reachable roots.
-The detailed design and acceptance checks are in the [thread lifecycle plan](plans/26-thread-lifecycle-and-multicast-fallback.md).
+**Single-threaded finalizers.** Without `multithreading`, finalizers run in a separate segment on
+the interrupted arena, with a stable, rooted background `Thread` and a distinct logical owner key.
+The caller's segment and `Thread` remain rooted and are restored on completion or error. Automatic
+finalizers stay queued while the interrupted owner holds a monitor or initializer claim; later
+safepoints retry them. An explicit finalizer wait forces execution, reporting a deadlock if the
+finalizer needs the parked owner's monitor or claim.
+
+**Accepted limits.** Arena IDs are monotonic and the process supports at most 65,535 of them;
+releasing an empty worker does not recycle its ID, because owner-keyed state and pointer/registration
+identities may outlive an execution. A completed worker with live objects keeps its OS thread and
+arena until shutdown. The design is in plans [09](plans/09-retired-arena-lifetime.md) and
+[26](plans/26-thread-lifecycle-and-multicast-fallback.md).
+
+### Canonical allocation service
+
+Under `multithreading`, canonical reflection objects (types, methods, fields, properties,
+assemblies) and canonical strings (literals, `String.Empty`, interned strings) are homed in the
+dedicated finalizer executor's arena, which is retained until shutdown. A non-owner activation that
+misses the authoritative table queues a plain-data `CanonicalKey` with `threading/canonical.rs`,
+suspends without holding its arena mutation, and retries the rooted table lookup when the service
+completes the request. A request ends with `Canceled` (every waiter dropped it first), `Shutdown`
+or `Materialization` (the owner could not build the object). The tables are rooted as described in
+[Shared reflection roots](GC_AND_MEMORY_SAFETY.md#shared-reflection-roots).
+
+Other modules: `threading/pool.rs` (request accounting for CoreLib's work queue and the pool
+workers), `threading/events.rs` (VM-owned unnamed events), `threading/local.rs` (arena-local
+records that root managed `Thread` objects, delegates and start arguments).
 
 ## Safe Points
 
@@ -230,12 +273,13 @@ pending request:
 - **Waits.** Admitted native-effect calls use driver-owned condition waits: `monitor_enter` for
   supported `Monitor` calls, `monitor_wait` for `Monitor.Wait`, `sleep_until` for `Thread.Sleep`,
   `wait_finalizers` for `GC.WaitForPendingFinalizers`, and the initializer registration created by
-  `ensure_initialized`. The executor sleeps outside a
-  mutation and rechecks readiness after waking; in MT these waits participate in GC-stop handling,
-  and finalizer waits use the captured enqueue generation in MT. Excluded monitor
-  byref calls with Transient or Unmanaged origins retain the safe-point-aware synchronous
-  handlers (`enter_safe` and `enter_with_timeout_safe`). Every static-initializer trigger (field
-  access, `newobj`, eligible calls, `RunClassConstructor`) waits through `ensure_initialized`. See the
+  `ensure_initialized`. The executor sleeps outside a mutation (`NativeWaitSleep`) for at most
+  `DOTNET_SAFE_POINT_YIELD_MS` (clamped to 1–10 ms) and rechecks readiness after waking; in MT
+  these waits participate in GC-stop handling, and finalizer waits use the captured enqueue
+  generation. A `Monitor` `lockTaken` byref with a `Transient` origin is rejected with
+  `InvalidProgramException`; other origins, including unmanaged addresses, take the same wait path.
+  Every static-initializer trigger (field access, `newobj`, eligible calls, `RunClassConstructor`)
+  waits through `ensure_initialized`. See the
   [condition-wait design](plans/08-async-effects/slice-5-condition-waits.md) and
   [static-initialization design](plans/08-async-effects/slice-4-static-initialization.md).
 
@@ -281,7 +325,7 @@ The path to thread suspension:
 1. `VesContext::check_gc_safe_point()` first checks the `active_borrows` scope counter; if it is > 0 it returns `false` to prevent deadlocks (the thread cannot safely park while holding GC borrows). Otherwise it evaluates `ThreadManager::is_gc_stop_requested()`.
 2. If `true`, the operation yields after bounded work. Native activations retain their progress and resume without replaying the instruction.
 3. The executor loop in `crates/dotnet-vm/src/executor.rs` sees the request after `mutate_root` returns and calls `ThreadManagerOps::safe_point(thread_id, coordinator)`.
-4. In `basic.rs`, `safe_point()` first short-circuits (returns immediately) if `is_gc_stop_requested()` is false or the thread-local `IS_PERFORMING_GC` flag is set; otherwise it sets the thread state to `AtSafePoint`, notifies the STW coordinator, and blocks on a condition variable.
+4. In `basic.rs`, `safe_point()` first short-circuits (returns immediately) if `is_gc_stop_requested()` is false, the thread-local `IS_PERFORMING_GC` flag is set, or the thread holds a `ThreadSafeLock` write guard (`has_active_thread_safe_write_guard`; marking needs the read lock). It flushes the thread's write-barrier buffer before it is counted as stopped; `request_stop_the_world` asserts that the initiator holds no write guard and flushes its own buffer. Otherwise it sets the thread state to `AtSafePoint`, notifies the STW coordinator, and blocks on a condition variable.
 5. While blocked, it may be woken up to process a `GCCommand` (via `execute_gc_command_for_current_thread`) before going back to sleep.
 6. Once the STW guard is dropped, the condition variable is pulsed, the state resets to `Running`, and execution resumes.
 
@@ -301,22 +345,26 @@ storage.
 Implements .NET's `Monitor.Enter`/`Monitor.Exit` semantics (the `lock` keyword) and `wait`/`pulse` signals.
 
 - `SyncManagerOps`:
-  - `get_or_create_sync_block`: Lazily allocates a sync block index for an object layout.
+  - `create_sync_block`: Allocates a new sync block and its index.
   - `get_sync_block`: Retrieves an existing sync block by index.
   - `try_enter_block`: Attempts to acquire a block without waiting.
 - `SyncBlockOps`:
   - `try_enter`: Non-blocking lock attempt.
   - `enter`: Blocking lock acquisition. Records contention metrics.
   - `enter_with_timeout`: Blocking lock with an explicit timeout.
-  - `enter_safe`: Blocking lock with GC safe point awareness. Periodically yields to allow STW pauses.
-  - `enter_with_timeout_safe`: Timed lock with GC safe points.
   - `exit`: Release the lock (decrements recursion count; unlocks if 0).
-  - `begin_wait` / `poll_wait` / `pulse`: Register a condition waiter, release the monitor,
-    and select waiting threads for `Monitor.Wait`, `Pulse`, and `PulseAll`.
+  - `is_owned`: Whether the given thread owns the lock.
+  - `begin_wait` / `poll_wait` / `cancel_wait` / `restore_wait` / `pulse`: Register a condition
+    waiter and release the monitor, poll or cancel it, restore recursion on reacquisition, and
+    select waiting threads for `Monitor.Wait`, `Pulse`, and `PulseAll`.
+
+GC-aware monitor waiting is not a `SyncBlockOps` method: a contended native-effect `Monitor` call
+returns `NativeWaitSleep::Monitor`, and the executor waits outside a mutation (see
+[Safe Points](#safe-points)).
 
 ### Threaded Implementation (`sync/threaded.rs`)
 
-- **`SyncBlockManager` Data Structure**: Uses a `Mutex<HashMap<NonZeroUsize, Arc<SyncBlock>>>` mapping a unique index to a sync block, and a `Mutex<usize>` (starting at 1) for index generation.
+- **`SyncBlockManager` Data Structure**: Uses an ordered mutex `blocks` over `HashMap<NonZeroUsize, Arc<SyncBlock>>` mapping a unique index to a sync block, and an ordered mutex `next_index` (starting at 1) for index generation.
 - **`SyncBlock` Data Structure**: Contains a `Mutex<SyncBlockState>` and a `Condvar`.
 - **`SyncBlockState`**: Tracks the `owner_thread_id` (`ArenaId`), `recursion_count`, release
   epoch and condition waiters. A wait atomically queues its waiter and releases all recursion;
@@ -324,25 +372,18 @@ Implements .NET's `Monitor.Enter`/`Monitor.Exit` semantics (the `lock` keyword) 
   waiter reacquires the monitor and restores its recursion before returning. Cancellation removes
   the queue entry. In ST a timed wait returns false, while an infinite wait reports a deadlock.
 - Objects are identified by their sync block index, stored in the `ObjectInner::sync_block_index` field (`0` means none yet).
-- `enter_safe` uses a `loop` with a configurable yield interval (default 10ms). Periodically, it wakes up, drops the lock, and checks `thread_manager.is_gc_stop_requested()`. If a STW pause is pending, it returns `LockResult::Yield` without calling `safe_point()` directly — the caller converts this to `StepResult::Yield`, and the executor's main loop drives the safe-point handshake on the next iteration. This prevents deadlocks when a thread waiting for a monitor lock is asked to suspend by the GC.
 
-#### `get_or_create_sync_block` two-step contract
+#### Sync block assignment
 
-`SyncBlockManager::get_or_create_sync_block` takes `current_index: Option<NonZeroUsize>` and returns
-`(new_index, Arc<SyncBlock>)`.
+`SyncBlockManager::create_sync_block` locks `blocks`, then `next_index` (`lock_after`), inserts a new
+block and returns `(index, Arc<SyncBlock>)`. No external callback runs under `blocks`.
 
-- The manager does all map/index allocation work internally while `SyncBlockManager::blocks` is
-  locked.
-- No external callbacks execute under `blocks`, so callers cannot accidentally re-enter sync-block
-  APIs from inside a lock-held closure.
-- Callers must publish `new_index` to object state only after `get_or_create_sync_block` returns
-  (that is, after the manager lock has been released).
-
-Current multithreaded call path:
 `VesContext::monitor_get_or_create_sync_block_for_object`
-(`crates/dotnet-vm/src/stack/context_ops.rs`) reads the object's current index, calls
-`get_or_create_sync_block(current_index)`, then publishes the returned index with
-`object.set_sync_block_index(gc, new_index)` only after the call returns.
+(`crates/dotnet-vm/src/stack/context_ops.rs`) calls
+`ObjectRef::get_or_assign_sync_block_index(gc, create)` (`crates/dotnet-value/src/object/mod.rs`),
+which returns the object's existing index or, under the object's lock, calls `create` and stores
+the new index. An object therefore receives at most one index. Sync blocks are never removed, so a
+published index always resolves.
 
 ### Configuration
 
@@ -350,7 +391,7 @@ Current multithreaded call path:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DOTNET_SAFE_POINT_YIELD_MS` | `10` | The interval (in milliseconds) at which a thread waiting for a monitor lock will wake up to check for a GC safe point request. Lower values reduce GC pause latency but increase CPU overhead during lock contention. |
+| `DOTNET_SAFE_POINT_YIELD_MS` | `10` | The longest single sleep (in milliseconds, clamped to 1–10) of an executor-driven native-effect wait (monitor, event, sleep, finalizer and initializer waits) before it rechecks for a GC stop, abort or readiness. Lower values reduce GC pause latency but increase CPU overhead while waiting. |
 
 ### Single-Threaded Implementation (`sync/single_threaded.rs`)
 
@@ -380,8 +421,8 @@ publishes success or failure and wakes waiters; abandoning it publishes failure 
 managed code. Wait registrations are held by the activation and block outside mutations in
 bounded intervals. `Executor` releases them before a GC stop or collection so the resumed effect
 probes and checks for a cycle again. Notifications make the waiter eligible to re-probe.
-`VesContext::initialize_static_storage` retains its existing in-mutation condition wait for
-legacy callers and releases its registration before returning or yielding.
+`VesContext::initialize_static_storage` uses the same path (`initialize_type_then` with
+`InitializerResume::Retry`).
 
 ### Threading ↔ Executor
 Each `Executor` owns a `GCArena`: directly in ST and via a private owner-qualified TLS slot in MT. Thread creation (`threading/basic.rs`) spawns a new OS thread, which creates its own `Executor` and registers with the `ThreadManager`. Allocation identity remains the `ArenaId` used by the GC and existing pointer serialization; managed execution uses a logical owner key, and the guest-visible managed `Thread` ID is separate. In ST the finalizer segment has a distinct logical owner and rooted `Thread` from the parked caller, without changing arena ownership or pointer bytes.
@@ -418,9 +459,9 @@ an unqualified acquisition merely because another guard happens to be in scope.
 | GC command routing | `GCCoordinator::collection_lock` → `GCCoordinator::arenas` → `ArenaHandle::current_command` | `CollectionSession::{send_command_to_all_and_wait,wait_on_other_arenas,enqueue_command_for_arena}` |
 | GC cross-arena table | `GCCoordinator::collection_lock` → `GCCoordinator::cross_arena_refs` | `CollectionSession::collect_all_arenas` |
 | Static init deadlock detection | `StaticStorage::init_mutex` → `StaticStorageManager::wait_graph` | `StaticStorageManager::init` (`InitState::Initializing` branch) |
-| Monitor metadata allocation | `SyncBlockManager::blocks` → `SyncBlockManager::next_index` | `SyncBlockManager::get_or_create_sync_block` |
-| Event state | `Event::state` is a leaf lock | event grants, reset, wait registration and cancellation |
-| Per-monitor ownership | `SyncBlock::state` is a leaf lock | `SyncBlock::{enter,enter_safe,exit}` |
+| Monitor metadata allocation | `SyncBlockManager::blocks` → `SyncBlockManager::next_index` | `SyncBlockManager::create_sync_block` |
+| Event state | `Event::state` is a leaf lock (convention outside the typed DAG) | event grants, reset, wait registration and cancellation |
+| Per-monitor ownership | `SyncBlock::state` is a leaf lock | `SyncBlock::{try_enter,enter,enter_with_timeout,exit}` and the wait methods |
 
 ### Forbidden Inversions
 
@@ -429,27 +470,26 @@ an unqualified acquisition merely because another guard happens to be in scope.
 - `GCCoordinator::arenas` or `ArenaHandle::current_command` must never be held while trying to acquire `GCCoordinator::collection_lock`.
 - `ArenaHandle::current_command` must never be held while calling paths that take `GCCoordinator::arenas` (for example `get_arena` and `command_finished`).
 - Worker completion takes the registry lock before the thread-static table lock; no table operation
-  may acquire the registry lock while holding the table lock.
+  may acquire the registry lock while holding the table lock. (Convention outside the typed DAG:
+  neither lock is a DAG level.)
 - `StaticStorageManager::wait_graph` must never be held while acquiring `StaticStorage::init_mutex` (keep `wait_graph` updates short and non-blocking).
 - A `StaticWaitRegistration` must retire its own wait-graph edge before a terminal return or a GC-stop retry; unrelated registrations on the same thread remain intact.
 - `SyncBlockManager::next_index` must never be acquired before `SyncBlockManager::blocks`.
-- Callers of `SyncBlockManager::get_or_create_sync_block` must publish the returned sync-block index only after the call returns (after `blocks` is released).
 - `SyncBlock::state` must be dropped before any safe-point check (`is_gc_stop_requested` / `check_gc_safe_point`) to avoid blocking STW progress while waiting on monitor ownership.
 
 The trait-level inversion rules above are guarded by negative compile-time `AcquireAfter`
 assertions beside the DAG, including a separate assertion that
-`SyncBlockManager::next_index` is not root-acquirable. The wait-registration cleanup,
-sync-block-index publication, and `SyncBlock::state` safe-point rules are sequencing/lifetime
+`SyncBlockManager::next_index` is not root-acquirable. The wait-registration cleanup and `SyncBlock::state` safe-point rules are sequencing/lifetime
 invariants that are not expressible as trait edges; they remain enforced by the implementation
 structure and code review.
 
 ## Subsystem Details
 
 ### GC Command Processing (`execute_gc_command_for_current_thread`)
-During a STW pause, the coordinator issues commands (like `MarkAll`, `MarkObjects`, `ClearWeak`, `Finalize`, `Sweep`). Suspended threads briefly wake up to execute these commands locally via `execute_gc_command_for_current_thread` in `basic.rs`. In MT they access the optional Box through the private TLS slot without needing a global arena lock; if the Box is absent (including after extraction), the command performs no arena work. Once the local arena command completes, the thread goes back to the `AtSafePoint` suspended state. `CommandCompletionGuard<Armed>` wraps each command dispatch so panic paths still signal `command_finished`; normal paths call `disarm(self)` and then explicitly signal completion once.
+During a STW pause, the coordinator issues commands (`Mark(MarkPhaseCommand::{All, Objects, Dependents, TraceDependents})` and `Sweep(SweepPhaseCommand::{ClearWeak, Finalize, ClearLongWeak, Sweep})`). Suspended threads briefly wake up to execute these commands locally via `execute_gc_command_for_current_thread` in `basic.rs`. In MT they access the optional Box through the private TLS slot without needing a global arena lock; if the Box is absent (including after extraction), the command performs no arena work. Once the local arena command completes, the thread goes back to the `AtSafePoint` suspended state. `CommandCompletionGuard<Armed>` wraps each command dispatch so panic paths still signal `command_finished`; normal paths call `disarm(self)` and then explicitly signal completion once.
 
 ### Cross-Arena References (`record_found_cross_arena_refs`)
-In a multi-arena GC, objects in one thread's arena might reference objects in another. During the `MarkAll` or `MarkObjects` phase, when a thread discovers a reference pointing outside its own arena, it logs it. `record_found_cross_arena_refs` takes these accumulated references and registers them with the central `GCCoordinator` so they can be pushed to the owning arena's root set in a subsequent marking iteration.
+In a multi-arena GC, objects in one thread's arena might reference objects in another. During a mark phase, when a thread discovers a reference pointing outside its own arena, it logs it. `record_found_cross_arena_refs` takes these accumulated references and registers them with the central `GCCoordinator` so they can be pushed to the owning arena's root set in a subsequent marking iteration.
 
 Cross-arena discovery transports `CrossArenaRef`: the retained raw pointer and exact registration identity, not a reconstructed numeric address. Producers capture identity under a lease or carry the existing origin identity; harvest reacquires an exact lease. The owner checks its original identity and a live exact lease before installation, and publishes roots via `mutate_root`.
 

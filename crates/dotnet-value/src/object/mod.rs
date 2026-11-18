@@ -305,7 +305,7 @@ impl ObjectPtr {
         // instead. This relies on the byte closure adopting no new traced `Gc` children
         // without a separately recorded barrier: callers in `dotnet-runtime-memory` record
         // cross-arena stores through `WriteBarrierRecorder` before writing. That caller-side
-        // premise is not enforced by this safe signature (docs/plans/05-safe-api-premises.md, item 3).
+        // premise is not enforced by this safe signature (docs/plans/README.md, "Safe byte writes into reference slots").
         let mut inner = unsafe { lock.borrow_mut_unbarriered(_gc.mutation()) };
         inner.storage.with_data_mut(f)
     }

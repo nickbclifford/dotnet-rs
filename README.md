@@ -1,6 +1,6 @@
 # dotnet-rs
 
-`dotnet-rs` is an experimental Rust implementation of the ECMA-335 Virtual Execution System (VES) for loading and executing .NET assemblies. It is an active research/runtime project focused on correctness, architecture, and validation workflows, and is **not production-ready**.
+`dotnet-rs` is an experimental Rust implementation of the ECMA-335 Virtual Execution System (VES) for loading and executing .NET assemblies. It is an active research/runtime project focused on correctness, architecture, and validation workflows, and is **not production-ready**. It runs a Newtonsoft.Json round-trip application and an EF Core InMemory application with output matching `dotnet`, and supports `DynamicMethod` but not `TypeBuilder`; see [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md).
 
 ## Quick start
 
@@ -18,19 +18,21 @@ cargo build -p dotnet-cli --bin dotnet-rs
 
 ### Run a managed assembly (`.dll`)
 
-1. Find your installed .NET runtime directory (example command):
+For a framework-dependent app, pass the `.dll`. The CLI reads `YourApp.runtimeconfig.json` (and
+`deps.json`) next to it and locates the shared framework, honoring `DOTNET_ROOT`:
 
-   ```bash
-   dotnet --list-runtimes | grep Microsoft.NETCore.App
-   ```
+```bash
+cargo run -p dotnet-cli --bin dotnet-rs -- /path/to/YourApp.dll
+```
 
-2. Run the interpreter:
+To choose the runtime assembly directory explicitly, pass `-a/--assemblies`:
 
-   ```bash
-   cargo run -p dotnet-cli --bin dotnet-rs -- \
-     -a /path/to/Microsoft.NETCore.App/<version> \
-     /path/to/YourApp.dll
-   ```
+```bash
+dotnet --list-runtimes | grep Microsoft.NETCore.App
+cargo run -p dotnet-cli --bin dotnet-rs -- \
+  -a /path/to/Microsoft.NETCore.App/<version> \
+  /path/to/YourApp.dll
+```
 
 ## Workspace layout
 
@@ -40,6 +42,8 @@ This repository is a Rust workspace: crates under `crates/` plus the `xtask/` au
 - `docs/` — architecture and subsystem design documentation
 - `scripts/` — CI and maintenance scripts (including doc drift checks)
 - `xtask/` — build/test automation helpers
+- `tests/` — out-of-workspace probe projects (`ef-probe`)
+- `.github/workflows/` — CI workflows (see [`docs/CI.md`](docs/CI.md))
 
 For a subsystem-level overview, see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). For contributor setup and validation commands, see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
@@ -58,6 +62,8 @@ Start with:
 - [`docs/EXCEPTION_HANDLING.md`](docs/EXCEPTION_HANDLING.md)
 - [`docs/THREADING_AND_SYNCHRONIZATION.md`](docs/THREADING_AND_SYNCHRONIZATION.md)
 - [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md)
+- [`docs/INVARIANT_REGISTRY.md`](docs/INVARIANT_REGISTRY.md)
+- [`docs/pointer-provenance/README.md`](docs/pointer-provenance/README.md)
 
 See the `docs/` directory for additional deep dives.
 

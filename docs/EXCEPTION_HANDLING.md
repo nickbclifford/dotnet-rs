@@ -9,7 +9,7 @@ Exception handling is split across four crates:
 - **`dotnet-vm-data`** (`crates/dotnet-vm-data/src/exceptions.rs`): Exception data types — `ExceptionState`, `ProtectedSection`, `Handler`, `HandlerKind`, `HandlerAddress`, `ManagedException`, `SearchState`, `FilterState`, `UnwindState`, `UnwindTarget`.
 - **`dotnet-vm-ops`** (`crates/dotnet-vm-ops/src/ops.rs`): Base operation and context traits used by the exception engine.
 - **`dotnet-exceptions`** (`crates/dotnet-exceptions/src/lib.rs`): The `ExceptionHandlingSystem` with the two-pass search/unwind state machine. Depends on `dotnet-vm-ops` for base traits and on `dotnet-vm-data` for exception data.
-- **`dotnet-vm`** (`crates/dotnet-vm/src/dispatch/mod.rs`, `crates/dotnet-vm/src/stack/context.rs`, `crates/dotnet-vm/src/stack/exception_ops_impl.rs`): Runtime integration points that drive `ExceptionState` transitions and invoke `dotnet-exceptions`.
+- **`dotnet-vm`** (`crates/dotnet-vm/src/dispatch/mod.rs`, `crates/dotnet-vm/src/stack/context.rs`, `crates/dotnet-vm/src/stack/context_ops.rs`, `crates/dotnet-vm/src/stack/exception_ops_impl.rs`, `crates/dotnet-vm/src/stack/native_effects.rs`): Runtime integration points that drive `ExceptionState` transitions and invoke `dotnet-exceptions`.
 
 The system handles `try`/`catch`/`finally`/`fault`/`filter` blocks and coordinates with the call stack for two-pass exception processing (search phase, then unwind phase).
 
@@ -34,7 +34,7 @@ None → Throwing → Searching → Filtering (optional) → Unwinding → Execu
 - **`Searching(SearchState)`**: First pass — walking handlers in the current and parent frames to find a matching `catch` or `filter`. Tracks a `HandlerAddress` cursor.
 - **`Filtering(FilterState)`**: Executing a filter clause to decide if it handles the exception. The filter runs user code and produces an `endfilter` result.
 - **`Unwinding(UnwindState)`**: Second pass — executing `finally`/`fault` blocks encountered between the throw site and the target handler. Tracks an `UnwindTarget`.
-- **`ExecutingHandler(UnwindState)`**: A `finally` or `fault` handler is running during unwind.
+- **`ExecutingHandler(UnwindState)`**: A `catch`, `finally` or `fault` handler is running.
 
 ### Two-Pass Flow and State Transitions
 
@@ -59,16 +59,17 @@ flowchart LR
 
 ### `ExceptionState` and `StepResult` Relationship
 
-`ExceptionHandlingSystem::handle_exception` is intentionally conservative: while driving `Throwing`, `Searching`, and `Unwinding`, it primarily returns `StepResult::Exception` so the dispatch loop re-enters exception handling after each state mutation (instead of batching normal instruction execution). `StepResult::MethodThrew` is emitted when search finds no handler, after any required native-boundary unwind. `StepResult::Return` is used in a narrow unwind sentinel path (`UnwindTarget::Instruction(usize::MAX)`) to finish frame returns through the normal return machinery. `StepResult::Continue` is not emitted by the core exception state machine; it appears only while normal instruction dispatch is executing code in `Filtering` or `ExecutingHandler` states.
+`ExceptionHandlingSystem::handle_exception` is intentionally conservative: while driving `Throwing`, `Searching`, and `Unwinding`, it primarily returns `StepResult::Exception` so the dispatch loop re-enters exception handling after each state mutation (instead of batching normal instruction execution). `StepResult::MethodThrew` is emitted when search finds no handler, after any required native-boundary unwind. `StepResult::Return` is used in a narrow unwind sentinel path (`UnwindTarget::Instruction(usize::MAX)`) to finish frame returns through the normal return machinery. It also returns `StepResult::Yield` at a GC safe point and `StepResult::Error` for host failures. For `None`, `Filtering` and `ExecutingHandler` it just returns `StepResult::Exception`; `step_inner` only routes `Throwing`, `Searching` and `Unwinding` to it. `StepResult::Continue` is not emitted by the core exception state machine; it appears only while normal instruction dispatch is executing code in `Filtering` or `ExecutingHandler` states.
 
 ### Key Types
 
 - **`HandlerAddress`**: Cursor into the handler search space — tracks `frame_index`, `section_index` (index into the frame's `exceptions`/`ProtectedSection` list), and `handler_index`.
-- **`UnwindTarget`**: Where unwinding should stop — a `Handler(HandlerAddress)`, an `Instruction(usize)` (for `leave` targets), `Native` for a captured exception, or `Unhandled` for an exception escaping a transparent native boundary.
+- **`UnwindTarget`**: Where unwinding should stop — a `Handler(HandlerAddress)`, an `Instruction(usize)` (for `leave` targets), `Native { depth, destination: NativeReturnDestination }` for an exception captured by a native caller, or `Unhandled` for an exception escaping a transparent native boundary.
+- **`SavedHandlerUnwind`**: An unwind suspended while its `finally`/`fault` handler runs nested control flow; the saved states form the `VmContinuation::HandlerUnwinds` stack.
 - **`ProtectedSection`**: A try region with its associated handlers, parsed from metadata.
 - **`Handler`**: A single handler block with offset, length, and `HandlerKind`.
 - **`HandlerKind`**: `Catch(ConcreteType)`, `Filter { clause_offset }`, `Finally`, `Fault`.
-- **`ManagedException`**: Extracted exception info (type name, message, stack trace) for display.
+- **`ManagedException`**: Extracted exception info (type name, message, stack trace) for display, built by `dotnet_exceptions::extract_managed_exception`.
 
 ## Key Methods on `ExceptionHandlingSystem`
 
@@ -80,14 +81,17 @@ flowchart LR
 ## Non-Obvious Connections
 
 ### Integration with Dispatch Loop (`dispatch/mod.rs`)
-- `ExecutionEngine::step` (`crates/dotnet-vm/src/dispatch/mod.rs`) checks `ExceptionState` before normal instruction dispatch. If an exception is active, it routes to `VesContext::handle_exception()`.
+- `ExecutionEngine::step` (`crates/dotnet-vm/src/dispatch/mod.rs`) first resumes a runnable native activation, then checks `ExceptionState` before normal instruction dispatch. If an exception is in `Throwing`, `Searching` or `Unwinding`, it routes to `VesContext::handle_exception()` (see [Dispatch Flow](DELEGATES_AND_DISPATCH.md#executionenginestep)).
 - Instruction handlers signal exceptions with `StepResult::Exception` (not `StepResult::Throw`). The throw/rethrow opcodes in `crates/dotnet-vm/src/instructions/exceptions.rs` call `ExceptionOps`, and `VesContext` updates `ExceptionState::Throwing` in `crates/dotnet-vm/src/stack/exception_ops_impl.rs`.
 
 ### Integration with Call Stack
 - `ProtectedSection` data is parsed by `dotnet_exceptions::parse` during method-info construction in `crates/dotnet-vm/src/lib.rs` (`build_method_info`) and stored on each frame in `MethodInfo::exceptions`.
 - `StackFrame`, `FrameStack`, and `BasePointer` are defined in `dotnet-vm-data/src/stack.rs` and imported from `dotnet-vm-data` directly.
 - Frame unwinding during exception handling must properly clean up the evaluation stack — `BasePointer` tracks where each frame's stack values begin.
-- `VesContext::unwind_frame` (`crates/dotnet-vm/src/stack/context.rs`) is called during unwind to pop frames, clear stack slots, retire crossed native activations, and wrap legacy `.cctor` failures as `TypeInitializationException`. Transparent search does not poll a parked native future; handlers in the child leave it alive, while an unwind across the boundary drops it after the child cleanup handlers. A capturing call stops search at its boundary, unwinds the child and copies the exception into the waiting activation's root set. Its future resumes before outer filters can run; a throw from that future starts a new search. An active filter or handler context is restored when capture completes. `VmEffects::ensure_initialized` wraps the captured inner exception before resuming outer search for static-field instructions. Reflection invocation also uses `try_call` to wrap target exceptions in `TargetInvocationException`, unless `DoNotWrapExceptions` is set. `newobj`, method dispatch and `RuntimeHelpers.RunClassConstructor` retain their legacy initializer triggers and late wrapping behavior.
+- `VesContext::unwind_frame` (`crates/dotnet-vm/src/stack/context.rs`) is called during unwind to pop a frame: it retires native activations owned at that depth (`unwind_native_at`), releases a synchronized method's lock, clears the finalizer flag, clears the evaluation stack from the frame's argument base and recycles the frame.
+
+### Native boundaries
+- Transparent search does not poll a parked native future; handlers in the child leave it alive, while an unwind across the boundary drops it after the child cleanup handlers. A capturing call stops search at its boundary, unwinds the child and copies the exception into the waiting activation's root set. Its future resumes before outer filters can run; a throw from that future starts a new search. An active filter or handler context is restored when capture completes. Type initialization is effect-based for every trigger (field access, `newobj`, method dispatch and `RuntimeHelpers.RunClassConstructor`): `VmEffects::ensure_initialized` / `initialize_type_then` run the `.cctor` as a captured child and wrap its failure as `TypeInitializationException` before resuming outer search (see [Initializer failures](TYPE_RESOLUTION_AND_CACHING.md#initializer-failures)). Reflection invocation (`crates/dotnet-intrinsics-reflection/src/methods.rs`) also captures through `try_call` to wrap target exceptions in `TargetInvocationException`, unless `DoNotWrapExceptions` is set. `DynamicMethod` frames are ordinary frames whose `ProtectedSection`s come from the emitted body.
 
 ### Filter Execution
 - In `search_for_handler` (`crates/dotnet-exceptions/src/lib.rs`), filter handlers transition to `ExceptionState::Filtering`, suspend higher frames/stacks and native activations at or above the filter (`suspend_above`, `suspend_native_above`), set the filter IP, and push the exception object as filter input.
@@ -107,20 +111,15 @@ flowchart LR
 
 ### Rethrow Semantics
 - The `rethrow` instruction (ECMA-335 §III.4.24) is used within a catch handler to re-propagate the caught exception. Unlike the `throw` instruction, which resets the exception's stack trace to the current execution point, `rethrow` MUST preserve the original stack trace of the exception object.
-- In `dotnet-rs`, this is handled by the `bool` parameter in `ExceptionState::Throwing(ObjectRef, bool)`.
+- In `dotnet-rs`, this is handled by the `bool` parameter in `ExceptionState::Throwing(ObjectRef, bool)`, set by `throw()`/`rethrow()` in `crates/dotnet-vm/src/stack/exception_ops_impl.rs`.
 - When `throw` is called, it passes `false`, causing `begin_throwing` to generate and write a new stack trace string to the `_stackTraceString` field of the exception object. Each native boundary contributes a synthetic frame with its method, native identity and call-site IP.
 - When `rethrow` is called, it passes `true`. `begin_throwing` will then check if the exception object already contains a stack trace. If it does, it skips generating a new one, thereby preserving the original trace from the initial throw site.
 
 ### Interaction with Delegates
-- Multicast targets run as separate calls through native effects. Exceptions cross the native boundary; later targets do not run.
+- Multicast targets run as separate calls through native effects; see [Delegates ↔ Exception Handling](DELEGATES_AND_DISPATCH.md#delegates--exception-handling).
 
 ## Implementation Details
 
 ### Metadata Parsing (`parse`)
 
 `dotnet_exceptions::parse` (`crates/dotnet-exceptions/src/lib.rs`) converts `dotnetdll::body::Exception` metadata rows into runtime `ProtectedSection`/`Handler` structures used by each `MethodInfo` frame. For each metadata row, it reads `try_offset`/`try_length` and `handler_offset`/`handler_length` and normalizes them into half-open ranges (`start..start+length`) over instruction offsets. It maps `ExceptionKind::TypedException` to `HandlerKind::Catch` via `ResolutionOps::make_concrete`, maps `ExceptionKind::Filter { offset }` to `HandlerKind::Filter { clause_offset }`, and passes through `Finally`/`Fault` directly. Handlers are grouped by identical try-range into a single `ProtectedSection`, then sorted inner-most-first (`Reverse(try_start)`, then `try_end`) so search prefers the most specific protected region before outer regions.
-
-### Rethrow Stack Trace Preservation
-- **`crates/dotnet-vm-data/src/exceptions.rs`**: `ExceptionState::Throwing` includes a `bool` flag for trace preservation.
-- **`crates/dotnet-vm/src/stack/exception_ops_impl.rs`**: `rethrow()` sets this flag to `true`, while `throw()` sets it to `false`.
-- **`crates/dotnet-exceptions/src/lib.rs`**: `begin_throwing()` reads this flag and optionally skips stack trace generation if an existing trace is present and preservation is requested.

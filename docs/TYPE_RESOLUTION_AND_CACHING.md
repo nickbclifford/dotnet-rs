@@ -17,13 +17,13 @@ Resolution converts metadata tokens (from parsed .NET assemblies) into runtime d
 
 ## Well-Known Type Registry
 
-Runtime code that refers to a fixed core-library or support-library type uses the `WellKnown` enum from `dotnet-types/src/wkt.rs` rather than repeatedly resolving a metadata name. The enum has 60 variants, is represented as a contiguous `usize` index, and provides `WellKnown::name()` for the canonical metadata name. `WellKnown::from_name()` performs the reverse mapping, including both supported spellings of the nested exception dispatch-state type. `WellKnown::Span1` was appended as the final variant to preserve the discriminants of all prior cache entries; it identifies ``System.Span`1``, whose support fields participate in the generated storage ABI.
+Runtime code that refers to a fixed core-library or support-library type uses the `WellKnown` enum from `dotnet-types/src/wkt.rs` rather than repeatedly resolving a metadata name. The enum has 60 variants, is represented as a contiguous `usize` index, and provides `WellKnown::name()` for the canonical metadata name. `WellKnown::from_name()` performs the reverse mapping, including both supported spellings of the nested exception dispatch-state type. `WellKnown::Span1` identifies ``System.Span`1``, whose support fields participate in the generated storage ABI.
 
 `AssemblyLoader` owns `wkt_table: Vec<OnceLock<TypeDescription>>`, initialized with `WellKnown::COUNT` empty cells. A handle's discriminant indexes its cell. `AssemblyLoader::corlib_wkt()` is the one-time resolution seam: on the first successful access to a variant it runs the normal corlib resolution path and stores the resulting descriptor; later accesses clone the cached descriptor. Resolution errors are deliberately not cached, so a type that is not available yet can be retried. Concurrent first accesses may both perform resolution, but `OnceLock` retains one successful result. `WellKnown::ExceptionDispatchState` has a specialized resolver that tries `System.Exception/DispatchState` before `System.Exception+DispatchState`.
 
 The string API, `corlib_type(&str)`, survives as the dynamic fallback. It uses the separate `dynamic_corlib_cache` and does not route names through the well-known table. Its production callers receive names as runtime data or through APIs that accept arbitrary names: a user string passed to `Type.GetType`, the name parameter accepted by the VM's `throw_by_name` helpers, and metadata names encountered while resolving attribute arguments. Fixed runtime-owned names should use `corlib_wkt()` instead.
 
-Core-library availability changes during a loader's lifetime. During `AssemblyLoader` construction, the embedded support assembly is loaded and its stub mappings are populated, so a BCL name such as `System.Delegate` may already resolve to its `DotnetRs` implementation. By contrast, `mscorlib` and `System.Private.CoreLib` entries are loaded lazily by `get_assembly()` when resolution first needs them. The normal lookup order remains stubs, `mscorlib`, `System.Private.CoreLib`, the support assembly, and the legacy fallback. Consequently the well-known table is created empty rather than filled eagerly during construction: forcing every core-library lookup then would defeat lazy loading and could fail in loader configurations where a core library is not yet available. Per-cell lazy initialization also preserves retry behavior when availability changes later.
+Core-library availability changes during a loader's lifetime. During `AssemblyLoader` construction, the embedded support assembly is loaded and its stub mappings are populated, so a BCL name such as `System.Delegate` may already resolve to its `DotnetRs` implementation. By contrast, `mscorlib` and `System.Private.CoreLib` entries are loaded lazily by `get_assembly()` when resolution first needs them. The normal lookup order remains stubs, `mscorlib`, `System.Private.CoreLib`, the support assembly, and a final `mscorlib` lookup fallback. Consequently the well-known table is created empty rather than filled eagerly during construction: forcing every core-library lookup then would defeat lazy loading and could fail in loader configurations where a core library is not yet available. Per-cell lazy initialization also preserves retry behavior when availability changes later.
 
 ## Resolution Pipeline
 
@@ -39,6 +39,10 @@ Descriptors are owner-tied and index-based:
 - `GenericLookup` stores type and method generic arguments plus an eagerly memoized `u64` hash, so generic-instantiation keys hash without revisiting their argument slices.
 
 This keeps metadata lifetime explicit while preserving stable, hashable descriptor keys for caches.
+
+A `DynamicMethod` gets its own one-method assembly owned by a fresh `MetadataArena`
+(`dotnet-intrinsics-reflection/src/dynamic_method.rs`), so its descriptors follow the same rules.
+Those assemblies are not evicted yet (see the plans README, "Not yet planned").
 
 Every metadata-backed `ConcreteType` retains a non-null `ResolutionS`, whose `Arc<MetadataArena>`
 pins the metadata that the descriptor can dereference. A future compact or interned identifier
@@ -64,7 +68,7 @@ Multi-phase process:
 1. **Token → descriptor**: `VmResolverService::locate_method()` maps a metadata token (`UserMethod`) to a `MethodDescription`, applying generic substitutions.
 2. **Virtual dispatch**: For `callvirt`, `resolve_virtual_method()` finds the most-derived implementation. It first checks the `vmt_cache` in `GlobalCaches`. If missing, it iterates through ancestors (via `AssemblyLoader::ancestors`) and uses `find_and_cache_method()` to locate the implementation matching the base method's signature.
 3. **Generic instantiation**: `find_generic_method()` applies `GenericLookup` from the `ResolutionContext` to specialize the method and its parent type.
-4. **Intrinsic check**: `is_intrinsic_cached()` checks if the method has a native implementation by querying `GlobalCaches::intrinsic_cache` and `IntrinsicRegistry`.
+4. **Intrinsic check**: the resolver's `is_intrinsic_cached()` answers whether a method has a native implementation (`GlobalCaches::intrinsic_cache` over the `IntrinsicRegistry`). The dispatch-time classification is `crate::intrinsics::classify_intrinsic`, called from `dispatch_resolved_method_with_mode` (see [Resolution ↔ Intrinsics](#resolution--intrinsics)).
 
 ### Field Resolution
 
@@ -81,7 +85,7 @@ This is a recursive algorithm: computing a struct's layout requires `LayoutFacto
 
 ## Caching Architecture (`state.rs` → `GlobalCaches`)
 
-`GlobalCaches` holds eleven instances of the `Cache<K, V, S>` primitive defined in
+`GlobalCaches` holds thirteen instances of the `Cache<K, V, S>` primitive defined in
 `dotnet-vm/src/cache.rs`. The primitive owns its monomorphized storage backend,
 `CacheKind`, a direct `Arc<RuntimeMetrics>`, an optional capacity, and an optional
 front-cache policy. Its sealed `CacheStore<K, V>` contract returns owned values, so
@@ -97,7 +101,8 @@ walk of specialized type trees or generic-argument slices on cache lookup.
 from sharding. In particular, VMT and hierarchy entries are created for new
 runtime type combinations, while the other sharded caches carry compound keys or
 `Arc` values; sharding avoids one global write lock on those paths. `LockedStore`
-is `RwLock<HashMap<...>>`-backed for the four descriptor-to-`bool` properties.
+is `RwLock<HashMap<...>>`-backed for the four descriptor-to-`bool` properties and the
+delegate-dispatch classification.
 Those properties are immutable after resolution, read far more often than they
 are first computed, and are naturally bounded by the loaded metadata, so one
 read-write lock avoids per-shard overhead without requiring eviction.
@@ -117,14 +122,16 @@ generic primitive.
 | Finalizer cache             | `LockedStore`  | `TypeDescription`                                     | `bool`                                   | Does this type have a finalizer?                             |
 | Overrides cache             | `ShardedStore` | `(TypeDescription, GenericLookup)`                    | `Arc<HashMap<MethodDescription, MethodDescription>>` | Resolved interface/virtual overrides for a type          |
 | Method info cache           | `ShardedStore` | `(MethodDescription, GenericLookup)`                  | `Arc<MethodInfo<'static>>`               | Full resolved method info (instructions, exceptions, locals) |
+| Delegate dispatch cache     | `LockedStore`  | `MethodDescription`                                   | `DelegateDispatchKind`                   | Classification of a body-less method on a delegate type      |
+| Static constrained cache    | `ShardedStore` | `StaticConstrainedCacheKey`                           | `MethodDescription`                      | Exact `constrained.` static-virtual target, kept apart from the VMT |
 
 ### Global Cache Registry, Metrics, and Capacity
 
-`define_global_caches!` in `state.rs` is the single eleven-entry registry. From
+`define_global_caches!` in `state.rs` is the single thirteen-entry registry. From
 each entry it generates the `GlobalCaches` field, construction with its
 `CacheKind`/capacity/front policy, indexed size-report entry, and, where needed,
-a typed TLS companion. The current eleven-entry registry order matches
-`CacheKind::GLOBAL` and the fixed legacy `CacheStats` display order. This keeps
+a typed TLS companion. The registry order matches `CacheKind::GLOBAL`, whose first twelve entries keep
+the fixed `CacheStats` display order. This keeps
 declaration, construction, reporting, and front-cache configuration synchronized.
 `Cache::size_report()` returns its `CacheKind` with an estimated `CacheSize`;
 its `pointer_bytes` value is the entry count multiplied by the inline
@@ -143,11 +150,8 @@ metrics `Arc`, rather than making callers own metrics bookkeeping.
 
 Under `bench-instrumentation`, `cache_key_clone_total` counts the explicit logical
 key-component clones recorded by cache callers (principally descriptor and `Arc`
-clone work). It deliberately does not measure deep hash traversal. Therefore the
-same benchmark workload and cache paths can retain the same count after descriptor
-hash memoization; use benchmark time and the hash implementation to evaluate that
-optimization, while retaining the counter as a regression guard for key-construction
-work.
+clone work). It deliberately does not measure deep hash traversal; it is a regression guard for
+key-construction work.
 
 The five cache environment-variable contracts are read once when `GlobalCaches` is
 constructed. `DOTNET_CACHE_LIMIT_METHOD_INFO`, `DOTNET_CACHE_LIMIT_VMT`, and
@@ -156,9 +160,7 @@ L2 cache; an unset, invalid, or zero value leaves that cache unbounded.
 `DOTNET_FRONT_CACHE_ENABLED` controls the three front-cache tiers and defaults to
 enabled (the usual `1`/`true`/`yes`/`on` and `0`/`false`/`no`/`off` spellings are
 accepted). `DOTNET_FRONT_CACHE_CAPACITY` selects their positive capacity; an unset,
-invalid, or zero value uses the default capacity of 128. The three capacity limits,
-front enable switch, and front capacity therefore retain their behavior without a
-`CachePolicy` aggregate.
+invalid, or zero value uses the default capacity of 128.
 
 **Eviction**: All shared L2 stores are unbounded by default, so eviction is not
 triggered in default runs. `DOTNET_CACHE_LIMIT_METHOD_INFO`,
@@ -192,13 +194,13 @@ Additionally, components like `StaticStorageManager` implement their own sharded
 
 ## `ResolutionContext` (`context.rs`)
 
-Provides a scoped view of the resolution state:
-- Current generic type parameters and method parameters (`&GenericLookup`)
-- Reference to the `AssemblyLoader`
-- The current assembly's resolution scope (`ResolutionS`)
-- Reference to `GlobalCaches` and optionally `SharedGlobalState`
+Provides a scoped view of the resolution state. Its fields are:
+- `generics`: the current type and method generic arguments (`&GenericLookup`)
+- `state`: an `Arc<ResolutionShared>` holding the `AssemblyLoader`, `GlobalCaches`, an optional weak `SharedGlobalState` and the lazily built `VmResolverService`
+- `resolution`: the current assembly's resolution scope (`ResolutionS`)
+- `type_owner` / `method_owner`: the type or method the context was created for, if any
 
-`ResolutionContext` is created per-frame (via `ResolutionContext::for_method()` during method invocation) or per-type (via `for_type()`). It is passed down through instruction handlers and layout computations to ensure that any type or method tokens encountered are resolved within the correct generic and assembly context. It abstracts away the global state and provides helper methods like `locate_method()` and `make_concrete()`.
+`ResolutionContext` is created with `new`, per-frame (via `ResolutionContext::for_method()` during method invocation) or per-type (via `for_type()` / `for_type_with_generics()`). It is passed down through instruction handlers and layout computations to ensure that any type or method tokens encountered are resolved within the correct generic and assembly context. It abstracts away the global state and provides helper methods like `locate_method()` and `make_concrete()`.
 
 ## Generic Instantiation
 
@@ -247,22 +249,31 @@ ECMA-335 requires that each generic type definition generates a **finite instant
 
 - **Sharded storage**: Uses an array of `RwLock<HashMap>` shards indexed by the hash of `(TypeDescription, GenericLookup)`.
 - **Init states**: One atomic word encodes the `InitState` enum (`Uninitialized`, `Initializing(owner)`, `Initialized`, `Failed`), so a reader never sees an initializing state without its owner. Every transition is a compare-and-swap through `InitState::transition`; `Initialized` stays a lock-free read.
-- **Initialization Protocol**: `init()` checks the state and returns a `StaticInitResult` — one of `Execute(cctor_method)`, `Initialized`, `Recursive`, `Failed`, or `Waiting`. If uninitialized, it atomically transitions to `Initializing(owner)` and returns `StaticInitResult::Execute(cctor_method, claim)`. The calling thread is now responsible for running the `.cctor` and holds the `InitializerClaim`. Completion publishes `Initialized` or `Failed` through the claim; a claim dropped without an explicit publish (for example an activation discarded by a host error) publishes `Failed`, so waiters never hang.
-- **Cross-thread coordination**: With `multithreading`, if another thread calls `init()` while the state is `Initializing` for another owner, it returns `StaticInitResult::Waiting`. The initializer activation then waits through the `ensure_initialized` effect, outside any mutation, and re-probes after wake-up or a GC stop; the wait-graph edge makes circular waits follow the `Recursive` policy. A single-threaded build cannot produce `Waiting`, so that arm is unreachable there.
+- **Initialization Protocol**: `init()` checks the state and returns a `StaticInitResult` — one of `Execute(cctor_method)`, `Initialized`, `Recursive`, `Failed`, `Waiting`, or (single-threaded builds only) `WouldDeadlock`. If uninitialized, it atomically transitions to `Initializing(owner)` and returns `StaticInitResult::Execute(cctor_method, claim)`. The calling thread is now responsible for running the `.cctor` and holds the `InitializerClaim`. Completion publishes `Initialized` or `Failed` through the claim; a claim dropped without an explicit publish (for example an activation discarded by a host error) publishes `Failed`, so waiters never hang.
+- **Cross-thread coordination**: With `multithreading`, if another thread calls `init()` while the state is `Initializing` for another owner, it returns `StaticInitResult::Waiting`. The initializer activation then waits through the `ensure_initialized` effect, outside any mutation, and re-probes after wake-up or a GC stop; the wait-graph edge makes circular waits follow the `Recursive` policy. A single-threaded build cannot produce `Waiting`; when the initializing owner is a different activation parked on the same executor (for example, a finalizer), it returns `WouldDeadlock`, which the initializer effect reports as a host error.
 
 ### Non-Obvious: `.cctor` and GC Interaction
 While waiting for another thread's `.cctor` to complete, the waiting thread must remain responsive to GC safe point requests. The effect wait re-probes after a GC stop for this.
 
+### Initializer failures
+A call or field access that triggers initialization runs it through `initialize_type_then`, which
+resumes the trigger with `InitializerResume::Retry` (re-execute the instruction) or
+`InitializerResume::Dispatch` (re-dispatch a method whose operands were already rewritten). A
+failing `.cctor` raises `TypeInitializationException` through `wrap_initializer_failure` and
+`VesContext::throw_type_initialization_exception` (`stack/native_effects.rs`,
+`stack/exception_ops_impl.rs`); the storage keeps that exception (`failed_exception`), and later
+accesses to the `Failed` type throw it again.
+
 ## Non-Obvious Connections
 
 ### Resolution ↔ Intrinsics
-The resolver checks the intrinsic cache before dispatching a method call. If a method is intrinsic, execution bypasses CIL interpretation entirely. Instead, the `IntrinsicRegistry` uses a Perfect Hash Function (PHF) to map the method signature to a stable `MethodIntrinsicId`. This ID is then passed to a monomorphic dispatcher that calls the native Rust handler. This pipeline ensures that intrinsic lookups are fast and that the final call is a direct, inlinable function call. This check happens in `dotnet-runtime-resolver/src/methods.rs` and is cached in `GlobalCaches`.
+`dispatch_resolved_method_with_mode` (`dotnet-vm/src/stack/call_ops_impl.rs`) calls `crate::intrinsics::classify_intrinsic` before dispatching a method call. If a method is intrinsic, execution bypasses CIL interpretation entirely. Instead, the `IntrinsicRegistry` uses a Perfect Hash Function (PHF) to map the method signature to a stable `MethodIntrinsicId`. This ID is then passed to a monomorphic dispatcher that calls the native Rust handler. This pipeline ensures that intrinsic lookups are fast and that the final call is a direct, inlinable function call. The resolver's `is_intrinsic_cached` (`dotnet-runtime-resolver/src/methods.rs`) caches the yes/no answer in `GlobalCaches`.
 
 ### Resolution ↔ Layout ↔ GC
 Layout computation produces `GcDesc` which the GC uses during tracing to know which bytes in an object are managed references. This connects the type system to the garbage collector.
 
 ### Resolution ↔ Reflection
-`ReflectionRegistry` (in `state.rs`) maps `RuntimeType` → `ObjectRef`, creating heap-allocated reflection objects. These are per-arena (not shared globally) because they contain GC references.
+`ReflectionRegistry<'a, 'gc>` (in `state.rs`) is a view over the arena-local `ReflectionLocalState`, which caches `RuntimeType`/method/field/property/assembly → `ObjectRef` mappings for one arena. Under `multithreading` the authoritative tables are `SharedReflectionRegistry` (`SharedGlobalState::reflection_registry`): one canonical object per key, allocated in the owner (finalizer executor) arena by the canonical allocation service and rooted until shutdown, so every thread observes the same reflection object identity. See plan [14](plans/14-canonical-reflection-objects.md) and [Shared reflection roots](GC_AND_MEMORY_SAFETY.md#shared-reflection-roots).
 
 ### Layout Ownership
 Layout representation and layout computation are split:
