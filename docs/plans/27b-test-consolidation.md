@@ -43,18 +43,34 @@ replacement quota. A larger or smaller resulting suite is acceptable.
 
 ## Slices
 
-### 1. Turn the completed audit into concrete cleanup batches
+### 1. Apply the audit handoff in ordered batches
 
-Execution depends on 27a's completed handoff. Its final slice fills in finding references, owning
-files, intended changes and verification for the batches below. They are an ordering template,
-not a second audit or a finding-independent mandate to change every category. Omit empty batches;
-split substantial batches by subsystem, leaving usable tests enabled after every increment.
+The [audit ledger](27-test-audit-ledger.md) and its linked partition records define the concrete
+symbols, owning files, proposed changes, retained coverage and verification commands. The batches
+below cover every actionable finding. A batch is a work grouping; split it into coherent changes
+by owning subsystem, leaving tests enabled after each change. This is remediation of inspected
+findings, not another open-ended audit. Prioritize defects in the evidence before removing overlap.
 
 | Order | Batch | Required evidence |
 |---|---|---|
-| 1 | False confidence: circular or vacuous checks, disconnected replicas and bypassed production paths | The replacement reaches production and rejects the identified incorrect behavior |
-| 2 | Incidental structure: overspecific assertions, source scans and exact instrumentation counts | Intended internal/guest contracts remain checked while the identified valid refactor is allowed |
-| 3 | Redundancy and test-count constraints | Distinct cases/configurations remain covered; missing-case detection remains effective |
+| 1 | Harness/discovery false passes: CLI-3, CLI-20–CLI-23, TOOLS-5 | Propagate teardown failures and actual execution failure, preserve missing-artifact policy, bound subprocesses and observe real tool invocations; retain partial-output/error controls |
+| 2 | Fuzz reachability and independent oracles: VM-2–VM-3, LIB-2, LIB-22, TOOLS-6 | Requested instructions really execute; named seeds decode as intended; unmanaged pointer inputs and benchmark decode outcomes are checked independently; keep replay accounting |
+| 3 | Managed behavior assertions: CLI-1, CLI-5–CLI-14, CLI-16, CLI-18 | Assert the actual exception/trace, arithmetic IL, sequence, target effect, finalizer event and ABI/initializer result; failures cannot return success; ILOffset cannot cancel its own error |
+| 4 | Coordinated concurrency and fixture isolation: CLI-17, CLI-19, VM-9, VI-2, VI-5, LIB-10, LIB-14, LIB-16, LIB-21 | Establish required writer/reader, wait/acquisition and teardown checkpoints; preserve terminal outcomes; use isolated paths/IDs and truly misaligned storage |
+| 5 | Runtime-unit and provenance witnesses: VM-5–VM-6, VM-8, VI-1, VP-1–VP-4, LIB-9, LIB-11, LIB-17–LIB-18, LIB-20, LIB-23–LIB-25 | Require completion/non-null/value-bearing results, use valid allocation extents/CIL, observe actual growth and intended errors, call production write-back/access, and reflect configuration in discovery |
+| 6 | Registration/source guards: VM-4, VM-7, VI-4, LIB-1, LIB-3, LIB-7 | Replace incidental spelling with real dispatch/transport/filter evidence; retain justified structural guards and fail on incomplete scans |
+| 7 | Contract tolerance and redundant models: CLI-2, CLI-4, CLI-15, VI-3, LIB-5, LIB-8, LIB-12, LIB-15, LIB-19, TOOLS-7 | Preserve behavioral/safety assertions while relaxing incidental event counts, diagnostic prose, hash inequality and footprint snapshots; check compile-fail reasons; retain one justified positive/negative model and use an overlap-guaranteeing API for overlap workloads |
+| 8 | Count/registry maintenance: TOOLS-1–TOOLS-4, LIB-4, LIB-13 | Permit fully registered additions without unrelated counter edits; preserve named required identities, old ABI IDs, uniqueness, discovery and exactly-once execution checks |
+
+LIB-6 is a separate production-policy investigation, tracked in the plans README. Preserve its
+test until the resolution-error/type-identity policy is decided; change implementation and test
+together under that decision. Do not silently delete the test or declare the underlying behavior
+correct. This dependency does not block unrelated cleanup, but prevents closing that finding.
+
+Within batch 7, retain each exact size requirement justified by ABI, serialization or safety;
+use a documented footprint bound only where that is the actual performance requirement. Retain
+internal lifecycle/transport tests throughout. Missing coverage calls for a focused replacement,
+not a blanket move to end-to-end fixtures.
 
 ### 2. Implement and verify each populated batch
 

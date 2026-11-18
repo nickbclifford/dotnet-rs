@@ -1,9 +1,12 @@
 # Audit test contracts and evidence
 
-**Status:** Not started
+**Status:** Complete
 **Outcome:** Every project-owned test family has been inspected, and an audit ledger identifies
 which tests protect intended contracts and which need changes, with concrete evidence and an
 actionable handoff to [27b](27b-test-consolidation.md).
+
+The [audit ledger](27-test-audit-ledger.md) links completed source reviews, findings and verification
+limits. Plan 27b contains the concrete cleanup batches. Test and production code were unchanged.
 
 ## Problem
 

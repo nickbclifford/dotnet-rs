@@ -50,6 +50,16 @@ lists the entries it closes.
 Evidence and IDs (p01…, R01…) are defined in the
 [pointer-provenance inventory](../pointer-provenance/INVENTORY.md).
 
+- **Type identity after resolution failure** ([27a LIB-6](27-audit/libraries.md#lib-6-equal-resolution-errors-treated-as-type-identity)):
+  `concrete_types_equal` treats equal resolution errors as type equality, and its regression test
+  explicitly requires that legacy behavior. The production loader can produce the same
+  `SynchronizedValueType` error for distinct malformed definitions; guest reachability and the
+  appropriate false/error policy need investigation. This is not a reproduced guest exploit.
+  Decide the production policy before changing the test; 27b tracks that dependency separately.
+- **Negative GC generation validation** ([27a CLI-11](27-audit/cli.md)):
+  `exceptions_intrinsic_trace_42` documents a CLR/VM difference for `GC.Collect(-1)` and its
+  exit-only differential does not establish parity. Reproduce the negative-generation behavior
+  against CLR and decide/fix validation separately from replacing this fixture's trace oracle.
 - **Eviction of unreachable `DynamicMethod`s (plan 25 slice 5, deferred 2026-11-16):** compiled
   dynamic methods and their metadata arenas are never reclaimed. Safe eviction needs GC-visible
   owners for delegates, `ParameterInfo` and `ldftn` function pointers (today a bare method
