@@ -10,6 +10,8 @@ In priority order. Each plan's own `Status:` line is the only record of its stat
 
 | ID | Plan | Note |
 |---|---|---|
+| 27a | [Audit test contracts and evidence](27a-test-audit.md) | Inspect all project-owned test families; record evidence and concrete cleanup findings |
+| 27b | [Consolidate tests around intended contracts](27b-test-consolidation.md) | Follows 27a; resolve findings while preserving meaningful behavior and safety coverage |
 | 26 | [Thread lifecycle reclamation, single-threaded finalizer identity and the multicast fallback](26-thread-lifecycle-and-multicast-fallback.md) | Lifecycle reclamation, finalizer identity, multicast transport and production registry modeling |
 | 23 | [Runtime behavior gaps: static field reflection, Math FCalls, Array.Fill, Span.CopyTo, signed byref offsets and generic arity](23-runtime-behavior-gaps.md) | Validated runtime surface and remaining limits are recorded in the plan |
 | 25 | [Implement `DynamicMethod`](25-dynamicmethod-implementation.md) | Complete except eviction of unreachable dynamic methods (deferred, see Not yet planned) |
